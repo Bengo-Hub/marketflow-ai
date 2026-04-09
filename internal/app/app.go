@@ -10,6 +10,7 @@ import (
 	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/config"
+	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/go-chi/chi/v5"
@@ -116,8 +117,17 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		MaxAge:           300,
 	}))
 
+	// Base URL redirects to Swagger docs
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/v1/docs/", http.StatusMovedPermanently)
+	})
+
 	r.Get("/healthz", handlers.Health)
 	r.Method("GET", "/metrics", promhttp.Handler())
+
+	// Swagger UI and OpenAPI spec
+	r.Get("/v1/docs/*", httpapi.SwaggerUI)
+	r.Get("/api/v1/openapi.json", httpapi.OpenAPIJSON)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		if authMiddleware != nil {

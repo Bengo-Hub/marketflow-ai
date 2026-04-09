@@ -1,0 +1,110 @@
+{
+    "schemes": [
+        "https",
+        "http"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "RAG-powered AI chatbot for Forever Living Products marketing automation. Two-tier routing: 8B classifier + 70B responder via Groq, with pgvector RAG and FLP compliance filtering.",
+        "title": "MarketFlow AI Service",
+        "contact": {},
+        "version": "1.0.0"
+    },
+    "host": "marketflowai.codevertexitsolutions.com",
+    "basePath": "/api/v1",
+    "paths": {
+        "/chat": {
+            "post": {
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "description": "Processes user question through RAG pipeline: classify intent → embed → search KB → generate response → compliance filter",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Chat"
+                ],
+                "summary": "Send a chat message to the AI",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant UUID",
+                        "name": "X-Tenant-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Chat message",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_httpapi_handlers.chatRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_bengobox_marketflow-ai_internal_rag.ChatResult"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_bengobox_marketflow-ai_internal_rag.ChatResult": {
+            "type": "object",
+            "properties": {
+                "cached": {
+                    "type": "boolean"
+                },
+                "confidence": {
+                    "type": "number"
+                },
+                "intent": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "sources": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_httpapi_handlers.chatRequest": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "boolean"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "bearerAuth": {
+            "description": "JWT token from auth-service (SSO). Format: Bearer {token}",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}
