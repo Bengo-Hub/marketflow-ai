@@ -1,0 +1,279 @@
+name: Build and Deploy MarketFlow AI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  sync-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.sync.outputs.result }}
+    steps:
+      - name: Check and sync missing secrets
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          _REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          _REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          _REGISTRY_EMAIL: ${{ secrets.REGISTRY_EMAIL }}
+          _POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          _REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          _KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          REQUIRED_SECRETS="REGISTRY_USERNAME REGISTRY_PASSWORD REGISTRY_EMAIL POSTGRES_PASSWORD REDIS_PASSWORD KUBE_CONFIG"
+
+          echo "Checking for empty-valued secrets..."
+          EXISTING=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
+          for secret in $REQUIRED_SECRETS; do
+            env_var="_${secret}"
+            value="${!env_var}"
+            if echo "$EXISTING" | grep -qx "$secret" && [ -z "$value" ]; then
+              echo "  Deleting $secret (exists but empty)"
+              gh secret delete "$secret" --repo "${{ github.repository }}" 2>/dev/null || true
+            fi
+          done
+
+          echo ""
+          echo "Checking which deployment secrets exist..."
+          EXISTING=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
+
+          MISSING=()
+          for secret in $REQUIRED_SECRETS; do
+            if echo "$EXISTING" | grep -qx "$secret"; then
+              echo "  $secret"
+            else
+              echo "  $secret -- missing"
+              MISSING+=("$secret")
+            fi
+          done
+
+          echo ""
+          if [ ${#MISSING[@]} -eq 0 ]; then
+            echo "All secrets already exist -- skipping sync"
+            echo "result=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          MISSING_LIST="${MISSING[*]}"
+          echo "${#MISSING[@]} secret(s) need syncing: $MISSING_LIST"
+          echo ""
+
+          echo "Triggering devops-k8s/sync-secrets.yml..."
+          gh workflow run sync-secrets.yml \
+            --repo Bengo-Hub/devops-k8s \
+            --ref main \
+            -f target_repo="${{ github.repository }}" \
+            -f secrets="$MISSING_LIST"
+
+          echo "Waiting for secrets to be synced..."
+          for i in $(seq 1 18); do
+            sleep 10
+            CURRENT=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
+            STILL_MISSING=0
+            for secret in "${MISSING[@]}"; do
+              echo "$CURRENT" | grep -qx "$secret" || STILL_MISSING=$((STILL_MISSING + 1))
+            done
+            if [ $STILL_MISSING -eq 0 ]; then
+              echo "All ${#MISSING[@]} secrets synced after $((i * 10))s"
+              echo "result=synced" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "  ${STILL_MISSING} still missing ($((i * 10))s)..."
+          done
+
+          echo "Timeout -- some secrets may not have synced"
+          echo "result=partial" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: sync-secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Re-trigger if secrets were just synced
+        if: needs.sync-secrets.outputs.result == 'synced'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "Secrets were just synced. Re-triggering workflow..."
+          gh workflow run deploy.yml --repo "${{ github.repository }}" --ref "${{ github.ref }}"
+          exit 0
+
+      - name: Abort if sync was partial
+        if: needs.sync-secrets.outputs.result == 'partial'
+        run: |
+          echo "Secret sync timed out. Check devops-k8s sync-secrets workflow."
+          exit 1
+
+      - name: Checkout code
+        if: needs.sync-secrets.outputs.result != 'synced'
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        if: needs.sync-secrets.outputs.result != 'synced'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install DevOps Tools
+        if: needs.sync-secrets.outputs.result != 'synced'
+        uses: Bengo-Hub/devops-k8s/.github/actions/install-devops-tools@main
+
+      - name: Set deployment variables
+        if: needs.sync-secrets.outputs.result != 'synced'
+        run: |
+          echo "DEPLOY=true" >> $GITHUB_ENV
+          echo "SETUP_DATABASES=true" >> $GITHUB_ENV
+          echo "DB_TYPES=postgres,redis" >> $GITHUB_ENV
+          echo "NAMESPACE=marketflow" >> $GITHUB_ENV
+          echo "ENV_SECRET_NAME=marketflow-ai-secrets" >> $GITHUB_ENV
+          echo "REGISTRY_SERVER=docker.io" >> $GITHUB_ENV
+          echo "REGISTRY_NAMESPACE=codevertex" >> $GITHUB_ENV
+          echo "VALUES_FILE_PATH=apps/marketflow-ai/values.yaml" >> $GITHUB_ENV
+          echo "APP_NAME=marketflow-ai" >> $GITHUB_ENV
+          echo "SERVICE_DB_NAME=marketflow" >> $GITHUB_ENV
+          echo "SERVICE_DB_USER=marketflow_user" >> $GITHUB_ENV
+
+      - name: Verify secrets
+        if: needs.sync-secrets.outputs.result != 'synced'
+        run: |
+          echo "Verifying deployment secrets..."
+          FAIL=0
+
+          check_secret() {
+            local name="$1" min_len="$2" value="$3"
+            if [[ -z "$value" ]]; then
+              echo "  $name -- empty"
+              FAIL=1
+            elif [[ ${#value} -lt $min_len ]]; then
+              echo "  $name -- ${#value} chars (need >=$min_len)"
+              FAIL=1
+            else
+              echo "  $name (${#value} chars)"
+            fi
+          }
+
+          check_secret "REGISTRY_USERNAME"  5    "$REGISTRY_USERNAME"
+          check_secret "REGISTRY_PASSWORD"  12   "$REGISTRY_PASSWORD"
+          check_secret "KUBE_CONFIG"        1000 "$KUBE_CONFIG"
+          check_secret "POSTGRES_PASSWORD"  8    "$POSTGRES_PASSWORD"
+          check_secret "REDIS_PASSWORD"     8    "$REDIS_PASSWORD"
+
+          if [[ $FAIL -eq 1 ]]; then
+            echo "Secret verification failed"
+            exit 1
+          fi
+          echo "All secrets verified"
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+
+      - name: Run production deployment
+        if: needs.sync-secrets.outputs.result != 'synced'
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          GITHUB_SHA: ${{ github.sha }}
+          DEPLOY: true
+          SETUP_DATABASES: true
+          DB_TYPES: postgres,redis
+          NAMESPACE: marketflow
+          ENV_SECRET_NAME: marketflow-ai-secrets
+          REGISTRY_SERVER: docker.io
+          REGISTRY_NAMESPACE: codevertex
+          VALUES_FILE_PATH: apps/marketflow-ai/values.yaml
+          APP_NAME: marketflow-ai
+          SERVICE_DB_NAME: marketflow
+          SERVICE_DB_USER: marketflow_user
+          GIT_USER: ${{ secrets.GIT_USER || 'MarketFlow Bot' }}
+          GIT_EMAIL: ${{ secrets.GIT_EMAIL || 'dev@bengobox.com' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Tag and push :latest
+        if: success() && needs.sync-secrets.outputs.result != 'synced'
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY_SERVER: docker.io
+          REGISTRY_NAMESPACE: codevertex
+        run: |
+          set -e
+          IMAGE_REPO="${REGISTRY_SERVER}/${REGISTRY_NAMESPACE}/marketflow-ai"
+          SHORT_SHA=${GITHUB_SHA::8}
+          echo "Tagging ${IMAGE_REPO}:${SHORT_SHA} as :latest"
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_SERVER" -u "$REGISTRY_USERNAME" --password-stdin
+          docker pull "${IMAGE_REPO}:${SHORT_SHA}" || true
+          docker tag "${IMAGE_REPO}:${SHORT_SHA}" "${IMAGE_REPO}:latest"
+          docker push "${IMAGE_REPO}:latest"
+
+      - name: Check ArgoCD Application status
+        if: success() && needs.sync-secrets.outputs.result != 'synced'
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
+          NS: marketflow
+          APP_NAME: marketflow-ai
+        run: |
+          if [ -z "${KUBE_CONFIG_B64}" ]; then
+            echo "Skipping ArgoCD check - no KUBE_CONFIG available"
+            exit 0
+          fi
+
+          echo "::group::ArgoCD Application Status"
+          mkdir -p ~/.kube
+          echo "$KUBE_CONFIG_B64" | base64 -d > ~/.kube/config
+
+          if kubectl get application ${APP_NAME} -n argocd >/dev/null 2>&1; then
+            echo "ArgoCD Application '${APP_NAME}' found"
+            kubectl patch application ${APP_NAME} -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}' || true
+            SYNC_STATUS=$(kubectl get application ${APP_NAME} -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH_STATUS=$(kubectl get application ${APP_NAME} -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            echo "Current Status - Sync: ${SYNC_STATUS}, Health: ${HEALTH_STATUS}"
+          else
+            echo "ArgoCD Application '${APP_NAME}' not found"
+          fi
+          echo "::endgroup::"
+
+      - name: Verify API health
+        if: success() && needs.sync-secrets.outputs.result != 'synced'
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
+          NS: marketflow
+        run: |
+          if [ -z "${KUBE_CONFIG_B64}" ]; then
+            echo "Skipping health check - no KUBE_CONFIG available"
+            exit 0
+          fi
+
+          echo "::group::Health check"
+          mkdir -p ~/.kube
+          echo "$KUBE_CONFIG_B64" | base64 -d > ~/.kube/config
+
+          if kubectl get deployment marketflow-ai -n ${NS} >/dev/null 2>&1; then
+            kubectl rollout status deployment/marketflow-ai -n ${NS} --timeout=600s
+            HOSTS=$(kubectl get ingress -n ${NS} -o jsonpath='{.items[*].spec.rules[*].host}' | tr ' ' '\n' | grep -E 'marketflow' || true)
+            if [ -n "$HOSTS" ]; then
+              for H in $HOSTS; do
+                echo "Checking https://$H/healthz ..."
+                if curl -sk --max-time 10 "https://$H/healthz" | grep -qi "ok"; then
+                  echo "Health OK for $H"
+                  break
+                fi
+              done
+            else
+              echo "No ingress host found; skipping external health probe"
+            fi
+          else
+            echo "Deployment not found yet - ArgoCD may still be syncing"
+          fi
+          echo "::endgroup::"

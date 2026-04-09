@@ -1,0 +1,163 @@
+package handlers
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+)
+
+// ChatHandler handles AI chat HTTP requests.
+type ChatHandler struct {
+	pipeline *rag.Pipeline
+	logger   *zap.Logger
+}
+
+// NewChatHandler creates a new chat handler.
+func NewChatHandler(pipeline *rag.Pipeline, logger *zap.Logger) *ChatHandler {
+	return &ChatHandler{
+		pipeline: pipeline,
+		logger:   logger.Named("chat.handler"),
+	}
+}
+
+type chatRequest struct {
+	Question  string `json:"question"`
+	SessionID string `json:"session_id"`
+	Stream    bool   `json:"stream"`
+}
+
+// Chat handles POST /api/v1/chat
+// @Summary Send a chat message to the AI
+// @Description Processes user question through RAG pipeline: classify intent → embed → search KB → generate response → compliance filter
+// @Tags Chat
+// @Accept json
+// @Produce json
+// @Param X-Tenant-ID header string true "Tenant UUID"
+// @Param request body chatRequest true "Chat message"
+// @Success 200 {object} rag.ChatResult
+// @Security bearerAuth
+// @Router /chat [post]
+func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := extractTenantID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing or invalid X-Tenant-ID header")
+		return
+	}
+
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Question == "" {
+		writeError(w, http.StatusBadRequest, "question is required")
+		return
+	}
+
+	sessionID := uuid.New()
+	if req.SessionID != "" {
+		if parsed, err := uuid.Parse(req.SessionID); err == nil {
+			sessionID = parsed
+		}
+	}
+
+	input := rag.ChatInput{
+		TenantID:  tenantID,
+		SessionID: sessionID,
+		Question:  req.Question,
+		History:   []ai.Message{}, // TODO: load from ChatSession entity
+	}
+
+	if req.Stream {
+		h.handleStream(w, r, input)
+		return
+	}
+
+	// Non-streaming response
+	result, err := h.pipeline.Chat(r.Context(), input)
+	if err != nil {
+		h.logger.Error("chat failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "AI processing failed")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// handleStream sends Server-Sent Events for streaming chat responses.
+func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input rag.ChatInput) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch, meta, err := h.pipeline.ChatStream(r.Context(), input)
+	if err != nil {
+		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	// Send metadata first
+	if meta != nil {
+		metaJSON, _ := json.Marshal(map[string]any{
+			"intent":     meta.Intent,
+			"confidence": meta.Confidence,
+			"sources":    meta.Sources,
+			"model":      meta.Model,
+		})
+		fmt.Fprintf(w, "data: {\"type\":\"meta\",\"data\":%s}\n\n", metaJSON)
+		flusher.Flush()
+	}
+
+	for delta := range ch {
+		if delta.Done {
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+		if delta.Content != "" {
+			escaped, _ := json.Marshal(delta.Content)
+			fmt.Fprintf(w, "data: {\"type\":\"delta\",\"content\":%s}\n\n", escaped)
+			flusher.Flush()
+		}
+	}
+}
+
+// Health responds with service status.
+func Health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"service": "marketflow-ai",
+	})
+}
+
+func extractTenantID(r *http.Request) (uuid.UUID, error) {
+	header := r.Header.Get("X-Tenant-ID")
+	if header == "" {
+		return uuid.UUID{}, fmt.Errorf("X-Tenant-ID header is required")
+	}
+	return uuid.Parse(header)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
