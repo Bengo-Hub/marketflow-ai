@@ -105,11 +105,11 @@ type ChatResult struct {
 	Model      string  `json:"model"`
 }
 
-// resolveClient returns a Groq client and model for the tenant.
-// Uses the resolver (per-tenant config from DB) if available, otherwise falls back to the static client.
-func (p *Pipeline) resolveClient(ctx context.Context, tenantID string) (*ai.Client, string) {
+// resolveClient returns the platform-level Groq client and model.
+// AI models are shared resources — NOT per-tenant. Configured once by platform admin.
+func (p *Pipeline) resolveClient(ctx context.Context) (*ai.Client, string) {
 	if p.resolver != nil {
-		client, mainModel, _, err := p.resolver.ResolveGroqClient(ctx, tenantID)
+		client, mainModel, _, err := p.resolver.ResolveGroqClient(ctx)
 		if err == nil && client != nil {
 			return client, mainModel
 		}
@@ -159,7 +159,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			}
 
 			// Resolve Groq client (per-tenant or fallback)
-			client, model := p.resolveClient(ctx, input.TenantID.String())
+			client, model := p.resolveClient(ctx)
 			result, err := p.taskExecutor.Execute(ctx, client, model, input.Question, ragCtx)
 			if err != nil {
 				return nil, fmt.Errorf("task execution failed: %w", err)

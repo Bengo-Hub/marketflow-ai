@@ -71,7 +71,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// ── Intent Router ─────────────────────────────────────────────────────
 	router := ai.NewRouter(groqClient, cfg.AI.GroqRouterModel, logger)
 
-	// ── Provider Resolver (per-tenant AI config from DB, cached in Redis) ─
+	// ── Provider Resolver (platform-level AI config from DB, cached in Redis) ─
 	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
 
 	// ── Chat Session Service ──────────────────────────────────────────────
