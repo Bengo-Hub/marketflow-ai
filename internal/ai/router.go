@@ -17,6 +17,7 @@ const (
 	IntentProductQA    Intent = "product_qa"
 	IntentBusinessOpp  Intent = "business_opportunity"
 	IntentRecruitment  Intent = "recruitment"
+	IntentTaskExecute  Intent = "task_execute"
 	IntentOffTopic     Intent = "off_topic"
 	IntentEscalate     Intent = "escalate"
 )
@@ -48,6 +49,7 @@ Categories:
 - "product_qa": Questions about specific products, ingredients, benefits, prices, or product recommendations
 - "business_opportunity": Questions about the FBO business model, compensation plan, income, ranks, or how to earn
 - "recruitment": Interest in joining, signing up, becoming an FBO, getting started, or questions about startup costs
+- "task_execute": User wants to CREATE something: write ad copy, generate social media post, draft email campaign, create funnel content, generate product description
 - "off_topic": Questions unrelated to FLP products or business (weather, sports, politics, etc.)
 - "escalate": User explicitly asks to speak to a human, requests a call, or expresses frustration`
 
@@ -90,7 +92,7 @@ func (r *Router) ClassifyIntent(ctx context.Context, question string) (Intent, f
 
 	intent := Intent(result.Intent)
 	switch intent {
-	case IntentSimpleFAQ, IntentProductQA, IntentBusinessOpp, IntentRecruitment, IntentOffTopic, IntentEscalate:
+	case IntentSimpleFAQ, IntentProductQA, IntentBusinessOpp, IntentRecruitment, IntentTaskExecute, IntentOffTopic, IntentEscalate:
 		r.logger.Debug("classified intent",
 			zap.String("intent", string(intent)),
 			zap.Float64("confidence", result.Confidence),

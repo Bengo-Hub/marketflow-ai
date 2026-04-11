@@ -5,12 +5,16 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/providers"
+	"github.com/bengobox/marketflow-ai/internal/sessions"
+	"github.com/bengobox/marketflow-ai/internal/tasks"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -33,6 +37,9 @@ type Pipeline struct {
 	ollamaClient    *ai.Client
 	router          *ai.Router
 	filter          *compliance.Filter
+	resolver        *providers.Resolver
+	sessionService  *sessions.Service
+	taskExecutor    *tasks.Executor
 	embeddingModel  string
 	mainModel       string
 	fallbackModel   string
@@ -48,6 +55,9 @@ type Config struct {
 	GroqClient      *ai.Client
 	OllamaClient    *ai.Client
 	Router          *ai.Router
+	Resolver        *providers.Resolver
+	SessionService  *sessions.Service
+	TaskExecutor    *tasks.Executor
 	EmbeddingModel  string
 	MainModel       string
 	FallbackModel   string
@@ -65,6 +75,9 @@ func NewPipeline(cfg Config) *Pipeline {
 		ollamaClient:   cfg.OllamaClient,
 		router:         cfg.Router,
 		filter:         compliance.NewFilter(),
+		resolver:       cfg.Resolver,
+		sessionService: cfg.SessionService,
+		taskExecutor:   cfg.TaskExecutor,
 		embeddingModel: cfg.EmbeddingModel,
 		mainModel:      cfg.MainModel,
 		fallbackModel:  cfg.FallbackModel,
@@ -92,6 +105,19 @@ type ChatResult struct {
 	Model      string  `json:"model"`
 }
 
+// resolveClient returns a Groq client and model for the tenant.
+// Uses the resolver (per-tenant config from DB) if available, otherwise falls back to the static client.
+func (p *Pipeline) resolveClient(ctx context.Context, tenantID string) (*ai.Client, string) {
+	if p.resolver != nil {
+		client, mainModel, _, err := p.resolver.ResolveGroqClient(ctx, tenantID)
+		if err == nil && client != nil {
+			return client, mainModel
+		}
+		p.logger.Debug("resolver failed, using static client", zap.Error(err))
+	}
+	return p.groqClient, p.mainModel
+}
+
 // Chat processes a user question through the full RAG pipeline.
 func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, error) {
 	// Step 1: Check exact-match cache
@@ -109,14 +135,44 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		confidence = 0.5
 	}
 
-	// Step 3: Handle intents that don't need LLM
+	// Step 3: Handle intents that don't need standard RAG
 	switch intent {
 	case ai.IntentOffTopic:
-		resp := "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business? 😊"
+		resp := "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
 		return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentEscalate:
 		resp := "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
 		return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+	case ai.IntentTaskExecute:
+		// Route to task executor for content generation
+		if p.taskExecutor != nil {
+			// Get RAG context for product-aware task generation
+			var ragCtx string
+			if p.ollamaClient != nil {
+				if emb, err := p.ollamaClient.Embed(ctx, p.embeddingModel, input.Question); err == nil {
+					if chunks, err := p.searchPgVector(ctx, input.TenantID, emb, 3); err == nil {
+						for _, c := range chunks {
+							ragCtx += fmt.Sprintf("[%s] %s: %s\n", c.Category, c.Title, c.ChunkText)
+						}
+					}
+				}
+			}
+
+			// Resolve Groq client (per-tenant or fallback)
+			client, model := p.resolveClient(ctx, input.TenantID.String())
+			result, err := p.taskExecutor.Execute(ctx, client, model, input.Question, ragCtx)
+			if err != nil {
+				return nil, fmt.Errorf("task execution failed: %w", err)
+			}
+			// Convert task result to chat result
+			respJSON, _ := json.Marshal(result)
+			return &ChatResult{
+				Response:   string(respJSON),
+				Intent:     "task_execute",
+				Confidence: confidence,
+				Model:      result.Model,
+			}, nil
+		}
 	}
 
 	// Step 4: Embed question and search pgvector for relevant KB chunks

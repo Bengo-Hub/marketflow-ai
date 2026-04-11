@@ -12,7 +12,10 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/config"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
+	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/bengobox/marketflow-ai/internal/sessions"
+	"github.com/bengobox/marketflow-ai/internal/tasks"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -68,6 +71,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// ── Intent Router ─────────────────────────────────────────────────────
 	router := ai.NewRouter(groqClient, cfg.AI.GroqRouterModel, logger)
 
+	// ── Provider Resolver (per-tenant AI config from DB, cached in Redis) ─
+	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
+
+	// ── Chat Session Service ──────────────────────────────────────────────
+	sessionService := sessions.NewService(db, logger)
+
+	// ── Task Executor ─────────────────────────────────────────────────────
+	taskExecutor := tasks.NewExecutor(logger)
+
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
 	pipeline := rag.NewPipeline(rag.Config{
 		DB:             db,
@@ -75,6 +87,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		GroqClient:     groqClient,
 		OllamaClient:   ollamaClient,
 		Router:         router,
+		Resolver:       resolver,
+		SessionService: sessionService,
+		TaskExecutor:   taskExecutor,
 		EmbeddingModel: cfg.AI.EmbeddingModel,
 		MainModel:      cfg.AI.GroqMainModel,
 		FallbackModel:  cfg.AI.GroqFallback,
