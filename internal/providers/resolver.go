@@ -15,11 +15,17 @@ import (
 )
 
 // Resolver resolves AI provider config at platform level.
-// AI models (Groq, Ollama, Claude) are shared resources configured once
-// by the platform admin — NOT per-tenant. Tenant-specific config only
-// applies to Meta Ads, WhatsApp, and FBO-specific settings (handled in marketflow-api).
+// AI models (Groq, Ollama, Claude, Tavily) are shared resources configured once
+// by the platform admin — NOT per-tenant. Tenant-specific config only applies
+// to Meta Page tokens, Google Calendar refresh tokens, and FBO-specific
+// settings (handled elsewhere).
+//
+// This resolver calls marketflow-api's /admin/providers/resolve endpoint,
+// which returns DECRYPTED secret values (unlike /admin/providers/settings
+// which masks). Authenticated via platform X-API-Key.
 type Resolver struct {
 	apiBaseURL string
+	apiKey     string
 	redis      *redis.Client
 	envConfig  *config.AIConfig
 	httpClient *http.Client
@@ -28,9 +34,10 @@ type Resolver struct {
 }
 
 // NewResolver creates a new platform-level provider config resolver.
-func NewResolver(apiBaseURL string, redis *redis.Client, envConfig *config.AIConfig, namespace string, logger *zap.Logger) *Resolver {
+func NewResolver(apiBaseURL, platformAPIKey string, redis *redis.Client, envConfig *config.AIConfig, namespace string, logger *zap.Logger) *Resolver {
 	return &Resolver{
 		apiBaseURL: apiBaseURL,
+		apiKey:     platformAPIKey,
 		redis:      redis,
 		envConfig:  envConfig,
 		httpClient: &http.Client{Timeout: 5 * time.Second},
@@ -108,57 +115,53 @@ func (r *Resolver) ResolveGroqClient(ctx context.Context) (*ai.Client, string, s
 	return client, mainModel, fallbackModel, nil
 }
 
-// fetchFromAPI calls marketflow-api's platform-level provider settings endpoint.
+// fetchFromAPI calls marketflow-api's /admin/providers/resolve endpoint
+// with the platform X-API-Key; the response contains decrypted values.
 func (r *Resolver) fetchFromAPI(ctx context.Context, providerType, providerName string) (*AISettings, error) {
-	url := fmt.Sprintf("%s/api/v1/admin/providers/settings?type=%s&name=%s",
+	if r.apiKey == "" {
+		return nil, fmt.Errorf("no platform api key — skipping DB resolve")
+	}
+	url := fmt.Sprintf("%s/api/v1/admin/providers/resolve?type=%s&name=%s",
 		r.apiBaseURL, providerType, providerName)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	// No X-Tenant-ID header — platform-level config only
+	req.Header.Set("X-API-Key", r.apiKey)
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
 	}
-
 	var result struct {
-		Data []struct {
-			Key   string `json:"key"`
-			Value string `json:"value"`
-		} `json:"data"`
+		Settings map[string]string `json:"settings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
+	settings := &AISettings{
+		BaseURL:       result.Settings["base_url"],
+		APIKey:        result.Settings["api_key"],
+		RouterModel:   result.Settings["router_model"],
+		MainModel:     firstNonEmpty(result.Settings["responder_model"], result.Settings["main_model"]),
+		FallbackModel: result.Settings["fallback_model"],
+		Temperature:   result.Settings["temperature"],
+		MaxTokens:     result.Settings["max_tokens"],
+	}
+	return settings, nil
+}
 
-	settings := &AISettings{}
-	for _, item := range result.Data {
-		switch item.Key {
-		case "base_url":
-			settings.BaseURL = item.Value
-		case "api_key":
-			settings.APIKey = item.Value
-		case "router_model":
-			settings.RouterModel = item.Value
-		case "responder_model", "main_model":
-			settings.MainModel = item.Value
-		case "fallback_model":
-			settings.FallbackModel = item.Value
-		case "temperature":
-			settings.Temperature = item.Value
-		case "max_tokens":
-			settings.MaxTokens = item.Value
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
 		}
 	}
-
-	return settings, nil
+	return ""
 }
