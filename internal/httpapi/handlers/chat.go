@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -14,13 +16,15 @@ import (
 // ChatHandler handles AI chat HTTP requests.
 type ChatHandler struct {
 	pipeline *rag.Pipeline
+	sessions *sessions.Service
 	logger   *zap.Logger
 }
 
 // NewChatHandler creates a new chat handler.
-func NewChatHandler(pipeline *rag.Pipeline, logger *zap.Logger) *ChatHandler {
+func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, logger *zap.Logger) *ChatHandler {
 	return &ChatHandler{
 		pipeline: pipeline,
+		sessions: sess,
 		logger:   logger.Named("chat.handler"),
 	}
 }
@@ -60,18 +64,18 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := uuid.New()
-	if req.SessionID != "" {
-		if parsed, err := uuid.Parse(req.SessionID); err == nil {
-			sessionID = parsed
-		}
+	// Resolve or create the session; load history if existing.
+	sessionID, history, err := h.resolveSession(r.Context(), tenantID, req.SessionID)
+	if err != nil {
+		h.logger.Warn("session resolve failed", zap.Error(err))
+		sessionID = uuid.New()
 	}
 
 	input := rag.ChatInput{
 		TenantID:  tenantID,
 		SessionID: sessionID,
 		Question:  req.Question,
-		History:   []ai.Message{}, // TODO: load from ChatSession entity
+		History:   history,
 	}
 
 	if req.Stream {
@@ -87,8 +91,42 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist user + assistant turns.
+	if h.sessions != nil {
+		_ = h.sessions.AppendMessages(r.Context(), tenantID, sessionID,
+			ai.Message{Role: "user", Content: req.Question},
+			ai.Message{Role: "assistant", Content: result.Response},
+		)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	// Include session_id so the client can continue the conversation.
+	respEnvelope := map[string]any{
+		"session_id": sessionID.String(),
+		"result":     result,
+	}
+	json.NewEncoder(w).Encode(respEnvelope)
+}
+
+// resolveSession loads an existing session's history or creates a new one.
+func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, raw string) (uuid.UUID, []ai.Message, error) {
+	if h.sessions == nil {
+		return uuid.New(), nil, nil
+	}
+	if raw != "" {
+		if parsed, err := uuid.Parse(raw); err == nil {
+			history, err := h.sessions.LoadHistory(ctx, tenantID, parsed)
+			if err == nil {
+				return parsed, history, nil
+			}
+			// Session ID provided but not found — fall through and create one with that ID.
+		}
+	}
+	sid, err := h.sessions.CreateSession(ctx, tenantID, "web_widget")
+	if err != nil {
+		return uuid.New(), nil, err
+	}
+	return sid, nil, nil
 }
 
 // handleStream sends Server-Sent Events for streaming chat responses.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/providers"
@@ -40,6 +41,8 @@ type Pipeline struct {
 	resolver        *providers.Resolver
 	sessionService  *sessions.Service
 	taskExecutor    *tasks.Executor
+	agentLoop       *agent.Loop
+	agentEnabled    bool
 	embeddingModel  string
 	mainModel       string
 	fallbackModel   string
@@ -58,6 +61,8 @@ type Config struct {
 	Resolver        *providers.Resolver
 	SessionService  *sessions.Service
 	TaskExecutor    *tasks.Executor
+	Agent           *agent.Loop
+	AgentEnabled    bool
 	EmbeddingModel  string
 	MainModel       string
 	FallbackModel   string
@@ -78,6 +83,8 @@ func NewPipeline(cfg Config) *Pipeline {
 		resolver:       cfg.Resolver,
 		sessionService: cfg.SessionService,
 		taskExecutor:   cfg.TaskExecutor,
+		agentLoop:      cfg.Agent,
+		agentEnabled:   cfg.AgentEnabled,
 		embeddingModel: cfg.EmbeddingModel,
 		mainModel:      cfg.MainModel,
 		fallbackModel:  cfg.FallbackModel,
@@ -128,7 +135,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	// Step 2: Classify intent via fast router model
-	intent, confidence, err := p.router.ClassifyIntent(ctx, input.Question)
+	cls, err := p.router.Classify(ctx, input.Question)
+	intent, confidence := cls.Intent, cls.Confidence
 	if err != nil {
 		p.logger.Warn("classification failed, defaulting to product_qa", zap.Error(err))
 		intent = ai.IntentProductQA
@@ -177,6 +185,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 
 	// Step 4: Embed question and search pgvector for relevant KB chunks
 	var context_chunks []SearchResult
+	var topSim float64
 	if p.ollamaClient != nil {
 		embedding, err := p.ollamaClient.Embed(ctx, p.embeddingModel, input.Question)
 		if err != nil {
@@ -186,7 +195,48 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			if err != nil {
 				p.logger.Warn("pgvector search failed", zap.Error(err))
 			}
+			if len(context_chunks) > 0 {
+				topSim = context_chunks[0].Similarity
+			}
 		}
+	}
+
+	// Step 4b: Agentic path -- engage tool-calling loop when live info is needed
+	// OR when the KB coverage is weak and the query isn't a simple FAQ.
+	if p.agentEnabled && p.agentLoop != nil &&
+		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment) &&
+		(cls.NeedsLiveInfo || topSim < 0.55) {
+		sys := p.buildAgentSystemPrompt(intent)
+		ares, aerr := p.agentLoop.Run(ctx, agent.Input{
+			TenantID:     input.TenantID,
+			SystemPrompt: sys,
+			History:      input.History,
+			Question:     input.Question,
+		})
+		if aerr == nil && ares != nil && ares.Answer != "" {
+			filtered, blocked, reason := p.filter.Check(ares.Answer)
+			if blocked {
+				p.logger.Warn("agent response blocked by compliance filter",
+					zap.String("reason", reason), zap.String("question", input.Question))
+				filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
+			}
+			_ = p.redis.Set(ctx, cacheKey, filtered, 24*time.Hour).Err()
+			p.logger.Info("agentic chat completed",
+				zap.Int("iterations", ares.Iterations),
+				zap.Int("tool_calls", ares.ToolCallsN),
+				zap.Int("tokens", ares.TotalTokens),
+				zap.String("stop", ares.StopReason),
+			)
+			return &ChatResult{
+				Response:   filtered,
+				Intent:     string(intent),
+				Confidence: confidence,
+				Sources:    len(context_chunks) + ares.ToolCallsN,
+				Cached:     false,
+				Model:      ares.Model,
+			}, nil
+		}
+		p.logger.Warn("agent loop failed, falling back to single-shot", zap.Error(aerr))
 	}
 
 	// Step 5: Build prompt with RAG context
@@ -387,6 +437,35 @@ Focus on product information. When recommending products:
 		b.WriteString("Use the above context to answer. If the context doesn't cover the question, say so honestly.\n")
 	}
 
+	return b.String()
+}
+
+// buildAgentSystemPrompt returns the system prompt used by the agent loop.
+// Tells the model which tools exist and when to use each.
+func (p *Pipeline) buildAgentSystemPrompt(intent ai.Intent) string {
+	var b strings.Builder
+	b.WriteString(`You are an agentic assistant for a Forever Living Products (FLP) Forever Business Owner.
+
+You have access to tools:
+- kb_search: semantic search over the tenant's internal knowledge base (products, FAQ, business playbook, compliance). Prefer this first.
+- get_product: look up a specific product by code or name.
+- get_faq: fetch FAQ entries by keyword.
+- get_compliance_rules: returns the FDA/FLP compliance ruleset -- call this before drafting medical or income-claim content.
+- web_search: live web search via Tavily when internal KB is insufficient OR the user asks about current/time-sensitive facts. Quota-limited per tenant.
+
+Rules:
+- Call tools iteratively; reason step by step.
+- Stop calling tools once you have enough to answer; then respond in plain prose.
+- NEVER make medical claims (cures, treats, heals, prevents disease). Use supports/promotes/helps maintain.
+- NEVER guarantee income. Results vary. Include income disclaimer when relevant.
+- Cite product codes and URLs from tool results where helpful.
+`)
+	switch intent {
+	case ai.IntentBusinessOpp, ai.IntentRecruitment:
+		b.WriteString("\nFocus on the business opportunity. Mention the 3 income streams, rank ladder, and Forever2Drive. Always include an income disclaimer.\n")
+	case ai.IntentProductQA:
+		b.WriteString("\nFocus on product information, certifications (IASC, USDA/EU Organic), and relevant starter offers like Clean 9.\n")
+	}
 	return b.String()
 }
 

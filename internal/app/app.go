@@ -8,6 +8,8 @@ import (
 	"time"
 
 	authclient "github.com/Bengo-Hub/shared-auth-client"
+	"github.com/bengobox/marketflow-ai/internal/agent"
+	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/config"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
@@ -80,6 +82,49 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// ── Task Executor ─────────────────────────────────────────────────────
 	taskExecutor := tasks.NewExecutor(logger)
 
+	// ── Agentic RAG Loop (platform-level tools: KB + Tavily web search) ───
+	var agentLoop *agent.Loop
+	if cfg.AI.AgentEnabled {
+		tools := []agent.Tool{
+			agenttools.NewKBSearcher(db, ollamaClient, cfg.AI.EmbeddingModel, logger),
+			agenttools.NewGetProduct(db, logger),
+			agenttools.NewGetFAQ(db, logger),
+			agenttools.NewGetComplianceRules(),
+		}
+		if cfg.AI.TavilyAPIKey != "" {
+			tools = append(tools, agenttools.NewTavilySearcher(agenttools.TavilyConfig{
+				APIKey:    cfg.AI.TavilyAPIKey,
+				BaseURL:   cfg.AI.TavilyBaseURL,
+				DailyCap:  cfg.AI.TavilyDailyCap,
+				Redis:     redisClient,
+				Namespace: cfg.Redis.Namespace,
+				Logger:    logger,
+			}))
+		} else {
+			logger.Warn("MF_AI_TAVILY_API_KEY not set; web_search tool disabled")
+		}
+		// book_meeting: agentic meeting scheduling. Calls marketflow-api with
+		// the platform API key; marketflow-api handles the Google Calendar push.
+		if cfg.AI.MarketFlowAPIKey != "" {
+			tools = append(tools, agenttools.NewBookMeeting(agenttools.BookMeetingConfig{
+				APIBaseURL: cfg.AI.MarketFlowAPIURL,
+				APIKey:     cfg.AI.MarketFlowAPIKey,
+				Logger:     logger,
+			}))
+		} else {
+			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; book_meeting tool disabled")
+		}
+		agentLoop = agent.New(agent.Config{
+			Client:   groqClient,
+			Model:    cfg.AI.GroqMainModel,
+			Tools:    tools,
+			MaxIters: cfg.AI.AgentMaxIters,
+			TokenCap: cfg.AI.AgentTokenCap,
+			Logger:   logger,
+		})
+		logger.Info("agentic RAG enabled", zap.Int("tools", len(tools)))
+	}
+
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
 	pipeline := rag.NewPipeline(rag.Config{
 		DB:             db,
@@ -90,6 +135,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		Resolver:       resolver,
 		SessionService: sessionService,
 		TaskExecutor:   taskExecutor,
+		Agent:          agentLoop,
+		AgentEnabled:   cfg.AI.AgentEnabled,
 		EmbeddingModel: cfg.AI.EmbeddingModel,
 		MainModel:      cfg.AI.GroqMainModel,
 		FallbackModel:  cfg.AI.GroqFallback,
@@ -116,7 +163,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	// ── Chat Handler ──────────────────────────────────────────────────────
-	chatHandler := handlers.NewChatHandler(pipeline, logger)
+	chatHandler := handlers.NewChatHandler(pipeline, sessionService, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()

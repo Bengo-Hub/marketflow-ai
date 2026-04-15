@@ -19,6 +19,8 @@ const (
 	TaskDraftEmail          TaskType = "draft_email"
 	TaskCreateFunnelContent TaskType = "create_funnel_content"
 	TaskGenerateProductDesc TaskType = "generate_product_description"
+	TaskWhatsAppBroadcast   TaskType = "whatsapp_broadcast"
+	TaskRecruitmentMessage  TaskType = "recruitment_message"
 )
 
 // TaskResult contains the structured output of a task execution.
@@ -48,7 +50,9 @@ Task types:
 - "generate_social_post": Generate a social media post (Facebook, Instagram, etc.)
 - "draft_email": Draft a marketing or nurture email
 - "create_funnel_content": Create landing page or funnel content
-- "generate_product_description": Generate or improve a product description`
+- "generate_product_description": Generate or improve a product description
+- "whatsapp_broadcast": Craft a WhatsApp broadcast message (short, conversational, CTA link)
+- "recruitment_message": Draft a 1:1 FBO recruitment outreach (invitation to learn about the business)`
 
 var taskSystemPrompts = map[TaskType]string{
 	TaskCreateAdCopy: `You are an expert digital marketer creating Meta (Facebook/Instagram) ad copy for Forever Living Products.
@@ -130,6 +134,38 @@ Output ONLY valid JSON:
   "cta_text": "...",
   "cta_url": "...",
   "funnel_type": "product_inquiry" or "c9_challenge" or "recruitment"
+}`,
+
+	TaskWhatsAppBroadcast: `You are writing a WhatsApp broadcast for a Forever Living FBO.
+
+RULES:
+- Keep under 300 characters.
+- Conversational, friendly first-person tone.
+- One clear CTA with short link.
+- NEVER health/income claims.
+
+Output ONLY valid JSON:
+{
+  "message": "...",
+  "cta_link": "...",
+  "audience_segment": "warm_leads | dormant | new_buyers"
+}`,
+
+	TaskRecruitmentMessage: `You are an FBO mentor writing a 1:1 recruitment outreach message.
+
+RULES:
+- Warm, personal, non-pushy opening.
+- Curiosity question inviting a conversation.
+- Offer to share a short info PDF or 15-min call.
+- Income disclaimer if any earnings are hinted at.
+
+Output ONLY valid JSON:
+{
+  "opener": "...",
+  "value_prop": "...",
+  "soft_cta": "...",
+  "follow_up_if_no_reply": "...",
+  "best_channel": "whatsapp | dm | email"
 }`,
 
 	TaskGenerateProductDesc: `You are a product copywriter for Forever Living Products.
@@ -252,7 +288,9 @@ func (e *Executor) classifyTask(ctx context.Context, client *ai.Client, model st
 	}
 
 	switch TaskType(result.TaskType) {
-	case TaskCreateAdCopy, TaskGenerateSocialPost, TaskDraftEmail, TaskCreateFunnelContent, TaskGenerateProductDesc:
+	case TaskCreateAdCopy, TaskGenerateSocialPost, TaskDraftEmail,
+		TaskCreateFunnelContent, TaskGenerateProductDesc,
+		TaskWhatsAppBroadcast, TaskRecruitmentMessage:
 		return TaskType(result.TaskType), nil
 	default:
 		return TaskCreateAdCopy, nil
@@ -291,6 +329,18 @@ func (e *Executor) suggestNextActions(taskType TaskType) []string {
 			"Update knowledge base entry",
 			"Use in product landing page",
 			"Create social post from this description",
+		}
+	case TaskWhatsAppBroadcast:
+		return []string{
+			"Review segment size before sending",
+			"Schedule broadcast via notifications-service",
+			"Clone message for A/B variant",
+		}
+	case TaskRecruitmentMessage:
+		return []string{
+			"Send via WhatsApp or DM to warm lead",
+			"Attach FLP Business Opportunity PDF",
+			"Add follow-up reminder to nurture sequence",
 		}
 	default:
 		return []string{"Review and refine the output"}

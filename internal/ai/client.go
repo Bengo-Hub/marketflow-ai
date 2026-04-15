@@ -15,9 +15,34 @@ import (
 )
 
 // Message represents a chat message in the OpenAI format.
+// ToolCalls is populated on assistant messages when the model wants to invoke tools.
+// ToolCallID is set on "tool" role messages to reference the originating call.
 type Message struct {
-	Role    string `json:"role"`    // system, user, assistant
-	Content string `json:"content"`
+	Role       string     `json:"role"`    // system, user, assistant, tool
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"`
+}
+
+// ToolCall is an assistant-issued function invocation (OpenAI-compatible).
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"` // always "function"
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"` // JSON-encoded string
+	} `json:"function"`
+}
+
+// ToolDef declares a callable tool for the model.
+type ToolDef struct {
+	Type     string `json:"type"` // always "function"
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters"` // JSON schema
+	} `json:"function"`
 }
 
 // ChatRequest is the request body for the OpenAI-compatible chat completions API.
@@ -27,6 +52,8 @@ type ChatRequest struct {
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
+	Tools       []ToolDef `json:"tools,omitempty"`
+	ToolChoice  string    `json:"tool_choice,omitempty"` // "auto", "required", "none"
 }
 
 // ChatResponse is the non-streaming response from the chat completions API.

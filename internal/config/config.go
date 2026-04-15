@@ -68,10 +68,11 @@ type AIConfig struct {
 	Temperature     float64 `env:"TEMPERATURE" envDefault:"0.7"`
 	MaxTokens       int    `env:"MAX_TOKENS" envDefault:"2048"`
 
-	// Ollama (embeddings)
-	OllamaURL      string `env:"OLLAMA_URL" envDefault:"http://ollama.marketflow.svc.cluster.local:11434"`
+	// Ollama (embeddings) — shared cluster-wide pod in shared-infra namespace.
+	OllamaURL      string `env:"OLLAMA_URL" envDefault:"http://ollama.shared-infra.svc.cluster.local:11434"`
 	EmbeddingModel string `env:"EMBEDDING_MODEL" envDefault:"nomic-embed-text"`
 	EmbeddingDim   int    `env:"EMBEDDING_DIM" envDefault:"768"`
+	OllamaFallbackModel string `env:"OLLAMA_FALLBACK_MODEL" envDefault:"llama3.1:8b"`
 
 	// Anthropic (premium fallback)
 	ClaudeAPIKey string `env:"CLAUDE_API_KEY"`
@@ -79,6 +80,18 @@ type AIConfig struct {
 
 	// MarketFlow API for KB/provider config
 	MarketFlowAPIURL string `env:"MARKETFLOW_API_URL" envDefault:"http://marketflow-api.marketflow.svc.cluster.local:4000"`
+
+	// Agentic RAG (platform-level, not per-tenant).
+	AgentEnabled   bool   `env:"AGENT_ENABLED" envDefault:"true"`
+	AgentMaxIters  int    `env:"AGENT_MAX_ITERS" envDefault:"5"`
+	AgentTokenCap  int    `env:"AGENT_TOKEN_CAP" envDefault:"6000"`
+	TavilyAPIKey   string `env:"TAVILY_API_KEY"`
+	TavilyBaseURL  string `env:"TAVILY_URL" envDefault:"https://api.tavily.com"`
+	TavilyDailyCap int    `env:"TAVILY_DAILY_CAP" envDefault:"20"`
+
+	// Platform API key for service-to-service calls back to marketflow-api
+	// (used by the book_meeting agent tool).
+	MarketFlowAPIKey string `env:"MARKETFLOW_API_KEY"`
 }
 
 func Load() (*Config, error) {
