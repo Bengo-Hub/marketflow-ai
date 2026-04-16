@@ -38,12 +38,14 @@ func (t *GetProduct) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", err
 	}
+	// Product KB is platform-wide (FLP catalog); tenants can also add overrides.
 	row := t.db.QueryRowContext(ctx, `
 		SELECT title, category, content
 		FROM knowledge_base_entries
-		WHERE tenant_id = $1
+		WHERE (scope = 'platform' OR tenant_id = $1)
 		  AND category = 'product'
 		  AND (metadata->>'product_code' ILIKE $2 OR title ILIKE $2)
+		ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
 		LIMIT 1`, tenantID, "%"+args.Code+"%")
 	var title, category, content string
 	if err := row.Scan(&title, &category, &content); err != nil {
@@ -90,7 +92,9 @@ func (t *GetFAQ) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string
 	rows, err := t.db.QueryContext(ctx, `
 		SELECT title, content
 		FROM knowledge_base_entries
-		WHERE tenant_id = $1 AND category = 'faq' AND title ILIKE $2
+		WHERE (scope = 'platform' OR tenant_id = $1)
+		  AND category = 'faq'
+		  AND title ILIKE $2
 		LIMIT 5`, tenantID, "%"+args.Keyword+"%")
 	if err != nil {
 		return "", err

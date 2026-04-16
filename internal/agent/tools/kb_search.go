@@ -73,12 +73,13 @@ func (t *KBSearcher) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	}
 	vectorStr := "[" + strings.Join(parts, ",") + "]"
 
+	// Merge tenant-private rows with platform-shared rows (scope='platform').
 	query := `
 		SELECT e.chunk_text, e.category, e.title,
 		       1 - (e.embedding <=> $1::vector) AS similarity
 		FROM knowledge_base_embeddings e
 		JOIN knowledge_base_entries kb ON kb.id = e.entry_id
-		WHERE kb.tenant_id = $2
+		WHERE (kb.scope = 'platform' OR kb.tenant_id = $2)
 		  AND ($3 = '' OR e.category = $3)
 		ORDER BY e.embedding <=> $1::vector
 		LIMIT $4`

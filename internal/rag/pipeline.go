@@ -367,12 +367,15 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 	}
 	vectorStr := "[" + strings.Join(parts, ",") + "]"
 
+	// Include tenant-private KB rows AND platform-shared KB rows (scope='platform').
+	// Platform rows power the base FLP catalog / compliance corpus that every
+	// tenant's agent should be able to cite. Tenant rows remain isolated.
 	query := `
 		SELECT e.id, e.chunk_text, e.category, e.title,
 		       1 - (e.embedding <=> $1::vector) AS similarity
 		FROM knowledge_base_embeddings e
 		JOIN knowledge_base_entries kb ON kb.id = e.entry_id
-		WHERE kb.tenant_id = $2
+		WHERE kb.scope = 'platform' OR kb.tenant_id = $2
 		ORDER BY e.embedding <=> $1::vector
 		LIMIT $3`
 
