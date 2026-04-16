@@ -181,6 +181,14 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	case ai.IntentEscalate:
 		return &ChatResult{Response: "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting.",
 			Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+	case ai.IntentSimpleFAQ:
+		// Greetings and very simple FAQs get a warm template without burning
+		// an LLM call + embedding. The agent is overkill for "hi".
+		q := strings.ToLower(strings.TrimSpace(input.Question))
+		if isGreeting(q) {
+			resp := "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
+			return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		}
 	case ai.IntentTaskExecute:
 		if p.taskExecutor != nil {
 			var ragCtx string
@@ -517,4 +525,19 @@ Rules:
 // cacheKey kept for back-compat with ChatStream; delegates to cache layer.
 func (p *Pipeline) cacheKey(tenantID uuid.UUID, question string) string {
 	return p.cache.exactKey(tenantID, question)
+}
+
+func isGreeting(q string) bool {
+	greetings := []string{
+		"hi", "hello", "hey", "good morning", "good afternoon",
+		"good evening", "thanks", "thank you", "bye", "goodbye",
+		"hi!", "hello!", "hey!", "thanks!", "thank you!",
+		"hi.", "hello.", "hey.", "sup", "yo", "howdy",
+	}
+	for _, g := range greetings {
+		if q == g {
+			return true
+		}
+	}
+	return false
 }
