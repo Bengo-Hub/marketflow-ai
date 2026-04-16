@@ -63,8 +63,23 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 
-	// ── AI Clients ────────────────────────────────────────────────────────
-	groqClient := ai.NewClient(cfg.AI.GroqBaseURL, cfg.AI.GroqAPIKey, logger)
+	// ── Provider Resolver (platform-level AI config from DB, cached in Redis) ─
+	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
+
+	// ── AI Clients (DB-resolved, env fallback) ───────────────────────────
+	// Resolve Groq settings from the ProviderSetting table so the platform
+	// owner manages the key via /platform/providers without touching env vars.
+	resolveStartup, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+	groqClient, groqMainModel, _, err := resolver.ResolveGroqClient(resolveStartup)
+	resolveCancel()
+	if err != nil {
+		logger.Warn("Groq resolver failed, using env fallback", zap.Error(err))
+		groqClient = ai.NewClient(cfg.AI.GroqBaseURL, cfg.AI.GroqAPIKey, logger)
+		groqMainModel = cfg.AI.GroqMainModel
+	} else {
+		logger.Info("Groq resolved from DB", zap.String("model", groqMainModel))
+	}
+	_ = groqMainModel // used by router + agent below
 	var ollamaClient *ai.Client
 	if cfg.AI.OllamaURL != "" {
 		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger) // Ollama has no auth
@@ -72,9 +87,6 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── Intent Router ─────────────────────────────────────────────────────
 	router := ai.NewRouter(groqClient, cfg.AI.GroqRouterModel, logger)
-
-	// ── Provider Resolver (platform-level AI config from DB, cached in Redis) ─
-	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
 
 	// ── Chat Session Service ──────────────────────────────────────────────
 	sessionService := sessions.NewService(db, logger)
