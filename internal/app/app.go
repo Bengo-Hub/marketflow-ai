@@ -178,6 +178,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	})
 
 	// ── Auth Middleware ────────────────────────────────────────────────────
+	// Accepts BOTH JWT (from human callers via the UI) AND the platform
+	// X-API-Key (from service-to-service callers, internal smoke tests,
+	// and the embeddable widget's SSE stream). Mirrors the marketflow-api
+	// setup so the chat endpoint is reachable with the same auth options.
 	var authMiddleware *authclient.AuthMiddleware
 	if cfg.Security.RequireJWT {
 		authConfig := authclient.DefaultConfig(
@@ -190,8 +194,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		if err != nil {
 			return nil, fmt.Errorf("create JWT validator: %w", err)
 		}
-		authMiddleware = authclient.NewAuthMiddleware(validator)
-		logger.Info("JWT auth middleware initialized")
+		apiKeyValidator := authclient.NewAPIKeyValidator(cfg.Security.AuthServiceURL, nil)
+		authMiddleware = authclient.NewAuthMiddlewareWithAPIKey(validator, apiKeyValidator)
+		logger.Info("auth middleware initialized (JWT + platform X-API-Key)",
+			zap.String("jwks_url", cfg.Security.JWKSUrl),
+			zap.String("auth_service", cfg.Security.AuthServiceURL),
+		)
 	}
 
 	// ── Chat Handler ──────────────────────────────────────────────────────

@@ -50,11 +50,15 @@ type RedisConfig struct {
 }
 
 type SecurityConfig struct {
-	JWKSUrl       string `env:"JWKS_URL" envDefault:"https://sso.codevertexitsolutions.com/api/v1/.well-known/jwks.json"`
-	JWTIssuer     string `env:"JWT_ISSUER" envDefault:"https://sso.codevertexitsolutions.com"`
-	JWTAudience   string `env:"JWT_AUDIENCE" envDefault:"codevertex"`
-	RequireJWT    bool   `env:"REQUIRE_JWT" envDefault:"true"`
-	EncryptionKey string `env:"ENCRYPTION_KEY"`
+	JWKSUrl        string `env:"JWKS_URL" envDefault:"https://sso.codevertexitsolutions.com/api/v1/.well-known/jwks.json"`
+	JWTIssuer      string `env:"JWT_ISSUER" envDefault:"https://sso.codevertexitsolutions.com"`
+	JWTAudience    string `env:"JWT_AUDIENCE" envDefault:"codevertex"`
+	RequireJWT     bool   `env:"REQUIRE_JWT" envDefault:"true"`
+	EncryptionKey  string `env:"ENCRYPTION_KEY"`
+	// AuthServiceURL points at auth-api for platform X-API-Key validation
+	// (same server that exposes JWKS). Kept separate because JWKS sits at
+	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
+	AuthServiceURL string `env:"AUTH_SERVICE_URL" envDefault:"https://sso.codevertexitsolutions.com"`
 }
 
 // AIConfig holds AI/LLM provider settings (defaults; overridden by ProviderSetting DB).
