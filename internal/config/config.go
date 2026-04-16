@@ -89,6 +89,13 @@ type AIConfig struct {
 	TavilyBaseURL  string `env:"TAVILY_URL" envDefault:"https://api.tavily.com"`
 	TavilyDailyCap int    `env:"TAVILY_DAILY_CAP" envDefault:"20"`
 
+	// Google Custom Search (preferred web_search provider when configured;
+	// falls back to Tavily on 429 / quota exhausted).
+	GoogleAPIKey         string `env:"GOOGLE_API_KEY"`
+	GoogleCSEID          string `env:"GOOGLE_CSE_ID"`
+	GoogleSearchDailyCap int    `env:"GOOGLE_SEARCH_DAILY_CAP" envDefault:"80"`
+	WebSearchProvider    string `env:"WEB_SEARCH_PROVIDER" envDefault:"google"` // google | tavily
+
 	// Platform API key for service-to-service calls back to marketflow-api
 	// (used by the book_meeting agent tool).
 	MarketFlowAPIKey string `env:"MARKETFLOW_API_KEY"`
