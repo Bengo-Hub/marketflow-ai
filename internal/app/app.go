@@ -91,38 +91,49 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			agenttools.NewGetFAQ(db, logger),
 			agenttools.NewGetComplianceRules(),
 		}
-		// Build web_search: prefer Google Custom Search when configured; fall
-		// back to Tavily if Google hits its quota or is not configured.
+		// Build web_search: resolve credentials DB-first (ProviderSetting
+		// rows written from /platform/providers), env-var fallback. Prefer
+		// Google Custom Search when both are configured; Tavily is used as
+		// automatic fallback on 429/quota from Google.
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		tavilyCfg := resolver.ResolveTavilySettings(resolveCtx)
+		googleCfg := resolver.ResolveGoogleCSESettings(resolveCtx)
+		resolveCancel()
+
 		var tavily *agenttools.TavilySearcher
-		if cfg.AI.TavilyAPIKey != "" {
+		if tavilyCfg.APIKey != "" {
 			tavily = agenttools.NewTavilySearcher(agenttools.TavilyConfig{
-				APIKey:    cfg.AI.TavilyAPIKey,
-				BaseURL:   cfg.AI.TavilyBaseURL,
-				DailyCap:  cfg.AI.TavilyDailyCap,
+				APIKey:    tavilyCfg.APIKey,
+				BaseURL:   tavilyCfg.BaseURL,
+				DailyCap:  tavilyCfg.DailyCap,
 				Redis:     redisClient,
 				Namespace: cfg.Redis.Namespace,
 				Logger:    logger,
 			})
 		}
 		switch {
-		case cfg.AI.WebSearchProvider == "google" && cfg.AI.GoogleAPIKey != "" && cfg.AI.GoogleCSEID != "":
+		case cfg.AI.WebSearchProvider == "google" && googleCfg.APIKey != "" && googleCfg.CSEID != "":
 			var fallback agenttools.Searcher
 			if tavily != nil {
 				fallback = tavily
 			}
 			tools = append(tools, agenttools.NewGoogleSearcher(agenttools.GoogleSearchConfig{
-				APIKey:    cfg.AI.GoogleAPIKey,
-				CSEID:     cfg.AI.GoogleCSEID,
-				DailyCap:  cfg.AI.GoogleSearchDailyCap,
+				APIKey:    googleCfg.APIKey,
+				CSEID:     googleCfg.CSEID,
+				DailyCap:  googleCfg.DailyCap,
 				Redis:     redisClient,
 				Namespace: cfg.Redis.Namespace,
 				Logger:    logger,
 				Fallback:  fallback,
 			}))
+			logger.Info("web_search: Google Custom Search (DB-resolved)",
+				zap.Bool("has_tavily_fallback", tavily != nil),
+				zap.Int("daily_cap", googleCfg.DailyCap))
 		case tavily != nil:
 			tools = append(tools, tavily)
+			logger.Info("web_search: Tavily", zap.Int("daily_cap", tavilyCfg.DailyCap))
 		default:
-			logger.Warn("neither Google Custom Search nor Tavily configured; web_search tool disabled")
+			logger.Warn("neither Google Custom Search nor Tavily configured; web_search tool disabled — configure at /platform/providers")
 		}
 		// book_meeting: agentic meeting scheduling. Calls marketflow-api with
 		// the platform API key; marketflow-api handles the Google Calendar push.

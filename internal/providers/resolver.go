@@ -92,6 +92,115 @@ func (r *Resolver) ResolveGroqSettings(ctx context.Context) (*AISettings, error)
 	}, nil
 }
 
+// SearchSettings holds platform-level web-search provider config (Tavily /
+// Google Custom Search). Values are resolved DB-first then env-var fallback.
+type SearchSettings struct {
+	Provider string // "google" | "tavily"
+	APIKey   string
+	CSEID    string // Google Custom Search Engine ID; empty for Tavily
+	BaseURL  string
+	DailyCap int
+}
+
+// ResolveTavilySettings returns the Tavily web-search config with DB-first,
+// env fallback, 5-min Redis cache.
+func (r *Resolver) ResolveTavilySettings(ctx context.Context) *SearchSettings {
+	cacheKey := r.namespace + ":provider:platform:ai_search:tavily"
+	if cached, err := r.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+		var s SearchSettings
+		if json.Unmarshal([]byte(cached), &s) == nil {
+			return &s
+		}
+	}
+	if settings, err := r.fetchRawSettings(ctx, "ai_search", "tavily"); err == nil && settings["api_key"] != "" {
+		s := &SearchSettings{
+			Provider: "tavily",
+			APIKey:   settings["api_key"],
+			BaseURL:  firstNonEmpty(settings["base_url"], r.envConfig.TavilyBaseURL),
+			DailyCap: parseIntOr(settings["daily_cap"], r.envConfig.TavilyDailyCap),
+		}
+		data, _ := json.Marshal(s)
+		_ = r.redis.Set(ctx, cacheKey, string(data), 5*time.Minute).Err()
+		return s
+	}
+	return &SearchSettings{
+		Provider: "tavily",
+		APIKey:   r.envConfig.TavilyAPIKey,
+		BaseURL:  r.envConfig.TavilyBaseURL,
+		DailyCap: r.envConfig.TavilyDailyCap,
+	}
+}
+
+// ResolveGoogleCSESettings returns the Google Custom Search config with
+// DB-first, env fallback, 5-min Redis cache. Reads provider_type=ai_search,
+// provider_name=custom_search (matches the UI catalog).
+func (r *Resolver) ResolveGoogleCSESettings(ctx context.Context) *SearchSettings {
+	cacheKey := r.namespace + ":provider:platform:ai_search:custom_search"
+	if cached, err := r.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+		var s SearchSettings
+		if json.Unmarshal([]byte(cached), &s) == nil {
+			return &s
+		}
+	}
+	if settings, err := r.fetchRawSettings(ctx, "ai_search", "custom_search"); err == nil && settings["api_key"] != "" {
+		s := &SearchSettings{
+			Provider: "google",
+			APIKey:   settings["api_key"],
+			CSEID:    settings["cse_id"],
+			DailyCap: parseIntOr(settings["daily_cap"], r.envConfig.GoogleSearchDailyCap),
+		}
+		data, _ := json.Marshal(s)
+		_ = r.redis.Set(ctx, cacheKey, string(data), 5*time.Minute).Err()
+		return s
+	}
+	return &SearchSettings{
+		Provider: "google",
+		APIKey:   r.envConfig.GoogleAPIKey,
+		CSEID:    r.envConfig.GoogleCSEID,
+		DailyCap: r.envConfig.GoogleSearchDailyCap,
+	}
+}
+
+// fetchRawSettings returns the decrypted settings map for an arbitrary
+// platform provider. Same wire-format as fetchFromAPI but without the
+// AI-specific key mapping.
+func (r *Resolver) fetchRawSettings(ctx context.Context, providerType, providerName string) (map[string]string, error) {
+	if r.apiKey == "" {
+		return nil, fmt.Errorf("no platform api key — skipping DB resolve")
+	}
+	url := fmt.Sprintf("%s/api/v1/admin/providers/resolve?type=%s&name=%s",
+		r.apiBaseURL, providerType, providerName)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-API-Key", r.apiKey)
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
+	}
+	var result struct {
+		Settings map[string]string `json:"settings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Settings, nil
+}
+
+func parseIntOr(s string, fallback int) int {
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err == nil && n > 0 {
+		return n
+	}
+	return fallback
+}
+
 // ResolveGroqClient creates a Groq AI client from platform config.
 func (r *Resolver) ResolveGroqClient(ctx context.Context) (*ai.Client, string, string, error) {
 	settings, err := r.ResolveGroqSettings(ctx)
