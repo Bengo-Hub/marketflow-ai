@@ -2,9 +2,7 @@ package rag
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -48,6 +46,7 @@ type Pipeline struct {
 	fallbackModel   string
 	embeddingDim    int
 	redisNamespace  string
+	cache           *cacheLayer
 	logger          *zap.Logger
 }
 
@@ -73,7 +72,7 @@ type Config struct {
 
 // NewPipeline creates a new RAG pipeline.
 func NewPipeline(cfg Config) *Pipeline {
-	return &Pipeline{
+	p := &Pipeline{
 		db:             cfg.DB,
 		redis:          cfg.Redis,
 		groqClient:     cfg.GroqClient,
@@ -92,6 +91,8 @@ func NewPipeline(cfg Config) *Pipeline {
 		redisNamespace: cfg.RedisNamespace,
 		logger:         cfg.Logger.Named("rag"),
 	}
+	p.cache = newCacheLayer(cfg.Redis, cfg.RedisNamespace, p.logger)
+	return p
 }
 
 // ChatInput represents a user chat message.
@@ -125,125 +126,148 @@ func (p *Pipeline) resolveClient(ctx context.Context) (*ai.Client, string) {
 	return p.groqClient, p.mainModel
 }
 
-// Chat processes a user question through the full RAG pipeline.
+// Chat processes a user question through the optimized multi-layer RAG pipeline.
+//
+// Source priority (fastest → richest):
+//  1. L1 exact cache (5ms) — SHA256(tenant:question) → response
+//  2. Heuristic classifier (0ms) — keyword rules skip Groq for obvious intents
+//  3. L3 classification cache (5ms) — saved LLM classifications reused for 7d
+//  4. L4 embedding cache (5ms) — reuse cached question vectors
+//  5. L2 semantic cache (10ms) — cosine(cached_emb, new_emb) > 0.92 → reuse answer
+//  6. L5 KB result cache (5ms) — cached pgvector search results
+//  7. KB-only single-shot LLM (800ms) — when KB top-sim > 0.55, skip agent
+//  8. Agentic loop (2-4s) — only when KB is insufficient AND needs_live_info
+//  9. Web search — last resort, inside the agent loop
 func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, error) {
-	// Step 1: Check exact-match cache
-	cacheKey := p.cacheKey(input.TenantID, input.Question)
-	if cached, err := p.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
-		p.logger.Debug("cache hit", zap.String("key", cacheKey))
-		return &ChatResult{Response: cached, Cached: true, Intent: "cached"}, nil
+	started := time.Now()
+
+	// ── L1: exact cache ──────────────────────────────────────────────────
+	if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
+		p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
+		return &ChatResult{Response: resp, Cached: true, Intent: "cached"}, nil
 	}
 
-	// Step 2: Classify intent via fast router model
-	cls, err := p.router.Classify(ctx, input.Question)
-	intent, confidence := cls.Intent, cls.Confidence
-	if err != nil {
-		p.logger.Warn("classification failed, defaulting to product_qa", zap.Error(err))
-		intent = ai.IntentProductQA
-		confidence = 0.5
+	// ── Classify: heuristic first, then cached, then LLM ─────────────────
+	var intent ai.Intent
+	var confidence float64
+	var needsLiveInfo bool
+
+	if hcls, ok := ai.HeuristicClassify(input.Question); ok {
+		intent, confidence, needsLiveInfo = hcls.Intent, hcls.Confidence, hcls.NeedsLiveInfo
+		p.logger.Debug("heuristic classified", zap.String("intent", string(intent)))
+	} else if cc, ok := p.cache.getClassification(ctx, input.Question); ok {
+		intent = ai.Intent(cc.Intent)
+		confidence = cc.Confidence
+		needsLiveInfo = cc.NeedsLiveInfo
+		p.logger.Debug("L3 classification cache hit", zap.String("intent", string(intent)))
+	} else {
+		cls, err := p.router.Classify(ctx, input.Question)
+		if err != nil {
+			p.logger.Warn("classification failed, defaulting to product_qa", zap.Error(err))
+			intent, confidence = ai.IntentProductQA, 0.5
+		} else {
+			intent, confidence, needsLiveInfo = cls.Intent, cls.Confidence, cls.NeedsLiveInfo
+		}
+		p.cache.setClassification(ctx, input.Question, clsCache{
+			Intent: string(intent), Confidence: confidence, NeedsLiveInfo: needsLiveInfo,
+		})
 	}
 
-	// Step 3: Handle intents that don't need standard RAG
+	// ── Template intents (0ms, no LLM) ───────────────────────────────────
 	switch intent {
 	case ai.IntentOffTopic:
-		resp := "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
-		return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		return &ChatResult{Response: "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?",
+			Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentEscalate:
-		resp := "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
-		return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		return &ChatResult{Response: "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting.",
+			Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentTaskExecute:
-		// Route to task executor for content generation
 		if p.taskExecutor != nil {
-			// Get RAG context for product-aware task generation
 			var ragCtx string
-			if p.ollamaClient != nil {
-				if emb, err := p.ollamaClient.Embed(ctx, p.embeddingModel, input.Question); err == nil {
-					if chunks, err := p.searchPgVector(ctx, input.TenantID, emb, 3); err == nil {
-						for _, c := range chunks {
-							ragCtx += fmt.Sprintf("[%s] %s: %s\n", c.Category, c.Title, c.ChunkText)
-						}
+			emb := p.cachedEmbed(ctx, input.Question)
+			if emb != nil {
+				if chunks, err := p.cachedKBSearch(ctx, input.TenantID, emb, 3); err == nil {
+					for _, c := range chunks {
+						ragCtx += fmt.Sprintf("[%s] %s: %s\n", c.Category, c.Title, c.ChunkText)
 					}
 				}
 			}
-
-			// Resolve Groq client (per-tenant or fallback)
 			client, model := p.resolveClient(ctx)
 			result, err := p.taskExecutor.Execute(ctx, client, model, input.Question, ragCtx)
 			if err != nil {
 				return nil, fmt.Errorf("task execution failed: %w", err)
 			}
-			// Convert task result to chat result
 			respJSON, _ := json.Marshal(result)
-			return &ChatResult{
-				Response:   string(respJSON),
-				Intent:     "task_execute",
-				Confidence: confidence,
-				Model:      result.Model,
-			}, nil
+			return &ChatResult{Response: string(respJSON), Intent: "task_execute", Confidence: confidence, Model: result.Model}, nil
 		}
 	}
 
-	// Step 4: Embed question and search pgvector for relevant KB chunks
-	var context_chunks []SearchResult
-	var topSim float64
-	if p.ollamaClient != nil {
-		embedding, err := p.ollamaClient.Embed(ctx, p.embeddingModel, input.Question)
-		if err != nil {
-			p.logger.Warn("embedding failed, continuing without RAG context", zap.Error(err))
-		} else {
-			context_chunks, err = p.searchPgVector(ctx, input.TenantID, embedding, 5)
-			if err != nil {
-				p.logger.Warn("pgvector search failed", zap.Error(err))
-			}
-			if len(context_chunks) > 0 {
-				topSim = context_chunks[0].Similarity
-			}
-		}
-	}
+	// ── Embed question (cached or live) ──────────────────────────────────
+	embedding := p.cachedEmbed(ctx, input.Question)
 
-	// Step 4b: Agentic path -- engage tool-calling loop when live info is needed
-	// OR when the KB coverage is weak and the query isn't a simple FAQ.
-	if p.agentEnabled && p.agentLoop != nil &&
-		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment) &&
-		(cls.NeedsLiveInfo || topSim < 0.55) {
-		sys := p.buildAgentSystemPrompt(intent)
-		ares, aerr := p.agentLoop.Run(ctx, agent.Input{
-			TenantID:     input.TenantID,
-			SystemPrompt: sys,
-			History:      input.History,
-			Question:     input.Question,
-		})
-		if aerr == nil && ares != nil && ares.Answer != "" {
-			filtered, blocked, reason := p.filter.Check(ares.Answer)
+	// ── L2: semantic cache (check before KB search) ──────────────────────
+	if embedding != nil {
+		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, embedding); ok {
+			// Semantic hit — still run compliance filter in case rules changed.
+			filtered, blocked, _ := p.filter.Check(resp)
 			if blocked {
-				p.logger.Warn("agent response blocked by compliance filter",
-					zap.String("reason", reason), zap.String("question", input.Question))
 				filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 			}
-			_ = p.redis.Set(ctx, cacheKey, filtered, 24*time.Hour).Err()
+			p.logger.Debug("L2 semantic cache hit", zap.Duration("latency", time.Since(started)))
+			return &ChatResult{Response: filtered, Cached: true, Intent: string(intent), Confidence: confidence, Model: "semantic_cache"}, nil
+		}
+	}
+
+	// ── KB search (cached or live) ───────────────────────────────────────
+	var contextChunks []SearchResult
+	var topSim float64
+	if embedding != nil {
+		var err error
+		contextChunks, err = p.cachedKBSearch(ctx, input.TenantID, embedding, 5)
+		if err != nil {
+			p.logger.Warn("KB search failed", zap.Error(err))
+		}
+		if len(contextChunks) > 0 {
+			topSim = contextChunks[0].Similarity
+		}
+	}
+
+	// ── Source routing decision ──────────────────────────────────────────
+	//
+	// KB-first: when the top chunk similarity ≥ 0.55, the KB has strong
+	// coverage → single-shot LLM with RAG context is enough (~800ms).
+	// Only engage the expensive agentic loop when KB is weak or the
+	// classifier flagged needs_live_info.
+	useAgent := p.agentEnabled && p.agentLoop != nil &&
+		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment) &&
+		(needsLiveInfo || topSim < 0.55)
+
+	if useAgent {
+		sys := p.buildAgentSystemPrompt(intent)
+		ares, aerr := p.agentLoop.Run(ctx, agent.Input{
+			TenantID: input.TenantID, SystemPrompt: sys,
+			History: input.History, Question: input.Question,
+		})
+		if aerr == nil && ares != nil && ares.Answer != "" {
+			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding)
 			p.logger.Info("agentic chat completed",
 				zap.Int("iterations", ares.Iterations),
 				zap.Int("tool_calls", ares.ToolCallsN),
 				zap.Int("tokens", ares.TotalTokens),
-				zap.String("stop", ares.StopReason),
+				zap.Duration("latency", time.Since(started)),
 			)
 			return &ChatResult{
-				Response:   filtered,
-				Intent:     string(intent),
-				Confidence: confidence,
-				Sources:    len(context_chunks) + ares.ToolCallsN,
-				Cached:     false,
-				Model:      ares.Model,
+				Response: filtered, Intent: string(intent), Confidence: confidence,
+				Sources: len(contextChunks) + ares.ToolCallsN, Model: ares.Model,
 			}, nil
 		}
 		p.logger.Warn("agent loop failed, falling back to single-shot", zap.Error(aerr))
 	}
 
-	// Step 5: Build prompt with RAG context
-	systemPrompt := p.buildSystemPrompt(intent, context_chunks)
+	// ── Single-shot LLM with KB context ─────────────────────────────────
+	systemPrompt := p.buildSystemPrompt(intent, contextChunks)
 	messages := make([]ai.Message, 0, len(input.History)+2)
 	messages = append(messages, ai.Message{Role: "system", Content: systemPrompt})
-	// Include last 6 messages of history for context
 	historyStart := 0
 	if len(input.History) > 6 {
 		historyStart = len(input.History) - 6
@@ -251,56 +275,74 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
-	// Step 6: Call Groq LLM
-	model := p.mainModel
-	resp, err := p.groqClient.Chat(ctx, ai.ChatRequest{
-		Model:       model,
-		Messages:    messages,
-		Temperature: 0.7,
-		MaxTokens:   2048,
+	client, model := p.resolveClient(ctx)
+	resp, err := client.Chat(ctx, ai.ChatRequest{
+		Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
 	if err != nil {
-		// Fallback to smaller model
 		p.logger.Warn("main model failed, trying fallback", zap.Error(err))
 		model = p.fallbackModel
 		resp, err = p.groqClient.Chat(ctx, ai.ChatRequest{
-			Model:       model,
-			Messages:    messages,
-			Temperature: 0.7,
-			MaxTokens:   1024,
+			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("all LLM models failed: %w", err)
 		}
 	}
-
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("empty response from LLM")
 	}
 
-	aiResponse := resp.Choices[0].Message.Content
+	filtered := p.filterAndCache(ctx, input, resp.Choices[0].Message.Content, embedding)
+	p.logger.Debug("single-shot completed", zap.Duration("latency", time.Since(started)))
+	return &ChatResult{
+		Response: filtered, Intent: string(intent), Confidence: confidence,
+		Sources: len(contextChunks), Model: model,
+	}, nil
+}
 
-	// Step 7: Compliance filter
-	filtered, blocked, reason := p.filter.Check(aiResponse)
+// cachedEmbed returns the question embedding, preferring the L4 cache
+// and falling back to a live Ollama call + cache write.
+func (p *Pipeline) cachedEmbed(ctx context.Context, question string) []float32 {
+	if emb, ok := p.cache.getEmbedding(ctx, question); ok {
+		return emb
+	}
+	if p.ollamaClient == nil {
+		return nil
+	}
+	emb, err := p.ollamaClient.Embed(ctx, p.embeddingModel, question)
+	if err != nil {
+		p.logger.Warn("embedding failed", zap.Error(err))
+		return nil
+	}
+	p.cache.setEmbedding(ctx, question, emb)
+	return emb
+}
+
+// cachedKBSearch returns pgvector results, preferring the L5 cache.
+func (p *Pipeline) cachedKBSearch(ctx context.Context, tenantID uuid.UUID, emb []float32, topK int) ([]SearchResult, error) {
+	if results, ok := p.cache.getKBResults(ctx, tenantID, emb); ok {
+		return results, nil
+	}
+	results, err := p.searchPgVector(ctx, tenantID, emb, topK)
+	if err != nil {
+		return nil, err
+	}
+	p.cache.setKBResults(ctx, tenantID, emb, results)
+	return results, nil
+}
+
+// filterAndCache applies the compliance filter, writes L1 + L2 caches.
+func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
+	filtered, blocked, reason := p.filter.Check(raw)
 	if blocked {
 		p.logger.Warn("response blocked by compliance filter",
-			zap.String("reason", reason),
-			zap.String("question", input.Question),
-		)
-		filtered = "I appreciate your question! For the most accurate and up-to-date information, I recommend visiting foreverliving.com or speaking directly with your Forever Business Owner."
+			zap.String("reason", reason), zap.String("question", input.Question))
+		filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 	}
-
-	// Step 8: Cache the response (24h TTL)
-	_ = p.redis.Set(ctx, cacheKey, filtered, 24*time.Hour).Err()
-
-	return &ChatResult{
-		Response:   filtered,
-		Intent:     string(intent),
-		Confidence: confidence,
-		Sources:    len(context_chunks),
-		Cached:     false,
-		Model:      model,
-	}, nil
+	p.cache.setExact(ctx, input.TenantID, input.Question, filtered)
+	p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, filtered)
+	return filtered
 }
 
 // ChatStream processes a user question and returns a streaming channel.
@@ -472,7 +514,7 @@ Rules:
 	return b.String()
 }
 
+// cacheKey kept for back-compat with ChatStream; delegates to cache layer.
 func (p *Pipeline) cacheKey(tenantID uuid.UUID, question string) string {
-	h := sha256.Sum256([]byte(tenantID.String() + ":" + strings.ToLower(strings.TrimSpace(question))))
-	return p.redisNamespace + ":chat:exact:" + hex.EncodeToString(h[:16])
+	return p.cache.exactKey(tenantID, question)
 }
