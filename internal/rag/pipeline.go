@@ -507,7 +507,7 @@ IMPORTANT RULES:
 		b.WriteString(`
 Focus on the business opportunity. Key points:
 - 3 income streams: Retail profit (30-48%), Team building bonuses, Leadership bonuses
-- Rank ladder: Assistant Supervisor → Supervisor → Manager → Senior Manager → Eagle Manager
+- Rank ladder (EXACT, do NOT invent ranks): Assistant Supervisor → Supervisor → Assistant Manager → Manager → Senior Manager → Soaring Manager → Sapphire Manager → Diamond Sapphire Manager → Diamond Manager → Eagle Manager
 - Forever2Drive incentive: $400-$800/month for 3 years
 - Businesses are inheritable — a true legacy asset
 - NEVER guarantee specific earnings. Always include income disclaimer.
