@@ -62,10 +62,10 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 	// Defaults — these should be loaded from subscriptions-api
 	// ServiceChargePlan SC_MARKETFLOW_ADS in production.
 	const (
-		chargePct = 5.0    // 5% of ads budget
-		minKES    = 50.0   // KES 50 minimum
-		maxKES    = 5000.0 // KES 5,000 cap
-		usdToKES  = 130.0  // approximate exchange rate
+		chargePct = 5.0   // 5% of ads budget
+		minKES    = 50.0  // KES 50 minimum
+		maxKES    = 500.0 // KES 500 max per campaign
+		usdToKES  = 130.0 // approximate exchange rate
 	)
 
 	adsBudget := args.DailyBudget * float64(args.Days)
@@ -101,7 +101,7 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 			"kes": round2(totalKES),
 			"usd": round2(totalUSD),
 		},
-		"note": "Service charge is capped at KES 5,000 per campaign. Configurable from /platform/billing.",
+		"note": "Service charge is capped at KES 500 per campaign. Configurable from /platform/billing.",
 	}
 	out, _ := json.Marshal(result)
 	t.logger.Debug("calculate_cost",
