@@ -63,7 +63,7 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 	// ServiceChargePlan SC_MARKETFLOW_ADS in production.
 	const (
 		chargePct = 5.0   // 5% of ads budget
-		minKES    = 50.0  // KES 50 minimum
+		minKES    = 5.0   // KES 5 minimum
 		maxKES    = 500.0 // KES 500 max per campaign
 		usdToKES  = 130.0 // approximate exchange rate
 	)
