@@ -34,7 +34,7 @@ func NewCreateCampaign(apiBaseURL, apiKey string, logger *zap.Logger) *CreateCam
 
 func (*CreateCampaign) Name() string { return "create_campaign" }
 func (*CreateCampaign) Description() string {
-	return "Creates a new marketing campaign. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. The campaign is created in draft status; user must approve before it goes live. Use check_integrations first to verify the ad platform is connected."
+	return "Creates a new marketing campaign. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. IMPORTANT: Before calling this, use calculate_ad_cost to show the tenant the total cost (ads budget + service charge). The total is debited from their wallet in a single payment — MarketFlow pays Meta/Google on their behalf. Use check_integrations first to verify the ad platform is connected."
 }
 func (*CreateCampaign) Schema() map[string]any {
 	return map[string]any{

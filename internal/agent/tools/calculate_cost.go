@@ -101,9 +101,9 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 			"kes": round2(totalKES),
 			"usd": round2(totalUSD),
 		},
-		"note":          "Only the service charge is debited from your MarketFlow wallet. The ads budget is charged by Meta/Google to your connected ad account billing method.",
-		"wallet_debit":  round2(serviceChargeKES),
-		"ads_payment":   "Charged by the ad platform to your connected billing method",
+		"note":         "You pay once — MarketFlow handles the ads budget payment to Meta/Google on your behalf. No separate billing.",
+		"wallet_debit": round2(totalKES),
+		"breakdown":    fmt.Sprintf("KES %.0f service fee + KES %.0f ads budget = KES %.0f total from your wallet", serviceChargeKES, adsBudgetKES, totalKES),
 	}
 	out, _ := json.Marshal(result)
 	t.logger.Debug("calculate_cost",
