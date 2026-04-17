@@ -244,11 +244,14 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	//
 	// KB-first: when the top chunk similarity ≥ 0.55, the KB has strong
 	// coverage → single-shot LLM with RAG context is enough (~800ms).
-	// Only engage the expensive agentic loop when KB is weak or the
-	// classifier flagged needs_live_info.
+	// Only engage the expensive agentic loop when:
+	//   - KB coverage is weak (topSim < 0.55) AND/OR live info needed
+	//   - OR the intent is task_execute (content generation benefits from
+	//     tool-calling: get_fbo_profile for links, kb_search for product
+	//     details, check_integrations for campaign setup guidance)
 	useAgent := p.agentEnabled && p.agentLoop != nil &&
-		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment) &&
-		(needsLiveInfo || topSim < 0.55)
+		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment || intent == ai.IntentTaskExecute) &&
+		(needsLiveInfo || topSim < 0.55 || intent == ai.IntentTaskExecute)
 
 	if useAgent {
 		sys := p.buildAgentSystemPrompt(intent)
@@ -497,21 +500,32 @@ Focus on product information. When recommending products:
 // Tells the model which tools exist and when to use each.
 func (p *Pipeline) buildAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(`You are an agentic assistant for a Forever Living Products (FLP) Forever Business Owner.
+	b.WriteString(`You are an agentic marketing assistant for a business owner on the MarketFlow platform. You help with Forever Living Products (FLP) and any other business use case on the platform.
 
-You have access to tools:
-- kb_search: semantic search over the tenant's internal knowledge base (products, FAQ, business playbook, compliance). Prefer this first.
-- get_product: look up a specific product by code or name.
+TOOLS AVAILABLE:
+Knowledge & Search:
+- kb_search: semantic search over the tenant's knowledge base (products, FAQ, business). ALWAYS try this first.
+- get_product: look up a specific product by code or name (e.g. "015", "C9").
 - get_faq: fetch FAQ entries by keyword.
-- get_compliance_rules: returns the FDA/FLP compliance ruleset -- call this before drafting medical or income-claim content.
-- web_search: live web search via Tavily when internal KB is insufficient OR the user asks about current/time-sensitive facts. Quota-limited per tenant.
+- get_compliance_rules: FDA/FLP compliance rules. Call before drafting medical/income content.
+- web_search: live web search (Google/Tavily). Use only when KB doesn't cover the topic.
 
-Rules:
+Profile & Links:
+- get_fbo_profile: fetch the business owner's profile (name, distribID, links, WhatsApp). Use to personalise recommendations.
+- generate_links: create distribID-embedded product links, shop links, recruit links, WhatsApp links, profile URLs.
+
+Marketing Workflows:
+- check_integrations: verify which ad platforms (Meta, Google Ads, TikTok, LinkedIn) and scheduling tools (Calendar, Cal.com) the tenant has connected.
+- book_meeting: schedule a meeting on the tenant's Google Calendar.
+
+RULES:
 - Call tools iteratively; reason step by step.
-- Stop calling tools once you have enough to answer; then respond in plain prose.
+- Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
+- When the user asks to SET UP a campaign or funnel, use check_integrations first, then get_fbo_profile for links, then explain the steps and what's needed.
+- When generating product recommendations, ALWAYS include distribID-embedded product links (use generate_links or get_fbo_profile).
 - NEVER make medical claims (cures, treats, heals, prevents disease). Use supports/promotes/helps maintain.
 - NEVER guarantee income. Results vary. Include income disclaimer when relevant.
-- Cite product codes and URLs from tool results where helpful.
+- Format responses with markdown: use **bold** for key terms, bullet points for lists, and headers for sections.
 `)
 	switch intent {
 	case ai.IntentBusinessOpp, ai.IntentRecruitment:

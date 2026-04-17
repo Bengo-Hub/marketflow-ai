@@ -147,16 +147,24 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		default:
 			logger.Warn("neither Google Custom Search nor Tavily configured; web_search tool disabled — configure at /platform/providers")
 		}
-		// book_meeting: agentic meeting scheduling. Calls marketflow-api with
-		// the platform API key; marketflow-api handles the Google Calendar push.
+		// Tools that require marketflow-api service-to-service calls.
 		if cfg.AI.MarketFlowAPIKey != "" {
-			tools = append(tools, agenttools.NewBookMeeting(agenttools.BookMeetingConfig{
-				APIBaseURL: cfg.AI.MarketFlowAPIURL,
-				APIKey:     cfg.AI.MarketFlowAPIKey,
-				Logger:     logger,
-			}))
+			tools = append(tools,
+				agenttools.NewBookMeeting(agenttools.BookMeetingConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					APIKey:     cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewGetFBOProfile(agenttools.FBOProfileConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					APIKey:     cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewCheckIntegrations(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
+				agenttools.NewGenerateLinks(logger),
+			)
 		} else {
-			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; book_meeting tool disabled")
+			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
 		}
 		agentLoop = agent.New(agent.Config{
 			Client:   groqClient,
