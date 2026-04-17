@@ -73,11 +73,11 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect if this is a public/widget request (no auth required).
-	// Public chat prefers cache → KB → single-shot; avoids expensive agent loops.
 	isPublic := strings.Contains(r.URL.Path, "/public/")
 
 	input := rag.ChatInput{
 		TenantID:   tenantID,
+		TenantSlug: r.Header.Get("X-Tenant-ID"), // original slug for tool lookups
 		SessionID:  sessionID,
 		Question:   req.Question,
 		History:    history,

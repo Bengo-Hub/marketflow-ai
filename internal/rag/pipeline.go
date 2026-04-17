@@ -98,6 +98,7 @@ func NewPipeline(cfg Config) *Pipeline {
 // ChatInput represents a user chat message.
 type ChatInput struct {
 	TenantID     uuid.UUID
+	TenantSlug   string       // original slug from X-Tenant-ID (may differ from UUID)
 	SessionID    uuid.UUID
 	Question     string
 	History      []ai.Message // previous messages in this session

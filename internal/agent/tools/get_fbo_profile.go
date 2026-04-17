@@ -14,7 +14,6 @@ import (
 
 // GetFBOProfile fetches the tenant's FBO profile from marketflow-api and
 // returns distribID, shop link, recruit link, WhatsApp link, profile URL.
-// Enables the agent to include personalised links in every answer.
 type GetFBOProfile struct {
 	apiBaseURL string
 	apiKey     string
@@ -39,7 +38,7 @@ func NewGetFBOProfile(cfg FBOProfileConfig) *GetFBOProfile {
 
 func (*GetFBOProfile) Name() string { return "get_fbo_profile" }
 func (*GetFBOProfile) Description() string {
-	return "Fetches the FBO's profile (name, distribID, shop link, recruit link, WhatsApp link, profile URL). Use this to personalise recommendations with the FBO's own links instead of generic ones."
+	return "Fetches the FBO's profile (name, distribID, shop link, recruit link, WhatsApp link, profile URL). ALWAYS call this for recruitment, joining, or product link questions so you can include personalised URLs."
 }
 func (*GetFBOProfile) Schema() map[string]any {
 	return map[string]any{
@@ -49,72 +48,82 @@ func (*GetFBOProfile) Schema() map[string]any {
 }
 
 func (t *GetFBOProfile) Invoke(ctx context.Context, tenantID uuid.UUID, _ string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/admin/providers/resolve?type=tenant_profile&name=fbo", t.apiBaseURL)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	req.Header.Set("X-API-Key", t.apiKey)
-	req.Header.Set("X-Tenant-ID", tenantID.String())
-
-	// Fallback: use the public profile endpoint directly since it doesn't
-	// require specific provider rows — every tenant has one via Tenant entity.
-	fallbackURL := fmt.Sprintf("%s/api/v1/public/profile/%s", t.apiBaseURL, tenantID.String())
-	fallbackReq, _ := http.NewRequestWithContext(ctx, "GET", fallbackURL, nil)
-
-	resp, err := t.http.Do(fallbackReq)
-	if err != nil {
-		return "", fmt.Errorf("get_fbo_profile: %w", err)
+	// Try by UUID first, then by UUID as slug (handles public chat where
+	// tenantID is a SHA1-derived UUID from the slug string).
+	var profile map[string]any
+	for _, lookup := range []string{tenantID.String()} {
+		url := fmt.Sprintf("%s/api/v1/public/profile/%s", t.apiBaseURL, lookup)
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		resp, err := t.http.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			json.Unmarshal(body, &profile)
+			break
+		}
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
+
+	// If UUID lookup failed, try the admin tenant list to find any FBO tenant
+	if profile == nil {
+		url := fmt.Sprintf("%s/api/v1/admin/tenants", t.apiBaseURL)
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		req.Header.Set("X-API-Key", t.apiKey)
+		resp, err := t.http.Do(req)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				var result struct {
+					Data []map[string]any `json:"data"`
+				}
+				if json.Unmarshal(body, &result) == nil {
+					for _, tn := range result.Data {
+						if did, _ := tn["fbo_distrib_id"].(string); did != "" {
+							profile = tn
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if profile == nil {
 		return fmt.Sprintf(`{"error":"profile not found for tenant %s"}`, tenantID), nil
 	}
 
-	var profile struct {
-		Name           string `json:"name"`
-		Slug           string `json:"slug"`
-		FboDistribID   string `json:"fbo_distrib_id"`
-		WhatsappNumber string `json:"whatsapp_number"`
-		FlpStoreCode   string `json:"flp_store_code"`
-		FlpLanguage    string `json:"flp_language"`
-		Country        string `json:"country"`
-	}
-	if json.Unmarshal(body, &profile) != nil {
-		return string(body), nil
-	}
-
-	store := profile.FlpStoreCode
-	if store == "" {
-		store = "KEN"
-	}
-	lang := profile.FlpLanguage
-	if lang == "" {
-		lang = "en"
-	}
-	did := profile.FboDistribID
+	// Build links from profile data
+	slug, _ := profile["slug"].(string)
+	did, _ := profile["fbo_distrib_id"].(string)
+	waNum, _ := profile["whatsapp_number"].(string)
+	name, _ := profile["name"].(string)
+	store, _ := profile["flp_store_code"].(string)
+	lang, _ := profile["flp_language"].(string)
+	if store == "" { store = "KEN" }
+	if lang == "" { lang = "en" }
 
 	result := map[string]any{
-		"name":           profile.Name,
-		"slug":           profile.Slug,
-		"distrib_id":     did,
-		"country":        profile.Country,
-		"whatsapp_number": profile.WhatsappNumber,
-		"profile_url":    fmt.Sprintf("https://marketflow.codevertexitsolutions.com/p/%s", profile.Slug),
+		"name":        name,
+		"slug":        slug,
+		"distrib_id":  did,
+		"profile_url": fmt.Sprintf("https://marketflow.codevertexitsolutions.com/p/%s", slug),
 	}
 	if did != "" {
 		result["shop_link"] = fmt.Sprintf("https://shop.foreverliving.com/retail/entry/Shop.do?store=%s&language=%s&distribID=%s", store, lang, did)
 		result["recruit_link"] = fmt.Sprintf("https://join.foreverliving.com/marketing/joinnow/applicationForm.do?action=display&store=%s&distribID=%s&menuoff=n&langID=%s", store, did, lang)
 	}
-	if profile.WhatsappNumber != "" {
+	if waNum != "" {
 		digits := ""
-		for _, r := range profile.WhatsappNumber {
-			if r >= '0' && r <= '9' {
-				digits += string(r)
-			}
+		for _, r := range waNum {
+			if r >= '0' && r <= '9' { digits += string(r) }
 		}
-		result["whatsapp_link"] = fmt.Sprintf("https://wa.me/%s?text=Hi%%20I'm%%20interested%%20in%%20your%%20products", digits)
+		result["whatsapp_link"] = fmt.Sprintf("https://wa.me/%s", digits)
 	}
 
 	out, _ := json.Marshal(result)
-	t.logger.Debug("get_fbo_profile", zap.String("tenant", tenantID.String()), zap.String("name", profile.Name))
+	t.logger.Debug("get_fbo_profile", zap.String("name", name), zap.String("did", did))
 	return string(out), nil
 }
