@@ -255,35 +255,39 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	// Public mode (widget on /p/{slug}): prefer cache → KB → single-shot LLM.
 	// Skip agent loop entirely unless KB has zero coverage — keeps responses
 	// fast and minimises Groq API cost for unauthenticated traffic.
+	// Recruitment + task_execute ALWAYS use the agent — they need tools
+	// (generate_links for join URL, get_fbo_profile for personalisation,
+	// check_integrations for campaign setup). Product/business Q&A only
+	// use the agent when KB coverage is weak or live info is needed.
+	intentNeedsTools := intent == ai.IntentRecruitment || intent == ai.IntentTaskExecute || intent == ai.IntentBusinessOpp
 	useAgent := p.agentEnabled && p.agentLoop != nil &&
-		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment || intent == ai.IntentTaskExecute) &&
-		(needsLiveInfo || topSim < 0.55 || intent == ai.IntentTaskExecute)
+		(intent == ai.IntentProductQA || intentNeedsTools) &&
+		(needsLiveInfo || topSim < 0.55 || intentNeedsTools)
 	if input.PublicMode {
-		// Public mode: skip the FULL multi-iteration agent loop for general
-		// Q&A (expensive, slow), but STILL use the agent for action-oriented
-		// queries where tools add real value (links, booking, profile lookup).
-		qLower := strings.ToLower(input.Question)
-		needsTools := strings.Contains(qLower, "join") ||
-			strings.Contains(qLower, "sign up") ||
-			strings.Contains(qLower, "link") ||
-			strings.Contains(qLower, "book") ||
-			strings.Contains(qLower, "meeting") ||
-			strings.Contains(qLower, "schedule") ||
-			strings.Contains(qLower, "call") ||
-			strings.Contains(qLower, "shop") ||
-			strings.Contains(qLower, "buy") ||
-			strings.Contains(qLower, "price") ||
-			strings.Contains(qLower, "whatsapp") ||
-			strings.Contains(qLower, "recruit") ||
-			strings.Contains(qLower, "demo") ||
-			intent == ai.IntentRecruitment
-		if !needsTools {
-			// General knowledge Q&A: prefer cache → KB → single-shot LLM.
-			// Skip agent unless KB has zero coverage.
-			useAgent = useAgent && topSim < 0.3
+		// Public mode: skip the agent for general knowledge Q&A (expensive),
+		// but ALWAYS use it for action-oriented queries and recruitment.
+		if !intentNeedsTools {
+			qLower := strings.ToLower(input.Question)
+			needsToolsKW := strings.Contains(qLower, "join") ||
+				strings.Contains(qLower, "sign up") ||
+				strings.Contains(qLower, "link") ||
+				strings.Contains(qLower, "book") ||
+				strings.Contains(qLower, "meeting") ||
+				strings.Contains(qLower, "schedule") ||
+				strings.Contains(qLower, "call") ||
+				strings.Contains(qLower, "shop") ||
+				strings.Contains(qLower, "buy") ||
+				strings.Contains(qLower, "price") ||
+				strings.Contains(qLower, "whatsapp") ||
+				strings.Contains(qLower, "recruit") ||
+				strings.Contains(qLower, "demo") ||
+				strings.Contains(qLower, "started")
+			if !needsToolsKW {
+				useAgent = useAgent && topSim < 0.3
+			}
 		}
-		// When needsTools=true, useAgent stays as-is so the agent can call
-		// generate_links, get_fbo_profile, book_meeting etc.
+		// intentNeedsTools (recruitment, task_execute, business_opp) always
+		// keeps useAgent=true so the agent can generate personalised links.
 	}
 
 	if useAgent {
