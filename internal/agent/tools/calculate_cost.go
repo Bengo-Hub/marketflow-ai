@@ -101,7 +101,9 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 			"kes": round2(totalKES),
 			"usd": round2(totalUSD),
 		},
-		"note": "Service charge is capped at KES 500 per campaign. Configurable from /platform/billing.",
+		"note":          "Only the service charge is debited from your MarketFlow wallet. The ads budget is charged by Meta/Google to your connected ad account billing method.",
+		"wallet_debit":  round2(serviceChargeKES),
+		"ads_payment":   "Charged by the ad platform to your connected billing method",
 	}
 	out, _ := json.Marshal(result)
 	t.logger.Debug("calculate_cost",
