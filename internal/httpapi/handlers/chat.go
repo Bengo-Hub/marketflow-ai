@@ -14,18 +14,25 @@ import (
 	"go.uber.org/zap"
 )
 
+// UsageReporter reports usage events to subscriptions-api (fire-and-forget).
+type UsageReporter interface {
+	Report(tenantID, metric string, value float64)
+}
+
 // ChatHandler handles AI chat HTTP requests.
 type ChatHandler struct {
 	pipeline *rag.Pipeline
 	sessions *sessions.Service
+	usage    UsageReporter
 	logger   *zap.Logger
 }
 
 // NewChatHandler creates a new chat handler.
-func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, logger *zap.Logger) *ChatHandler {
+func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, usage UsageReporter, logger *zap.Logger) *ChatHandler {
 	return &ChatHandler{
 		pipeline: pipeline,
 		sessions: sess,
+		usage:    usage,
 		logger:   logger.Named("chat.handler"),
 	}
 }
@@ -103,6 +110,11 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 			ai.Message{Role: "user", Content: req.Question},
 			ai.Message{Role: "assistant", Content: result.Response},
 		)
+	}
+
+	// Report AI chat usage to subscriptions-api (fire-and-forget).
+	if h.usage != nil {
+		h.usage.Report(tenantID.String(), "ai_chat_messages", 1)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

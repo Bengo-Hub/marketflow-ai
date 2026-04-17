@@ -230,7 +230,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	// ── Chat Handler ──────────────────────────────────────────────────────
-	chatHandler := handlers.NewChatHandler(pipeline, sessionService, logger)
+	var usageReporter handlers.UsageReporter
+	if cfg.Security.SubscriptionsURL != "" {
+		usageReporter = handlers.NewHTTPUsageReporter(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
+	}
+	chatHandler := handlers.NewChatHandler(pipeline, sessionService, usageReporter, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()

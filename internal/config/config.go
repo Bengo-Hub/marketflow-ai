@@ -59,6 +59,9 @@ type SecurityConfig struct {
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
 	AuthServiceURL string `env:"AUTH_SERVICE_URL" envDefault:"https://sso.codevertexitsolutions.com"`
+	// SubscriptionsURL points to subscriptions-api for usage event reporting.
+	SubscriptionsURL string `env:"SUBSCRIPTIONS_URL" envDefault:"http://subscription-api.subscriptions.svc.cluster.local:4000"`
+	SubscriptionsKey string `env:"SUBSCRIPTIONS_API_KEY"`
 }
 
 // AIConfig holds AI/LLM provider settings (defaults; overridden by ProviderSetting DB).
