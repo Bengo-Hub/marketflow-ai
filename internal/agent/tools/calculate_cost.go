@@ -62,10 +62,12 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 	// Defaults — these should be loaded from subscriptions-api
 	// ServiceChargePlan SC_MARKETFLOW_ADS in production.
 	const (
-		chargePct = 5.0   // 5% of ads budget
-		minKES    = 5.0   // KES 5 minimum
-		maxKES    = 500.0 // KES 500 max per campaign
-		usdToKES  = 130.0 // approximate exchange rate
+		chargePct   = 5.0   // 5% of ads budget
+		minKES      = 5.0   // KES 5 minimum
+		maxKES      = 500.0 // KES 500 max per campaign
+		usdToKES    = 130.0 // approximate exchange rate
+		gatewayCard = 1.5   // Paystack card fee %
+		gatewayMpesa = 0.0  // M-Pesa Paybill: KES 0 (STK Push)
 	)
 
 	adsBudget := args.DailyBudget * float64(args.Days)
@@ -80,8 +82,13 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 	serviceChargeKES := math.Max(minKES, math.Min(maxKES, rawCharge))
 	serviceChargeUSD := serviceChargeKES / usdToKES
 
-	totalKES := adsBudgetKES + serviceChargeKES
-	totalUSD := totalKES / usdToKES
+	// Gateway fees are accrued by the paying party (tenant).
+	subtotal := adsBudgetKES + serviceChargeKES
+	gatewayFeeCard := subtotal * gatewayCard / 100
+	gatewayFeeMpesa := gatewayMpesa // flat for paybill
+
+	totalCardKES := subtotal + gatewayFeeCard
+	totalMpesaKES := subtotal + gatewayFeeMpesa
 
 	result := map[string]any{
 		"ads_budget": map[string]any{
@@ -91,25 +98,31 @@ func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 			"currency": args.Currency,
 		},
 		"service_charge": map[string]any{
-			"percentage":  chargePct,
-			"amount_kes":  round2(serviceChargeKES),
-			"amount_usd":  round2(serviceChargeUSD),
-			"min_kes":     minKES,
-			"max_kes":     maxKES,
+			"percentage": chargePct,
+			"amount_kes": round2(serviceChargeKES),
+			"amount_usd": round2(serviceChargeUSD),
+			"min_kes":    minKES,
+			"max_kes":    maxKES,
+		},
+		"gateway_fee": map[string]any{
+			"card_kes":  round2(gatewayFeeCard),
+			"mpesa_kes": round2(gatewayFeeMpesa),
+			"note":      "Gateway fee varies by payment channel. M-Pesa Paybill is free; card is ~1.5%.",
 		},
 		"total": map[string]any{
-			"kes": round2(totalKES),
-			"usd": round2(totalUSD),
+			"via_card_kes":  round2(totalCardKES),
+			"via_mpesa_kes": round2(totalMpesaKES),
+			"via_card_usd":  round2(totalCardKES / usdToKES),
 		},
-		"note":         "You pay once — MarketFlow handles the ads budget payment to Meta/Google on your behalf. No separate billing.",
-		"wallet_debit": round2(totalKES),
-		"breakdown":    fmt.Sprintf("KES %.0f service fee + KES %.0f ads budget = KES %.0f total from your wallet", serviceChargeKES, adsBudgetKES, totalKES),
+		"note":         "You pay once — MarketFlow handles ad platform payment on your behalf. Gateway fee is accrued by the paying party.",
+		"wallet_debit": round2(totalCardKES),
+		"breakdown":    fmt.Sprintf("KES %.0f ads + KES %.0f service fee + KES %.0f gateway fee (card) = KES %.0f total", adsBudgetKES, serviceChargeKES, gatewayFeeCard, totalCardKES),
 	}
 	out, _ := json.Marshal(result)
 	t.logger.Debug("calculate_cost",
 		zap.Float64("ads_budget", adsBudget),
 		zap.Float64("charge_kes", serviceChargeKES),
-		zap.Float64("total_kes", totalKES),
+		zap.Float64("total_card_kes", totalCardKES),
 	)
 	return string(out), nil
 }
