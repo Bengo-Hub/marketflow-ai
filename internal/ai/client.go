@@ -99,39 +99,59 @@ func NewClient(baseURL, apiKey string, logger *zap.Logger) *Client {
 	}
 }
 
-// Chat sends a non-streaming chat completion request.
+// Chat sends a non-streaming chat completion request with automatic retry
+// on 429 (rate limit). Groq's free tier has low TPM limits; a short backoff
+// typically succeeds on the second try.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
+	for attempt := 0; attempt < 3; attempt++ {
+		body, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
-	}
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("send request: %w", err)
+		}
 
-	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		if resp.StatusCode == 429 {
+			resp.Body.Close()
+			wait := time.Duration(5*(attempt+1)) * time.Second
+			c.logger.Warn("rate limited, retrying",
+				zap.Int("attempt", attempt+1), zap.Duration("wait", wait))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+				continue
+			}
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var chatResp ChatResponse
+		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		return &chatResp, nil
 	}
-	return &chatResp, nil
+	return nil, fmt.Errorf("rate limit exceeded after 3 retries")
 }
 
 // ChatStream sends a streaming chat completion request and returns a channel of deltas.
