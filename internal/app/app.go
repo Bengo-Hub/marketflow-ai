@@ -162,6 +162,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				}),
 				agenttools.NewCheckIntegrations(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewGenerateLinks(logger),
+				agenttools.NewCreateCampaign(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
+				agenttools.NewCreateFunnel(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
+				agenttools.NewCalculateCost(logger),
 			)
 		} else {
 			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
