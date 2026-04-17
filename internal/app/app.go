@@ -258,6 +258,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Get("/v1/docs/*", httpapi.SwaggerUI)
 	r.Get("/api/v1/openapi.json", httpapi.OpenAPIJSON)
 
+	// Public chat endpoint — no auth required. The embeddable widget on
+	// /p/{slug} and external sites uses this. Rate-limited by tenant slug
+	// (via the existing per-tenant daily caps on web_search + AI credits).
+	r.Route("/api/v1/public", func(r chi.Router) {
+		r.Post("/chat", chatHandler.Chat)
+	})
+
+	// Authenticated chat — for the dashboard AI chat page where the user
+	// is logged in with a JWT or using the platform X-API-Key.
 	r.Route("/api/v1", func(r chi.Router) {
 		if authMiddleware != nil {
 			r.Use(authMiddleware.RequireAuth)

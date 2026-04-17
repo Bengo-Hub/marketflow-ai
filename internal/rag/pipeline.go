@@ -102,6 +102,7 @@ type ChatInput struct {
 	Question     string
 	History      []ai.Message // previous messages in this session
 	BusinessType string       // "flp" or "generic" — drives compliance filter routing
+	PublicMode   bool         // true for /public/chat — prefer cache/KB, avoid expensive agent loops
 }
 
 // ChatResult contains the AI response and metadata.
@@ -250,9 +251,40 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	//   - OR the intent is task_execute (content generation benefits from
 	//     tool-calling: get_fbo_profile for links, kb_search for product
 	//     details, check_integrations for campaign setup guidance)
+	//
+	// Public mode (widget on /p/{slug}): prefer cache → KB → single-shot LLM.
+	// Skip agent loop entirely unless KB has zero coverage — keeps responses
+	// fast and minimises Groq API cost for unauthenticated traffic.
 	useAgent := p.agentEnabled && p.agentLoop != nil &&
 		(intent == ai.IntentProductQA || intent == ai.IntentBusinessOpp || intent == ai.IntentRecruitment || intent == ai.IntentTaskExecute) &&
 		(needsLiveInfo || topSim < 0.55 || intent == ai.IntentTaskExecute)
+	if input.PublicMode {
+		// Public mode: skip the FULL multi-iteration agent loop for general
+		// Q&A (expensive, slow), but STILL use the agent for action-oriented
+		// queries where tools add real value (links, booking, profile lookup).
+		qLower := strings.ToLower(input.Question)
+		needsTools := strings.Contains(qLower, "join") ||
+			strings.Contains(qLower, "sign up") ||
+			strings.Contains(qLower, "link") ||
+			strings.Contains(qLower, "book") ||
+			strings.Contains(qLower, "meeting") ||
+			strings.Contains(qLower, "schedule") ||
+			strings.Contains(qLower, "call") ||
+			strings.Contains(qLower, "shop") ||
+			strings.Contains(qLower, "buy") ||
+			strings.Contains(qLower, "price") ||
+			strings.Contains(qLower, "whatsapp") ||
+			strings.Contains(qLower, "recruit") ||
+			strings.Contains(qLower, "demo") ||
+			intent == ai.IntentRecruitment
+		if !needsTools {
+			// General knowledge Q&A: prefer cache → KB → single-shot LLM.
+			// Skip agent unless KB has zero coverage.
+			useAgent = useAgent && topSim < 0.3
+		}
+		// When needsTools=true, useAgent stays as-is so the agent can call
+		// generate_links, get_fbo_profile, book_meeting etc.
+	}
 
 	if useAgent {
 		sys := p.buildAgentSystemPrompt(intent)

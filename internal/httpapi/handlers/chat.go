@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/rag"
@@ -71,11 +72,16 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		sessionID = uuid.New()
 	}
 
+	// Detect if this is a public/widget request (no auth required).
+	// Public chat prefers cache → KB → single-shot; avoids expensive agent loops.
+	isPublic := strings.Contains(r.URL.Path, "/public/")
+
 	input := rag.ChatInput{
-		TenantID:  tenantID,
-		SessionID: sessionID,
-		Question:  req.Question,
-		History:   history,
+		TenantID:   tenantID,
+		SessionID:  sessionID,
+		Question:   req.Question,
+		History:    history,
+		PublicMode: isPublic,
 	}
 
 	if req.Stream {
