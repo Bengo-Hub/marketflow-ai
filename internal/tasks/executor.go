@@ -245,6 +245,11 @@ func (e *Executor) Execute(ctx context.Context, client *ai.Client, model string,
 	// Step 5: Build next actions based on task type
 	nextActions := e.suggestNextActions(taskType)
 
+	// Step 6: For ad copy tasks, add follow-up guidance to prompt tool chaining.
+	if taskType == TaskCreateAdCopy {
+		structured["_follow_up"] = "I've created the ad copy. Would you like me to check your connected ad platforms and calculate the campaign cost? I can also search for product images to use in the ad."
+	}
+
 	return &TaskResult{
 		TaskType:    taskType,
 		Content:     structured,

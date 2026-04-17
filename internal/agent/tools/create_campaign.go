@@ -67,6 +67,21 @@ func (t *CreateCampaign) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSO
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
+	// Prerequisite: verify the target ad platform is connected before creating.
+	platform, _ := args["platform"].(string)
+	if platform != "" && platform != "manual" {
+		connected, checkErr := t.checkPlatformConnected(ctx, tenantID, platform)
+		if checkErr != nil {
+			t.logger.Warn("pre-flight integration check failed, proceeding anyway",
+				zap.String("platform", platform), zap.Error(checkErr))
+		} else if !connected {
+			return fmt.Sprintf(
+				`{"error":"The %s ad platform is not connected. Please connect it at /settings/integrations before creating a campaign.","action":"connect_integration","platform":%q,"setup_path":"/settings/integrations"}`,
+				platform, platform,
+			), nil
+		}
+	}
+
 	body, _ := json.Marshal(args)
 	url := fmt.Sprintf("%s/api/v1/campaigns", t.apiBaseURL)
 	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -86,4 +101,47 @@ func (t *CreateCampaign) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSO
 
 	t.logger.Info("campaign created", zap.String("tenant", tenantID.String()))
 	return string(rb), nil
+}
+
+// checkPlatformConnected queries the integrations API to verify the target ad
+// platform is connected for this tenant. Returns (true, nil) if connected.
+func (t *CreateCampaign) checkPlatformConnected(ctx context.Context, tenantID uuid.UUID, platform string) (bool, error) {
+	// Map campaign platform names to provider type names used by the resolve endpoint.
+	typeMap := map[string]struct{ ptype, pname string }{
+		"meta":     {"meta_ads", "oauth"},
+		"google":   {"google_ads", "ads"},
+		"tiktok":   {"tiktok_ads", "ads"},
+		"linkedin": {"linkedin_ads", "ads"},
+	}
+	info, ok := typeMap[platform]
+	if !ok {
+		// Unknown platform — skip the check and let the API handle it.
+		return true, nil
+	}
+
+	url := fmt.Sprintf("%s/api/v1/admin/providers/resolve?type=%s&name=%s", t.apiBaseURL, info.ptype, info.pname)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("X-API-Key", t.apiKey)
+	req.Header.Set("X-Tenant-ID", tenantID.String())
+
+	resp, err := t.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("check integration %s: %w", platform, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return false, nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		Settings map[string]string `json:"settings"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || len(parsed.Settings) == 0 {
+		return false, nil
+	}
+	return true, nil
 }

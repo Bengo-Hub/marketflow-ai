@@ -80,9 +80,14 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 	messages = append(messages, in.History[start:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: in.Question})
 
-	result := &Result{Model: l.model, Trace: make([]TraceEntry, 0, l.maxIters)}
+	maxIters := l.maxIters
+	if in.MaxIters > 0 {
+		maxIters = in.MaxIters
+	}
 
-	for iter := 1; iter <= l.maxIters; iter++ {
+	result := &Result{Model: l.model, Trace: make([]TraceEntry, 0, maxIters)}
+
+	for iter := 1; iter <= maxIters; iter++ {
 		req := ai.ChatRequest{
 			Model:       l.model,
 			Messages:    messages,
@@ -177,14 +182,14 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 	if err != nil || len(final.Choices) == 0 {
 		result.StoppedEarly = true
 		result.StopReason = "max_iterations"
-		result.Iterations = l.maxIters
+		result.Iterations = maxIters
 		result.Answer = "I gathered partial information but ran out of reasoning steps. Please try rephrasing your question."
 		return result, nil
 	}
 	result.Answer = final.Choices[0].Message.Content
 	result.StoppedEarly = true
 	result.StopReason = "max_iterations_synthesised"
-	result.Iterations = l.maxIters
+	result.Iterations = maxIters
 	return result, nil
 }
 

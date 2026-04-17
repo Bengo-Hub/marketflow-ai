@@ -293,10 +293,16 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 
 	if useAgent {
 		sys := p.buildAgentSystemPrompt(intent)
-		ares, aerr := p.agentLoop.Run(ctx, agent.Input{
+		agentInput := agent.Input{
 			TenantID: input.TenantID, SystemPrompt: sys,
 			History: input.History, Question: input.Question,
-		})
+		}
+		// task_execute needs more iterations for full tool chains
+		// (check_integrations → kb_search → search_images → calculate_ad_cost → create_campaign).
+		if intent == ai.IntentTaskExecute {
+			agentInput.MaxIters = 8
+		}
+		ares, aerr := p.agentLoop.Run(ctx, agentInput)
 		if aerr == nil && ares != nil && ares.Answer != "" {
 			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding)
 			p.logger.Info("agentic chat completed",
@@ -583,6 +589,21 @@ RULES:
 		b.WriteString("\nFocus on the business opportunity. Mention the 3 income streams, rank ladder, and Forever2Drive. Always include an income disclaimer.\n")
 	case ai.IntentProductQA:
 		b.WriteString("\nFocus on product information, certifications (IASC, USDA/EU Organic), and relevant starter offers like Clean 9.\n")
+	case ai.IntentTaskExecute:
+		b.WriteString(`
+TOOL CHAINING FOR AD/CAMPAIGN/CONTENT CREATION:
+When the user asks to create an ad, campaign, or marketing content, follow this tool chain:
+1. FIRST call check_integrations to verify which ad platforms are connected.
+2. Call kb_search to get product details (name, benefits, product code) for the product mentioned.
+3. Call search_images to find relevant product images to include in the ad.
+4. Call calculate_ad_cost to show the budget breakdown (ads spend + service fee = single wallet payment).
+5. Present the ad copy, images, and cost breakdown to the user in a clear summary.
+6. Ask if they want to proceed with creating the campaign via create_campaign.
+
+If an ad platform is not connected, guide the user to /settings/integrations to connect it before proceeding.
+If wallet balance is insufficient, guide the user to /settings/billing to top up their wallet.
+Do NOT skip straight to text generation — always gather context and verify integrations first.
+`)
 	}
 	return b.String()
 }
