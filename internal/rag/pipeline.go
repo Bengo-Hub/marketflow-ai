@@ -537,6 +537,9 @@ RULES:
 - NEVER make medical claims (cures, treats, heals, prevents disease). Use supports/promotes/helps maintain.
 - NEVER guarantee income. Results vary. Include income disclaimer when relevant.
 - Format responses with markdown: use **bold** for key terms, bullet points for lists, and headers for sections.
+- When discussing products, use search_images to find a relevant product photo and include it in your response as a markdown image: ![description](url). This makes responses visually appealing.
+- Include product links using generate_links when recommending specific products.
+- Keep responses comprehensive but concise — aim for 150-300 words with images and links embedded.
 `)
 	switch intent {
 	case ai.IntentBusinessOpp, ai.IntentRecruitment:

@@ -166,6 +166,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				agenttools.NewCreateFunnel(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCalculateCost(logger),
 			)
+			// Image search uses the same Google CSE key as web_search.
+			if googleCfg.APIKey != "" && googleCfg.CSEID != "" {
+				tools = append(tools, agenttools.NewImageSearch(googleCfg.APIKey, googleCfg.CSEID, logger))
+			}
 		} else {
 			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
 		}

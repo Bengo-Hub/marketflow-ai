@@ -86,8 +86,8 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 		req := ai.ChatRequest{
 			Model:       l.model,
 			Messages:    messages,
-			Temperature: 0.3,
-			MaxTokens:   1024,
+			Temperature: 0.4,
+			MaxTokens:   2048,
 			Tools:       l.toolDefs,
 			ToolChoice:  "auto",
 		}

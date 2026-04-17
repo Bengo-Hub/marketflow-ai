@@ -88,7 +88,7 @@ type AIConfig struct {
 	// Agentic RAG (platform-level, not per-tenant).
 	AgentEnabled   bool   `env:"AGENT_ENABLED" envDefault:"true"`
 	AgentMaxIters  int    `env:"AGENT_MAX_ITERS" envDefault:"5"`
-	AgentTokenCap  int    `env:"AGENT_TOKEN_CAP" envDefault:"6000"`
+	AgentTokenCap  int    `env:"AGENT_TOKEN_CAP" envDefault:"16000"`
 	TavilyAPIKey   string `env:"TAVILY_API_KEY"`
 	TavilyBaseURL  string `env:"TAVILY_URL" envDefault:"https://api.tavily.com"`
 	TavilyDailyCap int    `env:"TAVILY_DAILY_CAP" envDefault:"20"`
