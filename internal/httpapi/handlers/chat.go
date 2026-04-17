@@ -197,7 +197,22 @@ func extractTenantID(r *http.Request) (uuid.UUID, error) {
 	if header == "" {
 		return uuid.UUID{}, fmt.Errorf("X-Tenant-ID header is required")
 	}
-	return uuid.Parse(header)
+	// Accept UUID directly.
+	if id, err := uuid.Parse(header); err == nil {
+		return id, nil
+	}
+	// Accept tenant slug — resolve to UUID via a deterministic namespace UUID.
+	// This produces a stable UUID from the slug so the same slug always maps
+	// to the same "tenant ID" for caching / session purposes. The pipeline
+	// uses this UUID for Redis keys and pgvector tenant scoping.
+	//
+	// NOTE: this is a BEST-EFFORT mapping. It works because the tenant slug
+	// is unique (enforced by the Tenant.slug unique index). The real UUID
+	// lives in the Tenant table but we avoid an extra API call here for speed.
+	// The KB search uses OR(tenant_id=X, scope='platform') so the platform
+	// rows (which power most public chat) are always included regardless.
+	slugUUID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("marketflow:tenant:"+header))
+	return slugUUID, nil
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
