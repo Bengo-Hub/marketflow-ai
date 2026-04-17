@@ -97,10 +97,11 @@ func NewPipeline(cfg Config) *Pipeline {
 
 // ChatInput represents a user chat message.
 type ChatInput struct {
-	TenantID  uuid.UUID
-	SessionID uuid.UUID
-	Question  string
-	History   []ai.Message // previous messages in this session
+	TenantID     uuid.UUID
+	SessionID    uuid.UUID
+	Question     string
+	History      []ai.Message // previous messages in this session
+	BusinessType string       // "flp" or "generic" — drives compliance filter routing
 }
 
 // ChatResult contains the AI response and metadata.
@@ -345,7 +346,7 @@ func (p *Pipeline) cachedKBSearch(ctx context.Context, tenantID uuid.UUID, emb [
 
 // filterAndCache applies the compliance filter, writes L1 + L2 caches.
 func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
-	filtered, blocked, reason := p.filter.Check(raw)
+	filtered, blocked, reason := p.filter.CheckForTenant(raw, input.BusinessType)
 	if blocked {
 		p.logger.Warn("response blocked by compliance filter",
 			zap.String("reason", reason), zap.String("question", input.Question))

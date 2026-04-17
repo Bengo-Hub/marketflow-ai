@@ -39,7 +39,8 @@ func NewFilter() *Filter {
 }
 
 // Check validates an AI response and returns the filtered response with disclaimers.
-// Returns (filteredResponse, blocked, reason).
+// Returns (filteredResponse, blocked, reason). Applies FLP compliance rules.
+// For non-FLP tenants (business_type='generic'), use CheckGeneric instead.
 func (f *Filter) Check(response string) (string, bool, string) {
 	lower := strings.ToLower(response)
 
@@ -73,6 +74,31 @@ func (f *Filter) Check(response string) (string, bool, string) {
 	}
 
 	return response, false, ""
+}
+
+// CheckGeneric validates an AI response for generic (non-FLP) tenants.
+// Applies minimal safety rules (no medical claims, no guaranteed income) but
+// skips FLP-specific disclaimers and product-name substitutions.
+func (f *Filter) CheckGeneric(response string) (string, bool, string) {
+	lower := strings.ToLower(response)
+	hardBlocks := []string{
+		"cures", "miracle", "magic", "wonder drug",
+		"guaranteed income", "get rich", "easy money", "make money fast",
+	}
+	for _, phrase := range hardBlocks {
+		if strings.Contains(lower, phrase) {
+			return "", true, "blocked phrase: " + phrase
+		}
+	}
+	return response, false, ""
+}
+
+// CheckForTenant routes to the appropriate filter based on business_type.
+func (f *Filter) CheckForTenant(response, businessType string) (string, bool, string) {
+	if businessType == "generic" || businessType == "" {
+		return f.CheckGeneric(response)
+	}
+	return f.Check(response)
 }
 
 // substituteLanguage replaces prohibited medical claims with approved language.
