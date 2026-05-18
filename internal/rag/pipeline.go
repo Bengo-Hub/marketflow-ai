@@ -177,19 +177,35 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	// ── Template intents (0ms, no LLM) ───────────────────────────────────
+	isFLP := input.BusinessType == "flp"
 	switch intent {
 	case ai.IntentOffTopic:
-		return &ChatResult{Response: "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?",
-			Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		var offTopicMsg string
+		if isFLP {
+			offTopicMsg = "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
+		} else {
+			offTopicMsg = "I'm Vera, the Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+		}
+		return &ChatResult{Response: offTopicMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentEscalate:
-		return &ChatResult{Response: "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting.",
-			Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		var escalateMsg string
+		if isFLP {
+			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
+		} else {
+			escalateMsg = "I'd be happy to connect you with the Codevertex team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, 2nd Floor, Oginga Street, Kisumu."
+		}
+		return &ChatResult{Response: escalateMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentSimpleFAQ:
 		// Greetings and very simple FAQs get a warm template without burning
 		// an LLM call + embedding. The agent is overkill for "hi".
 		q := strings.ToLower(strings.TrimSpace(input.Question))
 		if isGreeting(q) {
-			resp := "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
+			var resp string
+			if isFLP {
+				resp = "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
+			} else {
+				resp = "Hello! I'm Vera, your Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+			}
 			return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 		}
 	case ai.IntentTaskExecute:
@@ -292,7 +308,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	if useAgent {
-		sys := p.buildAgentSystemPrompt(intent)
+		sys := p.buildAgentSystemPrompt(input.BusinessType, intent)
 		agentInput := agent.Input{
 			TenantID: input.TenantID, SystemPrompt: sys,
 			History: input.History, Question: input.Question,
@@ -320,7 +336,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	// ── Single-shot LLM with KB context ─────────────────────────────────
-	systemPrompt := p.buildSystemPrompt(intent, contextChunks)
+	systemPrompt := p.buildSystemPrompt(input.BusinessType, intent, contextChunks)
 	messages := make([]ai.Message, 0, len(input.History)+2)
 	messages = append(messages, ai.Message{Role: "system", Content: systemPrompt})
 	historyStart := 0
@@ -393,7 +409,11 @@ func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw stri
 	if blocked {
 		p.logger.Warn("response blocked by compliance filter",
 			zap.String("reason", reason), zap.String("question", input.Question))
-		filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
+		if input.BusinessType == "flp" {
+			filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
+		} else {
+			filtered = "I appreciate your question! For the most accurate information about Codevertex services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+		}
 	}
 	p.cache.setExact(ctx, input.TenantID, input.Question, filtered)
 	p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, filtered)
@@ -425,7 +445,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		}
 	}
 
-	systemPrompt := p.buildSystemPrompt(intent, contextChunks)
+	systemPrompt := p.buildSystemPrompt(input.BusinessType, intent, contextChunks)
 	messages := make([]ai.Message, 0, len(input.History)+2)
 	messages = append(messages, ai.Message{Role: "system", Content: systemPrompt})
 	historyStart := 0
@@ -493,8 +513,14 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 	return results, rows.Err()
 }
 
-// buildSystemPrompt constructs the system prompt with RAG context and FLP compliance rules.
-func (p *Pipeline) buildSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
+// buildSystemPrompt constructs the system prompt with RAG context.
+// For FLP tenants (businessType="flp") it includes FLP compliance rules.
+// For all other tenants it uses the Codevertex/generic Vera persona.
+func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chunks []SearchResult) string {
+	if businessType != "flp" {
+		return p.buildGenericSystemPrompt(intent, chunks)
+	}
+
 	var b strings.Builder
 
 	b.WriteString(`You are a helpful AI assistant for Forever Living Products (FLP). You help customers learn about aloe vera products and the FBO business opportunity.
@@ -540,9 +566,88 @@ Focus on product information. When recommending products:
 	return b.String()
 }
 
+// buildGenericSystemPrompt returns the Codevertex/Vera system prompt for non-FLP tenants.
+func (p *Pipeline) buildGenericSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
+	var b strings.Builder
+
+	b.WriteString(`You are Vera, the AI support assistant for Codevertex IT Solutions — a premier technology firm headquartered in Kisumu, Kenya, established in 2020.
+
+COMPANY:
+- Full name: Codevertex IT Solutions
+- HQ: Pioneer House, 2nd Floor, Oginga Street, Kisumu, Kenya
+- Phone: +254 743 793 901 | +254 792 548 766
+- Email: info@codevertexitsolutions.com
+- Website: https://codevertexitsolutions.com
+- Client Portal (SSO): https://accounts.codevertexitsolutions.com
+
+SERVICES:
+1. Enterprise Software — full-stack platforms, mobile apps, ERP, CRM, workflow automation
+2. AI & Analytics — predictive modelling, NLP chatbots, BI dashboards (Apache Superset)
+3. Cloud Infrastructure — managed cloud, AES-256 encryption, domain management
+4. Network & Hardware — TruLoad (IoT axle-load compliance), ISP billing, network automation
+5. Digitika Academy — ICDL, CCNA v7, AI/ML courses, Software Engineering, Data Analytics
+
+POWER SUITE PRODUCTS:
+- ERP: https://erp.codevertexitsolutions.com
+- POS: https://pos.codevertexitsolutions.com
+- Books (Treasury): https://books.codevertexitsolutions.com
+- Analytics: https://superset.codevertexitsolutions.com
+- MarketFlow CRM: https://marketflow.codevertexitsolutions.com
+- ISP Billing: https://ispbilling.codevertexitsolutions.com
+- TruLoad: https://truload.codevertexitsolutions.com
+- Notifications: https://notifications.codevertexitsolutions.com
+- Ordering: https://ordersapp.codevertexitsolutions.com
+- Logistics: https://logistics.codevertexitsolutions.com
+
+DIGITIKA COURSES (KES):
+Code-Starter Bootcamp: 30,000 (10 weeks, hybrid Kisumu + Zoom)
+Full-Stack Web Dev: 45,000 | Mobile Dev: 38,000 | DevOps & Cloud: 42,000 | Cybersecurity: 28,000
+ICDL Core: 12,000 | Advanced: 18,000 | Professional: 24,000 | Digital Citizen: 6,500
+CCNA v7 Part 1–3: 22,000 each | Exam Prep: 15,000
+AI Fundamentals: 14,000 | ML with Python: 32,000 | GenAI/LLM: 38,000 | AI for Business: 9,000
+Data Python: 28,000 | Power BI: 16,000 | SQL: 12,000 | Advanced Analytics: 22,000
+
+PAYMENTS: M-Pesa and card via Treasury Gateway at https://books.codevertexitsolutions.com
+PRICING PLANS (KES/month): Starter 4,999 | Growth 14,999 | Enterprise: Custom
+
+PERSONA RULES:
+- Warm and professional, like a knowledgeable Kenyan tech consultant
+- Keep responses concise (2–4 sentences unless listing items)
+- Always end with a helpful next step or a call to action
+- Never make up information; offer to connect with the team if unsure
+`)
+
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString(`
+When answering about products or services, mention the specific platform URL, pricing, and how to get started. If the user asks about a course, include the KES price and Digitika Academy contact.
+`)
+	case ai.IntentBusinessOpp, ai.IntentRecruitment:
+		b.WriteString(`
+Focus on Codevertex service capabilities, integration options, and how the Power Suite can solve the user's business problem. Mention relevant case studies or the Digitika Academy if training is relevant.
+`)
+	}
+
+	if len(chunks) > 0 {
+		b.WriteString("\n--- KNOWLEDGE BASE CONTEXT ---\n")
+		for _, c := range chunks {
+			b.WriteString(fmt.Sprintf("[%s] %s: %s\n\n", c.Category, c.Title, c.ChunkText))
+		}
+		b.WriteString("--- END CONTEXT ---\n")
+		b.WriteString("Use the above context to answer. If the context doesn't cover the question, say so honestly.\n")
+	}
+
+	return b.String()
+}
+
 // buildAgentSystemPrompt returns the system prompt used by the agent loop.
 // Tells the model which tools exist and when to use each.
-func (p *Pipeline) buildAgentSystemPrompt(intent ai.Intent) string {
+// For non-FLP tenants (businessType != "flp") it uses the Codevertex/Vera persona.
+func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent) string {
+	if businessType != "flp" {
+		return p.buildGenericAgentSystemPrompt(intent)
+	}
+
 	var b strings.Builder
 	b.WriteString(`You are an agentic marketing assistant for a business owner on the MarketFlow platform. You help with Forever Living Products (FLP) and any other business use case on the platform.
 
@@ -603,6 +708,55 @@ When the user asks to create an ad, campaign, or marketing content, follow this 
 If an ad platform is not connected, guide the user to /settings/integrations to connect it before proceeding.
 If wallet balance is insufficient, guide the user to /settings/billing to top up their wallet.
 Do NOT skip straight to text generation — always gather context and verify integrations first.
+`)
+	}
+	return b.String()
+}
+
+// buildGenericAgentSystemPrompt returns the agent system prompt for non-FLP (Codevertex/generic) tenants.
+func (p *Pipeline) buildGenericAgentSystemPrompt(intent ai.Intent) string {
+	var b strings.Builder
+	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex IT Solutions. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
+
+TOOLS AVAILABLE:
+Knowledge & Search:
+- kb_search: semantic search over the Codevertex knowledge base (services, courses, products, FAQ). ALWAYS try this first.
+- web_search: live web search. Use only when KB doesn't cover the topic.
+- query_service_data: fetch live data from Codevertex microservices (enrollments, courses, invoices, orders). Use when user asks about specific records.
+
+Profile & Links:
+- get_fbo_profile: fetch the tenant profile (company name, contact, links). Use to personalise responses.
+- generate_links: create deep links to Power Suite products, Digitika enrollment pages, or support resources.
+
+Marketing Workflows:
+- check_integrations: verify which ad platforms and scheduling tools the tenant has connected.
+- book_meeting: schedule a meeting on the tenant's Google Calendar.
+- create_campaign: create a lead-generation campaign on marketflow-api.
+- create_funnel: create a landing page funnel for service enquiries or course signups.
+- calculate_ad_cost: compute ad budget + service fee before the client commits.
+
+RULES:
+- Call tools iteratively; reason step by step.
+- Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
+- When recommending a Digitika course, always mention the KES price and payment method (M-Pesa / card via books.codevertexitsolutions.com).
+- When discussing Power Suite products, include the relevant URL (e.g. pos.codevertexitsolutions.com).
+- For technical or custom project enquiries, suggest contacting info@codevertexitsolutions.com or +254 743 793 901.
+- Format responses with markdown: **bold** for key terms, bullet points for lists.
+- Keep responses comprehensive but concise — aim for 150–300 words.
+`)
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString("\nFocus on the specific Codevertex product or service. Include URL, pricing, and a clear next step.\n")
+	case ai.IntentBusinessOpp, ai.IntentRecruitment:
+		b.WriteString("\nFocus on Codevertex service capabilities and how the Power Suite or Digitika Academy can solve the prospect's business problem.\n")
+	case ai.IntentTaskExecute:
+		b.WriteString(`
+TOOL CHAINING FOR CAMPAIGN/CONTENT CREATION:
+1. FIRST call check_integrations to verify which ad platforms are connected.
+2. Call kb_search to get relevant service or course details.
+3. Call calculate_ad_cost to show the budget breakdown.
+4. Present the campaign plan and cost to the user; confirm before proceeding.
+5. create_funnel (if needed) → create_campaign.
 `)
 	}
 	return b.String()
