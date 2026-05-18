@@ -15,18 +15,20 @@ import (
 )
 
 // serviceRegistry maps service names to their internal k8s base URLs.
-// These match the values configured in devops-k8s values.yaml.
+// URLs are derived from devops-k8s/apps/*/values.yaml (nameOverride + service.port).
+// Namespaces match the Helm release namespace (app folder name pattern).
 var serviceRegistry = map[string]string{
-	"ordering":      "http://ordering-api.ordering.svc.cluster.local:4000",
+	"ordering":      "http://ordering-backend.ordering.svc.cluster.local:4000",
 	"inventory":     "http://inventory-api.inventory.svc.cluster.local:4000",
-	"finance":       "http://finance-api.finance.svc.cluster.local:4000",
-	"treasury":      "http://finance-api.finance.svc.cluster.local:4000",
+	"finance":       "http://treasury-api.treasury.svc.cluster.local:4000",
+	"treasury":      "http://treasury-api.treasury.svc.cluster.local:4000",
 	"subscriptions": "http://subscription-api.subscriptions.svc.cluster.local:4000",
 	"pos":           "http://pos-api.pos.svc.cluster.local:4000",
 	"logistics":     "http://logistics-api.logistics.svc.cluster.local:4000",
 	"notifications": "http://notifications-api.notifications.svc.cluster.local:4000",
 	"marketflow":    "http://marketflow-api.marketflow.svc.cluster.local:4000",
-	"codevertex":    "http://codevertex-website.codevertex.svc.cluster.local:3000",
+	// codevertex-website ClusterIP port is 80 (targetPort 3000 is the container port).
+	"codevertex":    "http://codevertex-website.codevertex.svc.cluster.local:80",
 }
 
 // resourcePaths maps (service, resource) pairs to the specific internal API paths.
