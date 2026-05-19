@@ -38,9 +38,10 @@ func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, usage UsageR
 }
 
 type chatRequest struct {
-	Question  string `json:"question"`
-	SessionID string `json:"session_id"`
-	Stream    bool   `json:"stream"`
+	Question     string `json:"question"`
+	SessionID    string `json:"session_id"`
+	Stream       bool   `json:"stream"`
+	BusinessType string `json:"business_type"` // "flp" | "generic" | "" (pipeline auto-detects)
 }
 
 // Chat handles POST /api/v1/chat
@@ -83,12 +84,13 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	isPublic := strings.Contains(r.URL.Path, "/public/")
 
 	input := rag.ChatInput{
-		TenantID:   tenantID,
-		TenantSlug: r.Header.Get("X-Tenant-ID"), // original slug for tool lookups
-		SessionID:  sessionID,
-		Question:   req.Question,
-		History:    history,
-		PublicMode: isPublic,
+		TenantID:     tenantID,
+		TenantSlug:   r.Header.Get("X-Tenant-ID"), // original slug for tool lookups
+		SessionID:    sessionID,
+		Question:     req.Question,
+		History:      history,
+		BusinessType: req.BusinessType,
+		PublicMode:   isPublic,
 	}
 
 	if req.Stream {

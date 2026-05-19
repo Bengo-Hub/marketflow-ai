@@ -169,6 +169,15 @@ func (p *Pipeline) resolveClient(ctx context.Context) (*ai.Client, string) {
 func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, error) {
 	started := time.Now()
 
+	// ── Niche auto-detection ──────────────────────────────────────────────
+	// If the client did not send business_type (public widget on old pages,
+	// direct API calls, or the codevertex-website ChatBot), detect it from
+	// the question keywords so FLP queries are never routed to the Codevertex
+	// persona and vice versa.
+	if input.BusinessType == "" {
+		input.BusinessType = detectNiche(input.Question)
+	}
+
 	// ── L1: exact cache ──────────────────────────────────────────────────
 	if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
 		p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
@@ -202,22 +211,27 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	// ── Template intents (0ms, no LLM) ───────────────────────────────────
-	isFLP := input.BusinessType == "flp"
 	switch intent {
 	case ai.IntentOffTopic:
 		var offTopicMsg string
-		if isFLP {
+		switch input.BusinessType {
+		case "flp":
 			offTopicMsg = "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
-		} else {
+		case "codevertex":
 			offTopicMsg = "I'm Vera, the Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+		default:
+			offTopicMsg = "I'm Vera, your AI assistant. I can help with products, services, and business questions. What would you like to know?"
 		}
 		return &ChatResult{Response: offTopicMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentEscalate:
 		var escalateMsg string
-		if isFLP {
+		switch input.BusinessType {
+		case "flp":
 			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
-		} else {
+		case "codevertex":
 			escalateMsg = "I'd be happy to connect you with the Codevertex team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, 2nd Floor, Oginga Street, Kisumu."
+		default:
+			escalateMsg = "I'd be happy to connect you with the team. Please use the contact options below or send them a message directly."
 		}
 		return &ChatResult{Response: escalateMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentSimpleFAQ:
@@ -226,10 +240,13 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		q := strings.ToLower(strings.TrimSpace(input.Question))
 		if isGreeting(q) {
 			var resp string
-			if isFLP {
+			switch input.BusinessType {
+			case "flp":
 				resp = "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
-			} else {
+			case "codevertex":
 				resp = "Hello! I'm Vera, your Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+			default:
+				resp = "Hello! I'm Vera, your AI assistant. Feel free to ask me about products, services, or anything else I can help with."
 			}
 			return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 		}
@@ -502,10 +519,13 @@ func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw stri
 	if blocked {
 		p.logger.Warn("response blocked by compliance filter",
 			zap.String("reason", reason), zap.String("question", input.Question))
-		if input.BusinessType == "flp" {
+		switch input.BusinessType {
+		case "flp":
 			filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
-		} else {
+		case "codevertex":
 			filtered = "I appreciate your question! For the most accurate information about Codevertex services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+		default:
+			filtered = "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
 		}
 	}
 	p.cache.setExact(ctx, input.TenantID, input.Question, filtered)
@@ -607,11 +627,18 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 }
 
 // buildSystemPrompt constructs the system prompt with RAG context.
-// For FLP tenants (businessType="flp") it includes FLP compliance rules.
-// For all other tenants it uses the Codevertex/generic Vera persona.
+//
+// businessType routing:
+//   "flp"        → Forever Living Products persona (compliance rules, FBO focus)
+//   "codevertex" → Codevertex IT Solutions persona (Power Suite, Digitika, services)
+//   "generic"    → Neutral marketing assistant persona (any business)
+//   ""           → Codevertex (legacy default; auto-detect should have set a value)
 func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chunks []SearchResult) string {
+	if businessType == "generic" {
+		return p.buildGenericMarketingPrompt(intent, chunks)
+	}
 	if businessType != "flp" {
-		return p.buildGenericSystemPrompt(intent, chunks)
+		return p.buildCodevertexSystemPrompt(intent, chunks)
 	}
 
 	var b strings.Builder
@@ -659,8 +686,8 @@ Focus on product information. When recommending products:
 	return b.String()
 }
 
-// buildGenericSystemPrompt returns the Codevertex/Vera system prompt for non-FLP tenants.
-func (p *Pipeline) buildGenericSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
+// buildCodevertexSystemPrompt returns the Codevertex/Vera system prompt for Codevertex tenants.
+func (p *Pipeline) buildCodevertexSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
 
 	b.WriteString(`You are Vera, the AI support assistant for Codevertex IT Solutions — a premier technology firm headquartered in Kisumu, Kenya, established in 2020.
@@ -733,12 +760,54 @@ Focus on Codevertex service capabilities, integration options, and how the Power
 	return b.String()
 }
 
+// buildGenericMarketingPrompt returns a neutral Vera persona for generic (non-FLP, non-Codevertex) tenants.
+// Used when businessType == "generic" — for any SME, retailer, or service business using MarketFlow.
+func (p *Pipeline) buildGenericMarketingPrompt(intent ai.Intent, chunks []SearchResult) string {
+	var b strings.Builder
+	b.WriteString(`You are Vera, a friendly and professional AI marketing assistant. You help business owners and their customers with product enquiries, service information, and business opportunities.
+
+PERSONA RULES:
+- Warm, helpful, and to the point — answer what was asked, then offer a clear next step
+- Keep responses concise (2–4 sentences for simple questions, structured lists for complex ones)
+- Never invent product details, prices, or contact information — draw only from the knowledge base context provided
+- If you don't know something, say so and suggest the user contact the business directly
+- Format responses with markdown: **bold** for key terms, bullet points for lists
+`)
+
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString("\nWhen answering about products or services, include any relevant pricing, availability, and how to purchase or enquire.\n")
+	case ai.IntentBusinessOpp, ai.IntentRecruitment:
+		b.WriteString("\nFocus on the business opportunity: how to get involved, what the earning structure looks like, and the next step to join or learn more.\n")
+	case ai.IntentEscalate:
+		b.WriteString("\nThe user wants to speak to a human. Offer the available contact channels (WhatsApp, phone, email, or booking link).\n")
+	}
+
+	if len(chunks) > 0 {
+		b.WriteString("\n--- KNOWLEDGE BASE CONTEXT ---\n")
+		for _, c := range chunks {
+			b.WriteString(fmt.Sprintf("[%s] %s: %s\n\n", c.Category, c.Title, c.ChunkText))
+		}
+		b.WriteString("--- END CONTEXT ---\n")
+		b.WriteString("Use the above context to answer. If the context doesn't cover the question, say so honestly.\n")
+	}
+
+	return b.String()
+}
+
 // buildAgentSystemPrompt returns the system prompt used by the agent loop.
-// Tells the model which tools exist and when to use each.
-// For non-FLP tenants (businessType != "flp") it uses the Codevertex/Vera persona.
+//
+// businessType routing:
+//   "flp"        → FLP marketing agent (product links, compliance, FBO tools)
+//   "codevertex" → Codevertex agent (Power Suite, Digitika, S2S data tools)
+//   "generic"    → Generic marketing agent (any business, neutral persona)
+//   ""           → Codevertex (legacy default)
 func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent) string {
+	if businessType == "generic" {
+		return p.buildGenericMarketingAgentPrompt(intent)
+	}
 	if businessType != "flp" {
-		return p.buildGenericAgentSystemPrompt(intent)
+		return p.buildCodevertexAgentSystemPrompt(intent)
 	}
 
 	var b strings.Builder
@@ -806,8 +875,8 @@ Do NOT skip straight to text generation — always gather context and verify int
 	return b.String()
 }
 
-// buildGenericAgentSystemPrompt returns the agent system prompt for non-FLP (Codevertex/generic) tenants.
-func (p *Pipeline) buildGenericAgentSystemPrompt(intent ai.Intent) string {
+// buildCodevertexAgentSystemPrompt returns the agent system prompt for Codevertex tenants.
+func (p *Pipeline) buildCodevertexAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
 	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex IT Solutions. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
 
@@ -881,6 +950,102 @@ If the ad platform is not connected or returns an account-level error (e.g. mana
 `)
 	}
 	return b.String()
+}
+
+// buildGenericMarketingAgentPrompt returns the agent system prompt for generic (non-FLP, non-Codevertex) tenants.
+func (p *Pipeline) buildGenericMarketingAgentPrompt(intent ai.Intent) string {
+	var b strings.Builder
+	b.WriteString(`You are Vera, an agentic AI marketing assistant for a business on the MarketFlow platform. You help business owners and their customers with product enquiries, service information, marketing campaigns, and general business questions.
+
+TOOLS AVAILABLE:
+Knowledge & Search:
+- kb_search: semantic search over the business's knowledge base (products, services, FAQ). ALWAYS try this first.
+- get_faq: fetch FAQ entries by keyword.
+- web_search: live web search. Use only when KB doesn't cover the topic.
+
+Profile & Links:
+- get_fbo_profile: fetch the business owner's profile (name, contact, links). Use to personalise responses.
+- generate_links: create links to products, services, booking pages, or WhatsApp contact.
+
+Marketing Workflows:
+- check_integrations: verify which ad platforms (Meta, Google Ads, TikTok, LinkedIn) the business has connected.
+- book_meeting: schedule a meeting on the business owner's calendar.
+- create_campaign: create a marketing campaign (platform, budget, audience, duration).
+- create_funnel: create a landing page funnel for lead generation.
+- calculate_ad_cost: compute total campaign cost (ad spend + service fee) before the business owner commits.
+
+RULES:
+- Call tools iteratively; reason step by step.
+- Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
+- Keep responses concise — 150–300 words with relevant links or action items.
+- Never make up product details, prices, or contact information — cite only what tools or the KB return.
+- Format responses with markdown: **bold** for key terms, bullet points for lists.
+`)
+
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString("\nFocus on the specific product or service: name, benefits, price (if known), and how to purchase or enquire.\n")
+	case ai.IntentBusinessOpp, ai.IntentRecruitment:
+		b.WriteString("\nFocus on the business opportunity: income model, how to get involved, and the next step to join or learn more.\n")
+	case ai.IntentTaskExecute:
+		b.WriteString(`
+TOOL CHAINING FOR CAMPAIGN/CONTENT CREATION:
+1. FIRST call check_integrations to verify which ad platforms are connected.
+2. Call kb_search to get product or service details for the campaign.
+3. Call calculate_ad_cost to show the budget breakdown (ad spend + service fee = single wallet payment).
+4. Present the campaign plan and cost; confirm with the business owner before proceeding.
+5. create_funnel (if needed) → create_campaign.
+If an ad platform is not connected, guide the user to /settings/integrations.
+If wallet balance is insufficient, guide to /settings/billing.
+`)
+	}
+	return b.String()
+}
+
+// detectNiche infers businessType from question keywords when the client does not
+// send an explicit business_type. Returns "flp", "codevertex", or "generic".
+// This is a fast heuristic — no LLM call, runs in microseconds.
+func detectNiche(question string) string {
+	q := strings.ToLower(question)
+
+	// FLP / Forever Living keywords
+	flpKW := []string{
+		"forever living", "forever aloe", "aloe vera gel", "flp", "fbo",
+		"forever business", "foreverliving", "forever2drive", "clean 9", "c9 challenge",
+		"forever lite", "forever kids", "supergreens", "bee pollen", "royal jelly",
+		"aloe lips", "tooth gel", "toothgel", "aloe vera juice", "forever therm",
+		"arctic sea", "omega-3", "gelly", "propolis", "aloe activator",
+		"sonya", "avocado soap", "aloe body lotion", "deodorant stick",
+		"distributor id", "distrib id", "flp store", "flp shop",
+		"join forever", "flp business", "mlm aloe", "network marketing aloe",
+		"forever rank", "supervisor", "assistant manager", "senior manager",
+		"sapphire manager", "diamond manager", "eagle manager",
+	}
+	for _, kw := range flpKW {
+		if strings.Contains(q, kw) {
+			return "flp"
+		}
+	}
+
+	// Codevertex / platform keywords
+	cvKW := []string{
+		"codevertex", "digitika", "power suite", "marketflow", "marktflow",
+		"erp", "pos system", "isp billing", "truload", "logistics app",
+		"ordering app", "superset analytics", "books treasury",
+		"ccna", "icdl", "software engineering course", "web dev course",
+		"mobile dev course", "devops course", "cybersecurity course",
+		"ai fundamentals", "ml with python", "full-stack",
+		"pioneer house", "oginga street", "kisumu", "codevertexitsolutions",
+		"accounts.codevertex", "erp.codevertex", "pos.codevertex",
+	}
+	for _, kw := range cvKW {
+		if strings.Contains(q, kw) {
+			return "codevertex"
+		}
+	}
+
+	// Default: generic — neutral marketing assistant for any other business
+	return "generic"
 }
 
 // cacheKey kept for back-compat with ChatStream; delegates to cache layer.
