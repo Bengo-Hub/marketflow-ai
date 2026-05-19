@@ -184,11 +184,22 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		logger.Info("agentic RAG enabled", zap.Int("tools", len(tools)))
 	}
 
+	// ── Anthropic Claude (third-tier fallback when all Groq models fail) ──
+	var claudeClient *ai.AnthropicClient
+	if cfg.AI.ClaudeAPIKey != "" {
+		claudeClient = ai.NewAnthropicClient(cfg.AI.ClaudeBaseURL, cfg.AI.ClaudeAPIKey, cfg.AI.ClaudeVersion, logger)
+		logger.Info("Anthropic Claude fallback enabled", zap.String("model", cfg.AI.ClaudeModel))
+	} else {
+		logger.Warn("MF_AI_CLAUDE_API_KEY not set — Claude fallback disabled; set it for resilience when Groq is down")
+	}
+
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
 	pipeline := rag.NewPipeline(rag.Config{
 		DB:             db,
 		Redis:          redisClient,
 		GroqClient:     groqClient,
+		ClaudeClient:   claudeClient,
+		ClaudeModel:    cfg.AI.ClaudeModel,
 		OllamaClient:   ollamaClient,
 		Router:         router,
 		Resolver:       resolver,
@@ -245,7 +256,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: func(r *http.Request, origin string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Tenant-ID", "X-API-Key"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Tenant-ID", "X-API-Key", "X-Widget-Mode"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))

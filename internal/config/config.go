@@ -81,9 +81,12 @@ type AIConfig struct {
 	EmbeddingDim   int    `env:"EMBEDDING_DIM" envDefault:"768"`
 	OllamaFallbackModel string `env:"OLLAMA_FALLBACK_MODEL" envDefault:"llama3.1:8b"`
 
-	// Anthropic (premium fallback)
-	ClaudeAPIKey string `env:"CLAUDE_API_KEY"`
-	ClaudeModel  string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-4-5-20251001"`
+	// Anthropic (configurable primary or fallback)
+	ClaudeAPIKey   string `env:"CLAUDE_API_KEY"`
+	ClaudeModel    string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-4-5-20251001"`
+	ClaudeBaseURL  string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
+	ClaudeVersion  string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
+	PrimaryProvider string `env:"PRIMARY_PROVIDER" envDefault:"groq"` // groq | anthropic | ollama
 
 	// MarketFlow API for KB/provider config
 	MarketFlowAPIURL string `env:"MARKETFLOW_API_URL" envDefault:"http://marketflow-api.marketflow.svc.cluster.local:4000"`
@@ -106,6 +109,12 @@ type AIConfig struct {
 	// Platform API key for service-to-service calls back to marketflow-api
 	// (used by the book_meeting agent tool).
 	MarketFlowAPIKey string `env:"MARKETFLOW_API_KEY"`
+
+	// Ticketing service for create_ticket agent tool
+	TicketingURL string `env:"TICKETING_URL" envDefault:"http://ticketing-api.ticketing.svc.cluster.local:4000"`
+
+	// Internal S2S key for querying other Codevertex services
+	InternalServiceKey string `env:"INTERNAL_SERVICE_KEY"`
 }
 
 func Load() (*Config, error) {

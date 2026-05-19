@@ -13,13 +13,17 @@ import (
 type Intent string
 
 const (
-	IntentSimpleFAQ    Intent = "simple_faq"
-	IntentProductQA    Intent = "product_qa"
-	IntentBusinessOpp  Intent = "business_opportunity"
-	IntentRecruitment  Intent = "recruitment"
-	IntentTaskExecute  Intent = "task_execute"
-	IntentOffTopic     Intent = "off_topic"
-	IntentEscalate     Intent = "escalate"
+	IntentSimpleFAQ      Intent = "simple_faq"
+	IntentProductQA      Intent = "product_qa"
+	IntentBusinessOpp    Intent = "business_opportunity"
+	IntentRecruitment    Intent = "recruitment"
+	IntentTaskExecute    Intent = "task_execute"
+	IntentOffTopic       Intent = "off_topic"
+	IntentEscalate       Intent = "escalate"
+	IntentServiceInquiry Intent = "service_inquiry"  // questions about Codevertex platform services
+	IntentCourseInquiry  Intent = "course_inquiry"   // questions about Digitika courses
+	IntentSupportRequest Intent = "support_request"  // explicit support/help ticket request
+	IntentDataQuery      Intent = "data_query"       // query live service data
 )
 
 // Router classifies user questions and routes them to the appropriate model.
@@ -39,7 +43,7 @@ func NewRouter(routerClient *Client, routerModel string, logger *zap.Logger) *Ro
 	}
 }
 
-const classifierSystemPrompt = `You are an intent classifier for a Forever Living Products marketing chatbot. Classify the user's question.
+const classifierSystemPrompt = `You are an intent classifier for Vera, the Codevertex AI assistant. Codevertex provides enterprise software, AI tools, and tech education (Digitika). Classify the user's question.
 
 Respond with ONLY a JSON object, nothing else:
 {"intent": "<category>", "confidence": <0.0-1.0>, "needs_live_info": <true|false>}
@@ -47,13 +51,17 @@ Respond with ONLY a JSON object, nothing else:
 "needs_live_info" is true when answering correctly requires fresh/real-world data (news, availability, current pricing, recent events, competitor facts, location-specific info); false when a general or internal-KB answer suffices.
 
 Categories:
-- "simple_faq": Simple factual questions about the company (what is FLP, how old, etc.)
-- "product_qa": Questions about specific products, ingredients, benefits, prices, or product recommendations
-- "business_opportunity": Questions about the FBO business model, compensation plan, income, ranks, or how to earn
-- "recruitment": Interest in joining, signing up, becoming an FBO, getting started, or questions about startup costs
-- "task_execute": User wants to CREATE something: write ad copy, generate social media post, draft email campaign, create funnel content, generate product description
-- "off_topic": Questions unrelated to FLP products or business (weather, sports, politics, etc.)
-- "escalate": User explicitly asks to speak to a human, requests a call, or expresses frustration`
+- "simple_faq": Simple factual questions about the company, hours, location, contact info
+- "product_qa": Questions about specific products, features, pricing, or recommendations (FLP or other tenant products)
+- "business_opportunity": Questions about the FBO business model, compensation plan, income, ranks, or how to earn (FLP context)
+- "recruitment": Interest in joining, signing up, getting started, startup costs (FLP context)
+- "task_execute": User wants to CREATE something: write ad copy, social media post, email campaign, funnel content, product description
+- "service_inquiry": Questions about Codevertex platform services (MarketFlow, ordering, POS, logistics, ISP billing, ERP, auth, subscriptions)
+- "course_inquiry": Questions about Digitika courses, Code-Starter bootcamp, enrollment, pricing, curriculum, schedule, certificates
+- "support_request": User needs technical help, reports a bug, asks for support, wants to open a ticket
+- "data_query": User asks for live data: "what are my orders", "show my invoices", "check inventory", "what is my subscription status"
+- "off_topic": Questions completely unrelated to business, products, services, or education (weather, sports, politics, etc.)
+- "escalate": User explicitly asks to speak to a human, requests a call, or expresses serious frustration`
 
 // Classification is the full router output.
 type Classification struct {
@@ -111,6 +119,41 @@ func HeuristicClassify(question string) (Classification, bool) {
 		}
 	}
 
+	// Support request signals.
+	supportPatterns := []string{
+		"help me with", "not working", "broken", "bug", "issue with",
+		"open a ticket", "report a problem", "something is wrong",
+		"create a ticket", "raise a ticket", "submit a ticket",
+	}
+	for _, p := range supportPatterns {
+		if strings.Contains(q, p) {
+			return Classification{Intent: IntentSupportRequest, Confidence: 0.9}, true
+		}
+	}
+
+	// Course inquiry signals.
+	coursePatterns := []string{
+		"digitika", "code starter", "bootcamp", "course", "enroll",
+		"curriculum", "certificate", "training", "class", "learn to code",
+	}
+	for _, p := range coursePatterns {
+		if strings.Contains(q, p) {
+			return Classification{Intent: IntentCourseInquiry, Confidence: 0.9}, true
+		}
+	}
+
+	// Service inquiry signals.
+	servicePatterns := []string{
+		"marketflow", "ordering", "pos ", "point of sale", "logistics",
+		"isp billing", "erp", "inventory", "subscriptions", "notifications",
+		"auth", "sso", "truload", "finance service", "treasury",
+	}
+	for _, p := range servicePatterns {
+		if strings.Contains(q, p) {
+			return Classification{Intent: IntentServiceInquiry, Confidence: 0.85}, true
+		}
+	}
+
 	// Simple greetings → simple_faq (avoid agent loop on "hi").
 	greetings := []string{
 		"hi", "hello", "hey", "good morning", "good afternoon",
@@ -163,7 +206,8 @@ func (r *Router) Classify(ctx context.Context, question string) (Classification,
 
 	intent := Intent(result.Intent)
 	switch intent {
-	case IntentSimpleFAQ, IntentProductQA, IntentBusinessOpp, IntentRecruitment, IntentTaskExecute, IntentOffTopic, IntentEscalate:
+	case IntentSimpleFAQ, IntentProductQA, IntentBusinessOpp, IntentRecruitment, IntentTaskExecute,
+		IntentOffTopic, IntentEscalate, IntentServiceInquiry, IntentCourseInquiry, IntentSupportRequest, IntentDataQuery:
 		r.logger.Debug("classified intent",
 			zap.String("intent", string(intent)),
 			zap.Float64("confidence", result.Confidence),

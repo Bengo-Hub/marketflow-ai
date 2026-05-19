@@ -33,6 +33,8 @@ type Pipeline struct {
 	db              *sql.DB
 	redis           *redis.Client
 	groqClient      *ai.Client
+	claudeClient    *ai.AnthropicClient // third-tier fallback when all Groq models fail
+	claudeModel     string
 	ollamaClient    *ai.Client
 	router          *ai.Router
 	filter          *compliance.Filter
@@ -55,6 +57,8 @@ type Config struct {
 	DB              *sql.DB
 	Redis           *redis.Client
 	GroqClient      *ai.Client
+	ClaudeClient    *ai.AnthropicClient // optional third-tier fallback
+	ClaudeModel     string
 	OllamaClient    *ai.Client
 	Router          *ai.Router
 	Resolver        *providers.Resolver
@@ -76,6 +80,8 @@ func NewPipeline(cfg Config) *Pipeline {
 		db:             cfg.DB,
 		redis:          cfg.Redis,
 		groqClient:     cfg.GroqClient,
+		claudeClient:   cfg.ClaudeClient,
+		claudeModel:    cfg.ClaudeModel,
 		ollamaClient:   cfg.OllamaClient,
 		router:         cfg.Router,
 		filter:         compliance.NewFilter(),
@@ -351,11 +357,28 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
 	if err != nil {
-		p.logger.Warn("main model failed, trying fallback", zap.Error(err))
+		p.logger.Warn("main Groq model failed, trying Groq fallback", zap.Error(err))
 		model = p.fallbackModel
 		resp, err = p.groqClient.Chat(ctx, ai.ChatRequest{
 			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
 		})
+		if err != nil && p.claudeClient != nil {
+			// Third-tier fallback: Anthropic Claude when all Groq models fail.
+			// Uses a fresh context so a canceled Groq context doesn't kill Claude too.
+			p.logger.Warn("Groq fallback failed, trying Claude", zap.Error(err))
+			claudeCtx, claudeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer claudeCancel()
+			claudeModel := p.claudeModel
+			if claudeModel == "" {
+				claudeModel = "claude-haiku-4-5-20251001"
+			}
+			resp, err = p.claudeClient.Chat(claudeCtx, ai.ChatRequest{
+				Model: claudeModel, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
+			})
+			if err == nil {
+				model = claudeModel
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("all LLM models failed: %w", err)
 		}
