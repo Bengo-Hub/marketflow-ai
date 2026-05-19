@@ -19,8 +19,9 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Environment string `env:"APP_ENV" envDefault:"development"`
-	ServiceName string `env:"APP_NAME" envDefault:"marketflow-ai"`
+	Environment        string `env:"APP_ENV" envDefault:"development"`
+	ServiceName        string `env:"APP_NAME" envDefault:"marketflow-ai"`
+	InternalServiceKey string `env:"INTERNAL_SERVICE_KEY"` // shared S2S key, same name across all services
 }
 
 type HTTPConfig struct {
@@ -113,8 +114,6 @@ type AIConfig struct {
 	// Ticketing service for create_ticket agent tool
 	TicketingURL string `env:"TICKETING_URL" envDefault:"http://ticketing-api.ticketing.svc.cluster.local:4000"`
 
-	// Internal S2S key for querying other Codevertex services
-	InternalServiceKey string `env:"INTERNAL_SERVICE_KEY"`
 }
 
 func Load() (*Config, error) {

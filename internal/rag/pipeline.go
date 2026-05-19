@@ -286,29 +286,32 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 
 	// ── Source routing decision ──────────────────────────────────────────
 	//
-	// KB-first: when the top chunk similarity ≥ 0.55, the KB has strong
-	// coverage → single-shot LLM with RAG context is enough (~800ms).
-	// Only engage the expensive agentic loop when:
-	//   - KB coverage is weak (topSim < 0.55) AND/OR live info needed
-	//   - OR the intent is task_execute (content generation benefits from
-	//     tool-calling: get_fbo_profile for links, kb_search for product
-	//     details, check_integrations for campaign setup guidance)
+	// intentNeedsTools: intents that MUST go through the agent loop because
+	// they require tool calls to produce a correct answer. The agent is also
+	// forced to call at least one tool on the first iteration (ForceToolUse)
+	// so the model cannot skip straight to generating ad copy / plain text.
 	//
-	// Public mode (widget on /p/{slug}): prefer cache → KB → single-shot LLM.
-	// Skip agent loop entirely unless KB has zero coverage — keeps responses
-	// fast and minimises Groq API cost for unauthenticated traffic.
-	// Recruitment + task_execute ALWAYS use the agent — they need tools
-	// (generate_links for join URL, get_fbo_profile for personalisation,
-	// check_integrations for campaign setup). Product/business Q&A only
-	// use the agent when KB coverage is weak or live info is needed.
-	intentNeedsTools := intent == ai.IntentRecruitment || intent == ai.IntentTaskExecute || intent == ai.IntentBusinessOpp
+	// intentNeedsLiveData: intents where the answer requires live service
+	// data that is NOT in the knowledge base (course catalog, enrollments,
+	// orders, subscriptions). These always trigger the agent so
+	// query_service_data can fetch real records.
+	//
+	// Public mode (widget on /p/{slug}): throttle the agent for general Q&A
+	// to keep response times fast. Action intents (task_execute, recruitment)
+	// always use the agent regardless of public mode.
+	intentNeedsTools := intent == ai.IntentRecruitment ||
+		intent == ai.IntentTaskExecute ||
+		intent == ai.IntentBusinessOpp
+	intentNeedsLiveData := intent == ai.IntentDataQuery ||
+		intent == ai.IntentServiceInquiry ||
+		intent == ai.IntentCourseInquiry
+
 	useAgent := p.agentEnabled && p.agentLoop != nil &&
-		(intent == ai.IntentProductQA || intentNeedsTools) &&
-		(needsLiveInfo || topSim < 0.55 || intentNeedsTools)
+		(intent == ai.IntentProductQA || intentNeedsTools || intentNeedsLiveData) &&
+		(needsLiveInfo || topSim < 0.55 || intentNeedsTools || intentNeedsLiveData)
+
 	if input.PublicMode {
-		// Public mode: skip the agent for general knowledge Q&A (expensive),
-		// but ALWAYS use it for action-oriented queries and recruitment.
-		if !intentNeedsTools {
+		if !intentNeedsTools && !intentNeedsLiveData {
 			qLower := strings.ToLower(input.Question)
 			needsToolsKW := strings.Contains(qLower, "join") ||
 				strings.Contains(qLower, "sign up") ||
@@ -328,15 +331,18 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 				useAgent = useAgent && topSim < 0.3
 			}
 		}
-		// intentNeedsTools (recruitment, task_execute, business_opp) always
-		// keeps useAgent=true so the agent can generate personalised links.
 	}
 
 	if useAgent {
 		sys := p.buildAgentSystemPrompt(input.BusinessType, intent)
 		agentInput := agent.Input{
-			TenantID: input.TenantID, SystemPrompt: sys,
-			History: input.History, Question: input.Question,
+			TenantID:     input.TenantID,
+			SystemPrompt: sys,
+			History:      input.History,
+			Question:     input.Question,
+			// Force the model to call a tool on iter 1 so it cannot skip
+			// straight to generating ad copy / plain text answers.
+			ForceToolUse: intentNeedsTools || intentNeedsLiveData,
 		}
 		// task_execute needs more iterations for full tool chains
 		// (check_integrations → kb_search → search_images → calculate_ad_cost → create_campaign).
@@ -836,6 +842,33 @@ RULES:
 		b.WriteString("\nFocus on the specific Codevertex product or service. Include URL, pricing, and a clear next step.\n")
 	case ai.IntentBusinessOpp, ai.IntentRecruitment:
 		b.WriteString("\nFocus on Codevertex service capabilities and how the Power Suite or Digitika Academy can solve the prospect's business problem.\n")
+	case ai.IntentCourseInquiry:
+		b.WriteString(`
+The user is asking about Digitika Academy courses. Follow this chain:
+1. FIRST call query_service_data(service="codevertex", resource="courses") to get the live course catalog.
+2. Then call kb_search("digitika academy courses") for supplementary context (prices, schedule, certificates).
+3. Answer with real course names, durations, prices from the live data — do NOT make up courses.
+4. Always mention: payment via M-Pesa or card at books.codevertexitsolutions.com, and provide the enrollment URL.
+`)
+	case ai.IntentServiceInquiry:
+		b.WriteString(`
+The user is asking about a specific Codevertex service or platform. Follow this chain:
+1. Call kb_search with the service name to get documentation and pricing.
+2. If the user mentions their specific data (orders, invoices, subscriptions), call query_service_data with the matching service and resource.
+3. Always include the service URL and a clear next step (trial, contact, or signup link).
+`)
+	case ai.IntentDataQuery:
+		b.WriteString(`
+The user wants live data from their account. Follow this chain:
+1. FIRST call query_service_data with the service and resource that matches the question:
+   - "orders" → service=ordering, resource=orders
+   - "invoices" / "billing" → service=treasury, resource=invoices
+   - "subscription" / "plan" → service=subscriptions, resource=subscriptions
+   - "courses" / "enrollments" → service=codevertex, resource=courses or enrollments
+   - "stock" / "inventory" → service=inventory, resource=products
+2. Summarise the results in natural language — do NOT dump raw JSON.
+3. If the service returns an error, explain what went wrong and suggest the user check the relevant portal.
+`)
 	case ai.IntentTaskExecute:
 		b.WriteString(`
 TOOL CHAINING FOR CAMPAIGN/CONTENT CREATION:
@@ -844,6 +877,7 @@ TOOL CHAINING FOR CAMPAIGN/CONTENT CREATION:
 3. Call calculate_ad_cost to show the budget breakdown.
 4. Present the campaign plan and cost to the user; confirm before proceeding.
 5. create_funnel (if needed) → create_campaign.
+If the ad platform is not connected or returns an account-level error (e.g. manager account not linked to billing), explain the specific blocker and guide the user to /settings/integrations or the relevant ad platform dashboard.
 `)
 	}
 	return b.String()

@@ -149,6 +149,19 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		default:
 			logger.Warn("neither Google Custom Search nor Tavily configured; web_search tool disabled — configure at /platform/providers")
 		}
+		// query_service_data: queries live data from any registered Codevertex
+		// microservice (ordering, inventory, treasury, codevertex-website, etc.)
+		// using the shared INTERNAL_SERVICE_KEY.
+		if cfg.App.InternalServiceKey != "" {
+			tools = append(tools, agenttools.NewQueryServiceData(agenttools.QueryServiceDataConfig{
+				ServiceKey: cfg.App.InternalServiceKey,
+				Logger:     logger,
+			}))
+			logger.Info("query_service_data tool enabled (codevertex, ordering, treasury, ...)")
+		} else {
+			logger.Warn("MF_AI_INTERNAL_SERVICE_KEY not set; query_service_data tool disabled — set it to enable live course/enrollment/order queries")
+		}
+
 		// Tools that require marketflow-api service-to-service calls.
 		if cfg.AI.MarketFlowAPIKey != "" {
 			tools = append(tools,

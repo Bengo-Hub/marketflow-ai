@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,11 +97,82 @@ func (t *CreateCampaign) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSO
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return fmt.Sprintf(`{"error":"campaign creation failed: %s"}`, string(rb)), nil
+		errMsg := string(rb)
+		// Translate known ad-platform account errors into actionable guidance
+		// so the agent can explain the specific blocker to the user.
+		actionable := classifyCampaignError(platform, resp.StatusCode, errMsg)
+		t.logger.Warn("campaign creation failed",
+			zap.String("platform", platform),
+			zap.Int("status", resp.StatusCode),
+			zap.String("error", errMsg),
+		)
+		return actionable, nil
 	}
 
 	t.logger.Info("campaign created", zap.String("tenant", tenantID.String()))
 	return string(rb), nil
+}
+
+// classifyCampaignError converts raw ad-platform API errors into structured
+// JSON the agent can cite to give the user a specific, actionable next step.
+func classifyCampaignError(platform string, status int, body string) string {
+	lower := strings.ToLower(body)
+	var code, message, action string
+
+	switch {
+	// TikTok: manager account not linked to a billing method — cannot create
+	// child advertiser accounts. User must add a credit card to the manager
+	// account directly in TikTok Ads Manager before tenants can run ads.
+	case strings.Contains(lower, "advertiser") && strings.Contains(lower, "credit") ||
+		strings.Contains(lower, "billing") && strings.Contains(lower, "manager") ||
+		strings.Contains(lower, "no payment") ||
+		strings.Contains(lower, "payment method"):
+		code = "billing_not_configured"
+		message = "The connected ad account manager does not have a billing method attached. Individual advertiser accounts cannot be created until the manager account has a valid credit card."
+		switch platform {
+		case "tiktok":
+			action = "Add a credit card to your TikTok Ads Manager account at ads.tiktok.com → Account → Billing & Payment, then reconnect at /settings/integrations."
+		case "meta":
+			action = "Add a payment method to your Meta Business Suite at business.facebook.com → Billing → Payment Methods, then reconnect at /settings/integrations."
+		case "google":
+			action = "Add billing to your Google Ads manager account at ads.google.com → Billing → Payment Methods."
+		default:
+			action = "Add a billing method to the connected ad platform manager account, then try again."
+		}
+
+	// Account suspended / policy violation
+	case strings.Contains(lower, "suspended") || strings.Contains(lower, "banned") ||
+		strings.Contains(lower, "policy") || strings.Contains(lower, "violation"):
+		code = "account_suspended"
+		message = "The connected ad account has been suspended or flagged for a policy violation."
+		action = "Review the account status in the ad platform's dashboard and resolve any policy issues before running campaigns."
+
+	// Insufficient funds / wallet balance
+	case strings.Contains(lower, "insufficient") || strings.Contains(lower, "balance") ||
+		strings.Contains(lower, "funds") || strings.Contains(lower, "credit"):
+		code = "insufficient_funds"
+		message = "The MarketFlow wallet does not have enough balance to cover the campaign cost."
+		action = "Top up your wallet at /settings/billing, then retry campaign creation."
+
+	// Permission / scope error
+	case status == 403 || strings.Contains(lower, "permission") || strings.Contains(lower, "unauthorized"):
+		code = "permission_denied"
+		message = "The connected ad account does not have permission to create campaigns through this integration."
+		action = "Reconnect the ad platform at /settings/integrations and ensure the account has Campaign Manager or Advertiser role."
+
+	// Generic fallback
+	default:
+		code = "campaign_creation_failed"
+		message = fmt.Sprintf("Campaign creation failed (HTTP %d).", status)
+		action = "Check /settings/integrations to verify the platform is correctly connected and try again."
+	}
+
+	out, _ := json.Marshal(map[string]string{
+		"error":   code,
+		"message": message,
+		"action":  action,
+	})
+	return string(out)
 }
 
 // checkPlatformConnected queries the integrations API to verify the target ad

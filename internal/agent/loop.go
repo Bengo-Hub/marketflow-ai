@@ -88,13 +88,20 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 	result := &Result{Model: l.model, Trace: make([]TraceEntry, 0, maxIters)}
 
 	for iter := 1; iter <= maxIters; iter++ {
+		// On the first iteration of action/data intents, require a tool call
+		// so the model cannot skip straight to generating text. After iter 1
+		// revert to "auto" so it can synthesise and stop when ready.
+		toolChoice := "auto"
+		if in.ForceToolUse && iter == 1 && len(l.toolDefs) > 0 {
+			toolChoice = "required"
+		}
 		req := ai.ChatRequest{
 			Model:       l.model,
 			Messages:    messages,
 			Temperature: 0.4,
 			MaxTokens:   2048,
 			Tools:       l.toolDefs,
-			ToolChoice:  "auto",
+			ToolChoice:  toolChoice,
 		}
 		resp, err := l.client.Chat(ctx, req)
 		if err != nil {
