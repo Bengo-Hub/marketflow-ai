@@ -94,11 +94,13 @@ func (f *Filter) CheckGeneric(response string) (string, bool, string) {
 }
 
 // CheckForTenant routes to the appropriate filter based on business_type.
+// FLP uses full compliance rules (disclaimers + blocked phrases).
+// Codevertex and generic use minimal safety rules only.
 func (f *Filter) CheckForTenant(response, businessType string) (string, bool, string) {
-	if businessType == "generic" || businessType == "" {
-		return f.CheckGeneric(response)
+	if businessType == "flp" {
+		return f.Check(response)
 	}
-	return f.Check(response)
+	return f.CheckGeneric(response)
 }
 
 // substituteLanguage replaces prohibited medical claims with approved language.

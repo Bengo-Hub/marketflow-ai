@@ -106,11 +106,16 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist user + assistant turns.
+	// Persist user + assistant turns using the raw (pre-filter) response so
+	// subsequent turns in the same session don't see FLP disclaimer boilerplate.
+	savedAssistant := result.RawResponse
+	if savedAssistant == "" {
+		savedAssistant = result.Response
+	}
 	if h.sessions != nil {
 		_ = h.sessions.AppendMessages(r.Context(), tenantID, sessionID,
 			ai.Message{Role: "user", Content: req.Question},
-			ai.Message{Role: "assistant", Content: result.Response},
+			ai.Message{Role: "assistant", Content: savedAssistant},
 		)
 	}
 

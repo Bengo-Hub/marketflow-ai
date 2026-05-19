@@ -133,12 +133,13 @@ type ChatInput struct {
 
 // ChatResult contains the AI response and metadata.
 type ChatResult struct {
-	Response   string  `json:"response"`
-	Intent     string  `json:"intent"`
-	Confidence float64 `json:"confidence"`
-	Sources    int     `json:"sources"`
-	Cached     bool    `json:"cached"`
-	Model      string  `json:"model"`
+	Response    string  `json:"response"`
+	RawResponse string  `json:"-"` // pre-compliance-filter; used for session history only
+	Intent      string  `json:"intent"`
+	Confidence  float64 `json:"confidence"`
+	Sources     int     `json:"sources"`
+	Cached      bool    `json:"cached"`
+	Model       string  `json:"model"`
 }
 
 // resolveClient returns the platform-level Groq client and model.
@@ -179,9 +180,16 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 
 	// ── L1: exact cache ──────────────────────────────────────────────────
-	if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
-		p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
-		return &ChatResult{Response: resp, Cached: true, Intent: "cached"}, nil
+	// Skip caches when conversation history exists — the response must be
+	// generated in the context of the ongoing conversation, not recycled from
+	// a previous standalone session.
+	skipCache := len(input.History) > 0
+	if !skipCache {
+		if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
+			p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
+			filtered := p.applyFilter(resp, input.BusinessType)
+			return &ChatResult{Response: filtered, RawResponse: resp, Cached: true, Intent: "cached"}, nil
+		}
 	}
 
 	// ── Classify: heuristic first, then cached, then LLM ─────────────────
@@ -275,15 +283,12 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	embedding := p.cachedEmbed(ctx, input.Question)
 
 	// ── L2: semantic cache (check before KB search) ──────────────────────
-	if embedding != nil {
+	if !skipCache && embedding != nil {
 		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, embedding); ok {
-			// Semantic hit — still run compliance filter in case rules changed.
-			filtered, blocked, _ := p.filter.Check(resp)
-			if blocked {
-				filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
-			}
+			// Semantic hit — apply per-request filter (raw responses are cached).
 			p.logger.Debug("L2 semantic cache hit", zap.Duration("latency", time.Since(started)))
-			return &ChatResult{Response: filtered, Cached: true, Intent: string(intent), Confidence: confidence, Model: "semantic_cache"}, nil
+			filtered := p.applyFilter(resp, input.BusinessType)
+			return &ChatResult{Response: filtered, RawResponse: resp, Cached: true, Intent: string(intent), Confidence: confidence, Model: "semantic_cache"}, nil
 		}
 	}
 
@@ -376,7 +381,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 				zap.Duration("latency", time.Since(started)),
 			)
 			return &ChatResult{
-				Response: filtered, Intent: string(intent), Confidence: confidence,
+				Response: filtered, RawResponse: ares.Answer,
+				Intent: string(intent), Confidence: confidence,
 				Sources: len(contextChunks) + ares.ToolCallsN, Model: ares.Model,
 			}, nil
 		}
@@ -474,10 +480,12 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		return nil, fmt.Errorf("empty response from LLM")
 	}
 
-	filtered := p.filterAndCache(ctx, input, resp.Choices[0].Message.Content, embedding)
+	raw := resp.Choices[0].Message.Content
+	filtered := p.filterAndCache(ctx, input, raw, embedding)
 	p.logger.Debug("single-shot completed", zap.Duration("latency", time.Since(started)))
 	return &ChatResult{
-		Response: filtered, Intent: string(intent), Confidence: confidence,
+		Response: filtered, RawResponse: raw,
+		Intent: string(intent), Confidence: confidence,
 		Sources: len(contextChunks), Model: model,
 	}, nil
 }
@@ -513,24 +521,34 @@ func (p *Pipeline) cachedKBSearch(ctx context.Context, tenantID uuid.UUID, emb [
 	return results, nil
 }
 
-// filterAndCache applies the compliance filter, writes L1 + L2 caches.
-func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
-	filtered, blocked, reason := p.filter.CheckForTenant(raw, input.BusinessType)
+// applyFilter runs the compliance filter for the given businessType and returns the
+// filtered response. Blocked responses are replaced with a safe fallback message.
+func (p *Pipeline) applyFilter(raw, businessType string) string {
+	filtered, blocked, reason := p.filter.CheckForTenant(raw, businessType)
 	if blocked {
-		p.logger.Warn("response blocked by compliance filter",
-			zap.String("reason", reason), zap.String("question", input.Question))
-		switch input.BusinessType {
+		p.logger.Warn("response blocked by compliance filter", zap.String("reason", reason))
+		switch businessType {
 		case "flp":
-			filtered = "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
+			return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 		case "codevertex":
-			filtered = "I appreciate your question! For the most accurate information about Codevertex services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+			return "I appreciate your question! For the most accurate information about Codevertex services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
 		default:
-			filtered = "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
+			return "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
 		}
 	}
-	p.cache.setExact(ctx, input.TenantID, input.Question, filtered)
-	p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, filtered)
 	return filtered
+}
+
+// filterAndCache writes the RAW (pre-filter) response to L1 + L2 caches so that
+// future cache hits receive the correct filter for their own businessType. Skips
+// cache writes when the request has conversation history (session-specific responses
+// must not be recycled). Returns the compliance-filtered response for this request.
+func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
+	if len(input.History) == 0 {
+		p.cache.setExact(ctx, input.TenantID, input.Question, raw)
+		p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, raw)
+	}
+	return p.applyFilter(raw, input.BusinessType)
 }
 
 // ChatStream processes a user question and returns a streaming channel.
