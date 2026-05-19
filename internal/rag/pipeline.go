@@ -29,13 +29,24 @@ type SearchResult struct {
 }
 
 // Pipeline orchestrates the full RAG flow: embed → search → prompt → LLM → filter.
+//
+// LLM fallback ladder (fastest/most-available first):
+//  Tier 1 — Groq main (DB-resolved, llama-3.3-70b-versatile, ~82ms)
+//  Tier 2 — Groq fallback model (gemma2-9b-it, same API, ~70ms)
+//  Tier 3 — Ollama local LLM (llama3.1:8b, cluster-internal, no quota)
+//  Tier 4 — OpenAI (gpt-4o-mini, DB-resolved; graceful skip on 429/quota)
+//  Tier 5 — Anthropic Claude (DB-resolved; graceful skip on 400/credits)
 type Pipeline struct {
 	db              *sql.DB
 	redis           *redis.Client
 	groqClient      *ai.Client
-	claudeClient    *ai.AnthropicClient // third-tier fallback when all Groq models fail
+	claudeClient    *ai.AnthropicClient // tier-5 fallback
 	claudeModel     string
-	ollamaClient    *ai.Client
+	ollamaClient    *ai.Client // embeddings only (native Ollama API)
+	ollamaLLMClient *ai.Client // tier-3 fallback LLM (OpenAI-compat /v1 path)
+	ollamaLLMModel  string
+	openaiClient    *ai.Client // tier-4 fallback
+	openaiModel     string
 	router          *ai.Router
 	filter          *compliance.Filter
 	resolver        *providers.Resolver
@@ -57,9 +68,13 @@ type Config struct {
 	DB              *sql.DB
 	Redis           *redis.Client
 	GroqClient      *ai.Client
-	ClaudeClient    *ai.AnthropicClient // optional third-tier fallback
+	ClaudeClient    *ai.AnthropicClient // tier-5 fallback
 	ClaudeModel     string
-	OllamaClient    *ai.Client
+	OllamaClient    *ai.Client // embeddings (native Ollama /api/embeddings)
+	OllamaLLMClient *ai.Client // tier-3 LLM fallback (OpenAI-compat /v1)
+	OllamaLLMModel  string
+	OpenAIClient    *ai.Client // tier-4 fallback
+	OpenAIModel     string
 	Router          *ai.Router
 	Resolver        *providers.Resolver
 	SessionService  *sessions.Service
@@ -77,25 +92,29 @@ type Config struct {
 // NewPipeline creates a new RAG pipeline.
 func NewPipeline(cfg Config) *Pipeline {
 	p := &Pipeline{
-		db:             cfg.DB,
-		redis:          cfg.Redis,
-		groqClient:     cfg.GroqClient,
-		claudeClient:   cfg.ClaudeClient,
-		claudeModel:    cfg.ClaudeModel,
-		ollamaClient:   cfg.OllamaClient,
-		router:         cfg.Router,
-		filter:         compliance.NewFilter(),
-		resolver:       cfg.Resolver,
-		sessionService: cfg.SessionService,
-		taskExecutor:   cfg.TaskExecutor,
-		agentLoop:      cfg.Agent,
-		agentEnabled:   cfg.AgentEnabled,
-		embeddingModel: cfg.EmbeddingModel,
-		mainModel:      cfg.MainModel,
-		fallbackModel:  cfg.FallbackModel,
-		embeddingDim:   cfg.EmbeddingDim,
-		redisNamespace: cfg.RedisNamespace,
-		logger:         cfg.Logger.Named("rag"),
+		db:              cfg.DB,
+		redis:           cfg.Redis,
+		groqClient:      cfg.GroqClient,
+		claudeClient:    cfg.ClaudeClient,
+		claudeModel:     cfg.ClaudeModel,
+		ollamaClient:    cfg.OllamaClient,
+		ollamaLLMClient: cfg.OllamaLLMClient,
+		ollamaLLMModel:  cfg.OllamaLLMModel,
+		openaiClient:    cfg.OpenAIClient,
+		openaiModel:     cfg.OpenAIModel,
+		router:          cfg.Router,
+		filter:          compliance.NewFilter(),
+		resolver:        cfg.Resolver,
+		sessionService:  cfg.SessionService,
+		taskExecutor:    cfg.TaskExecutor,
+		agentLoop:       cfg.Agent,
+		agentEnabled:    cfg.AgentEnabled,
+		embeddingModel:  cfg.EmbeddingModel,
+		mainModel:       cfg.MainModel,
+		fallbackModel:   cfg.FallbackModel,
+		embeddingDim:    cfg.EmbeddingDim,
+		redisNamespace:  cfg.RedisNamespace,
+		logger:          cfg.Logger.Named("rag"),
 	}
 	p.cache = newCacheLayer(cfg.Redis, cfg.RedisNamespace, p.logger)
 	return p
@@ -352,36 +371,81 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
+	// ── LLM fallback ladder ─────────────────────────────────────────────
+	//
+	// Tier 1: Groq main (DB-resolved) — primary, ~82ms
+	// Tier 2: Groq fallback model (same API, smaller/faster)
+	// Tier 3: Ollama local LLM (cluster-internal, no quota)
+	// Tier 4: OpenAI (DB-resolved, graceful skip on quota 429)
+	// Tier 5: Anthropic Claude (DB-resolved, graceful skip on credits 400)
+
 	client, model := p.resolveClient(ctx)
 	resp, err := client.Chat(ctx, ai.ChatRequest{
 		Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
+
+	// Tier 2: Groq fallback model (gemma2-9b-it or llama-3.1-8b-instant)
 	if err != nil {
-		p.logger.Warn("main Groq model failed, trying Groq fallback", zap.Error(err))
+		p.logger.Warn("Groq main failed, trying Groq fallback model",
+			zap.String("model", model), zap.Error(err))
 		model = p.fallbackModel
 		resp, err = p.groqClient.Chat(ctx, ai.ChatRequest{
 			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
 		})
-		if err != nil && p.claudeClient != nil {
-			// Third-tier fallback: Anthropic Claude when all Groq models fail.
-			// Uses a fresh context so a canceled Groq context doesn't kill Claude too.
-			p.logger.Warn("Groq fallback failed, trying Claude", zap.Error(err))
-			claudeCtx, claudeCancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer claudeCancel()
-			claudeModel := p.claudeModel
-			if claudeModel == "" {
-				claudeModel = "claude-haiku-4-5-20251001"
-			}
-			resp, err = p.claudeClient.Chat(claudeCtx, ai.ChatRequest{
-				Model: claudeModel, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-			})
-			if err == nil {
-				model = claudeModel
-			}
-		}
+	}
+
+	// Tier 3: Ollama local LLM — cluster-internal, no external quota
+	if err != nil && p.ollamaLLMClient != nil {
+		p.logger.Warn("Groq fallback failed, trying Ollama local LLM",
+			zap.String("model", p.ollamaLLMModel), zap.Error(err))
+		ollamaCtx, ollamaCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer ollamaCancel()
+		model = p.ollamaLLMModel
+		resp, err = p.ollamaLLMClient.Chat(ollamaCtx, ai.ChatRequest{
+			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("all LLM models failed: %w", err)
+			p.logger.Warn("Ollama local LLM failed", zap.Error(err))
 		}
+	}
+
+	// Tier 4: OpenAI (gpt-4o-mini) — skip fast if quota/auth error
+	if err != nil && p.openaiClient != nil {
+		p.logger.Warn("Ollama failed, trying OpenAI fallback",
+			zap.String("model", p.openaiModel), zap.Error(err))
+		oaiCtx, oaiCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer oaiCancel()
+		model = p.openaiModel
+		resp, err = p.openaiClient.Chat(oaiCtx, ai.ChatRequest{
+			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
+		})
+		if err != nil {
+			p.logger.Warn("OpenAI fallback failed (quota/credits?)", zap.Error(err))
+		}
+	}
+
+	// Tier 5: Anthropic Claude — last resort, fresh context to avoid Groq cancellation
+	if err != nil && p.claudeClient != nil {
+		p.logger.Warn("OpenAI failed, trying Claude last resort",
+			zap.String("model", p.claudeModel), zap.Error(err))
+		claudeCtx, claudeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer claudeCancel()
+		claudeModel := p.claudeModel
+		if claudeModel == "" {
+			claudeModel = "claude-haiku-4-5-20251001"
+		}
+		resp, err = p.claudeClient.Chat(claudeCtx, ai.ChatRequest{
+			Model: claudeModel, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
+		})
+		if err == nil {
+			model = claudeModel
+		} else {
+			p.logger.Warn("Claude last resort failed (credits?)", zap.Error(err))
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("all LLM providers exhausted: %w", err)
 	}
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("empty response from LLM")

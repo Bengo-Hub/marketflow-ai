@@ -81,8 +81,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 	_ = groqMainModel // used by router + agent below
 	var ollamaClient *ai.Client
+	var ollamaLLMClient *ai.Client
 	if cfg.AI.OllamaURL != "" {
-		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger) // Ollama has no auth
+		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger)        // embeddings: /api/embeddings
+		ollamaLLMClient = ai.NewClient(cfg.AI.OllamaURL+"/v1", "", logger) // LLM tier-3: /v1/chat/completions
 	}
 
 	// ── Intent Router ─────────────────────────────────────────────────────
@@ -184,35 +186,50 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		logger.Info("agentic RAG enabled", zap.Int("tools", len(tools)))
 	}
 
-	// ── Anthropic Claude (third-tier fallback when all Groq models fail) ──
-	var claudeClient *ai.AnthropicClient
-	if cfg.AI.ClaudeAPIKey != "" {
-		claudeClient = ai.NewAnthropicClient(cfg.AI.ClaudeBaseURL, cfg.AI.ClaudeAPIKey, cfg.AI.ClaudeVersion, logger)
-		logger.Info("Anthropic Claude fallback enabled", zap.String("model", cfg.AI.ClaudeModel))
+	// ── Tier-4: OpenAI (DB-resolved, optional, graceful 429 skip) ────────
+	resolveOAI, resolveOAICancel := context.WithTimeout(ctx, 5*time.Second)
+	openaiClient, openaiModel, err := resolver.ResolveOpenAIClient(resolveOAI)
+	resolveOAICancel()
+	if err != nil {
+		logger.Info("OpenAI not available (tier-4 fallback disabled)", zap.Error(err))
 	} else {
-		logger.Warn("MF_AI_CLAUDE_API_KEY not set — Claude fallback disabled; set it for resilience when Groq is down")
+		logger.Info("OpenAI tier-4 fallback enabled", zap.String("model", openaiModel))
+	}
+
+	// ── Tier-5: Anthropic Claude (DB-first, env fallback, graceful 400 skip) ──
+	resolveC, resolveCCancel := context.WithTimeout(ctx, 5*time.Second)
+	claudeClient, claudeModel, err := resolver.ResolveAnthropicClientFromDB(resolveC)
+	resolveCCancel()
+	if err != nil {
+		logger.Warn("Claude tier-5 fallback disabled", zap.Error(err))
+	} else {
+		logger.Info("Claude tier-5 fallback enabled", zap.String("model", claudeModel))
 	}
 
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
 	pipeline := rag.NewPipeline(rag.Config{
-		DB:             db,
-		Redis:          redisClient,
-		GroqClient:     groqClient,
-		ClaudeClient:   claudeClient,
-		ClaudeModel:    cfg.AI.ClaudeModel,
-		OllamaClient:   ollamaClient,
-		Router:         router,
-		Resolver:       resolver,
-		SessionService: sessionService,
-		TaskExecutor:   taskExecutor,
-		Agent:          agentLoop,
-		AgentEnabled:   cfg.AI.AgentEnabled,
-		EmbeddingModel: cfg.AI.EmbeddingModel,
-		MainModel:      cfg.AI.GroqMainModel,
-		FallbackModel:  cfg.AI.GroqFallback,
-		EmbeddingDim:   cfg.AI.EmbeddingDim,
-		RedisNamespace: cfg.Redis.Namespace,
-		Logger:         logger,
+		DB:              db,
+		Redis:           redisClient,
+		GroqClient:      groqClient,
+		ClaudeClient:    claudeClient,
+		ClaudeModel:     claudeModel,
+		OllamaClient:    ollamaClient,
+		OllamaLLMClient: ollamaLLMClient,
+		OllamaLLMModel:  cfg.AI.OllamaFallbackModel,
+		OpenAIClient:    openaiClient,
+		OpenAIModel:     openaiModel,
+		Router:          router,
+		Resolver:        resolver,
+		SessionService:  sessionService,
+		TaskExecutor:    taskExecutor,
+		Agent:           agentLoop,
+		AgentEnabled:    cfg.AI.AgentEnabled,
+		EmbeddingModel:  cfg.AI.EmbeddingModel,
+		MainModel:       cfg.AI.GroqMainModel,
+		FallbackModel:   cfg.AI.GroqFallback,
+		EmbeddingDim:    cfg.AI.EmbeddingDim,
+		RedisNamespace:  cfg.Redis.Namespace,
+		Logger:          logger,
 	})
 
 	// ── Auth Middleware ────────────────────────────────────────────────────

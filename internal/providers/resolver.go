@@ -266,6 +266,31 @@ func (r *Resolver) fetchFromAPI(ctx context.Context, providerType, providerName 
 	return settings, nil
 }
 
+// ResolveOpenAIClient resolves OpenAI config DB-first, no env fallback (optional provider).
+func (r *Resolver) ResolveOpenAIClient(ctx context.Context) (*ai.Client, string, error) {
+	settings, err := r.fetchFromAPI(ctx, "ai_llm", "openai")
+	if err != nil || settings.APIKey == "" {
+		return nil, "", fmt.Errorf("OpenAI not configured in DB: %w", err)
+	}
+	baseURL := firstNonEmpty(settings.BaseURL, "https://api.openai.com/v1")
+	model := firstNonEmpty(settings.MainModel, "gpt-4o-mini")
+	return ai.NewClient(baseURL, settings.APIKey, r.logger), model, nil
+}
+
+// ResolveAnthropicClientFromDB resolves Anthropic/Claude config DB-first, env fallback.
+func (r *Resolver) ResolveAnthropicClientFromDB(ctx context.Context) (*ai.AnthropicClient, string, error) {
+	settings, err := r.fetchFromAPI(ctx, "ai_llm", "anthropic")
+	if err == nil && settings.APIKey != "" {
+		baseURL := firstNonEmpty(settings.BaseURL, r.envConfig.ClaudeBaseURL)
+		model := firstNonEmpty(settings.MainModel, r.envConfig.ClaudeModel)
+		return ai.NewAnthropicClient(baseURL, settings.APIKey, r.envConfig.ClaudeVersion, r.logger), model, nil
+	}
+	if r.envConfig.ClaudeAPIKey != "" {
+		return ai.NewAnthropicClient(r.envConfig.ClaudeBaseURL, r.envConfig.ClaudeAPIKey, r.envConfig.ClaudeVersion, r.logger), r.envConfig.ClaudeModel, nil
+	}
+	return nil, "", fmt.Errorf("Anthropic not configured in DB or env")
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
