@@ -43,24 +43,26 @@ func NewRouter(routerClient *Client, routerModel string, logger *zap.Logger) *Ro
 	}
 }
 
-const classifierSystemPrompt = `You are an intent classifier for Vera, the Codevertex AI assistant. Codevertex provides enterprise software, AI tools, and tech education (Digitika). Classify the user's question.
+const classifierSystemPrompt = `You are an intent classifier for Vera, a business AI assistant deployed on customer-facing websites and dashboards. Classify the user's question.
 
 Respond with ONLY a JSON object, nothing else:
 {"intent": "<category>", "confidence": <0.0-1.0>, "needs_live_info": <true|false>}
 
 "needs_live_info" is true when answering correctly requires fresh/real-world data (news, availability, current pricing, recent events, competitor facts, location-specific info); false when a general or internal-KB answer suffices.
 
+IMPORTANT: Vera is a BUSINESS assistant, not a general-purpose AI. Questions about general programming (showing code samples, coding tutorials, homework, how to write functions in Python/JavaScript/etc.) are OFF-TOPIC unless the user is asking about a specific Codevertex service or course. General coding help requests ARE off_topic.
+
 Categories:
 - "simple_faq": Simple factual questions about the company, hours, location, contact info
 - "product_qa": Questions about specific products, features, pricing, or recommendations (FLP or other tenant products)
 - "business_opportunity": Questions about the FBO business model, compensation plan, income, ranks, or how to earn (FLP context)
 - "recruitment": Interest in joining, signing up, getting started, startup costs (FLP context)
-- "task_execute": User wants to CREATE something: write ad copy, social media post, email campaign, funnel content, product description
+- "task_execute": User wants to CREATE business content: write ad copy, social media post, email campaign, funnel content, product description — NOT general code samples
 - "service_inquiry": Questions about Codevertex platform services (MarketFlow, ordering, POS, logistics, ISP billing, ERP, auth, subscriptions)
 - "course_inquiry": Questions about Digitika courses, Code-Starter bootcamp, enrollment, pricing, curriculum, schedule, certificates
 - "support_request": User needs technical help, reports a bug, asks for support, wants to open a ticket
 - "data_query": User asks for live data: "what are my orders", "show my invoices", "check inventory", "what is my subscription status"
-- "off_topic": Questions completely unrelated to business, products, services, or education (weather, sports, politics, etc.)
+- "off_topic": Questions unrelated to business products, services, or the company — includes general programming tutorials, code samples unrelated to a Codevertex service, weather, sports, politics, homework, cooking, general knowledge
 - "escalate": User explicitly asks to speak to a human, requests a call, or expresses serious frustration`
 
 // Classification is the full router output.
@@ -85,14 +87,28 @@ func HeuristicClassify(question string) (Classification, bool) {
 	q := strings.ToLower(strings.TrimSpace(question))
 
 	// Off-topic blocklist — common chatbot abuse / irrelevant queries.
+	// These patterns are universally off-topic for any business assistant
+	// regardless of niche (FLP, Codevertex, generic SME, etc.).
 	offTopicPatterns := []string{
 		"weather", "football", "soccer", "basketball", "politics",
 		"president", "election", "cryptocurrency", "bitcoin",
 		"joke", "tell me a joke", "what day is it", "what time",
+		// General programming/code requests — Vera is a business assistant,
+		// not a coding tutor. These are off-scope for all niches.
+		"python code", "python script", "javascript code", "java code",
+		"c++ code", "c# code", "php code", "ruby code", "go code",
+		"rust code", "swift code", "kotlin code", "typescript code",
+		"show me code", "show me a function", "show me a script",
+		"write a program", "write me a program", "sample code",
+		"code snippet", "can i see code", "give me code",
+		"how to code ", "programming tutorial", "coding tutorial",
+		"sorting algorithm", "fibonacci sequence", "binary search algorithm",
+		"recursion example", "import os", "import sys",
+		"console.log(", "print(f\"", "def main(", "public static void",
 	}
 	for _, p := range offTopicPatterns {
 		if strings.Contains(q, p) {
-			return Classification{Intent: IntentOffTopic, Confidence: 0.95}, true
+			return Classification{Intent: IntentOffTopic, Confidence: 0.97}, true
 		}
 	}
 

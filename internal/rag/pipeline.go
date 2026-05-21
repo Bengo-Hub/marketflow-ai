@@ -179,6 +179,18 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		input.BusinessType = detectNiche(input.Question)
 	}
 
+	// ── Scope guard — pre-classification niche enforcement ───────────────
+	// Runs BEFORE any cache lookup or LLM call. Blocks questions that are
+	// clearly outside the widget's business scope (e.g. Python code on an
+	// FLP health site) without wasting tokens on classification or generation.
+	if scopeGuard(input.BusinessType, input.Question) {
+		msg := offTopicMessage(input.BusinessType)
+		return &ChatResult{
+			Response: msg, Intent: string(ai.IntentOffTopic),
+			Confidence: 0.99, Model: "scope_guard",
+		}, nil
+	}
+
 	// ── L1: exact cache ──────────────────────────────────────────────────
 	// Skip caches when conversation history exists — the response must be
 	// generated in the context of the ongoing conversation, not recycled from
@@ -661,9 +673,12 @@ func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chun
 
 	var b strings.Builder
 
-	b.WriteString(`You are a helpful AI assistant for Forever Living Products (FLP). You help customers learn about aloe vera products and the FBO business opportunity.
+	b.WriteString(`You are Vera, the AI assistant for a Forever Living Products (FLP) business. You help customers learn about aloe vera products and the FBO business opportunity.
 
-IMPORTANT RULES:
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions about Forever Living Products, FLP health & wellness topics, and the FBO business opportunity. If the user asks about programming, coding, homework, general technology, cooking recipes, sports, politics, or ANYTHING unrelated to FLP/health/wellness/business, respond ONLY with: "I'm Vera, your FLP health & wellness assistant. I can help with products, the business opportunity, or wellness topics — but that's outside what I can help with here."
+
+COMPLIANCE RULES:
 - NEVER make medical claims. Use "supports", "promotes", "helps maintain" — NOT "cures", "treats", "heals", "prevents disease"
 - NEVER guarantee specific income amounts. Always say "results vary"
 - Always recommend consulting a healthcare professional for medical questions
@@ -709,6 +724,9 @@ func (p *Pipeline) buildCodevertexSystemPrompt(intent ai.Intent, chunks []Search
 	var b strings.Builder
 
 	b.WriteString(`You are Vera, the AI support assistant for Codevertex IT Solutions — a premier technology firm headquartered in Kisumu, Kenya, established in 2020.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions about Codevertex IT Solutions, its services, the Power Suite platform, Digitika Academy courses, and relevant technology consulting. If the user asks about unrelated topics (general homework, celebrity gossip, sports scores, cooking, competitor products unrelated to a comparison, etc.), politely say: "I'm Vera, the Codevertex AI assistant. I can help with our services, courses, or platform — but that's outside what I can assist with here."
 
 COMPANY:
 - Full name: Codevertex IT Solutions
@@ -782,7 +800,10 @@ Focus on Codevertex service capabilities, integration options, and how the Power
 // Used when businessType == "generic" — for any SME, retailer, or service business using MarketFlow.
 func (p *Pipeline) buildGenericMarketingPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
-	b.WriteString(`You are Vera, a friendly and professional AI marketing assistant. You help business owners and their customers with product enquiries, service information, and business opportunities.
+	b.WriteString(`You are Vera, a friendly and professional AI assistant for this business. You help customers and visitors with product enquiries, service information, and business opportunities.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions relevant to this business: its products, services, pricing, and business operations. If the user asks about unrelated topics (general programming, homework, sports, politics, cooking, or anything not related to this business), respond ONLY with: "I'm Vera, your business assistant. I can help with products, services, and questions related to this company — but that's outside what I can help with here."
 
 PERSONA RULES:
 - Warm, helpful, and to the point — answer what was asked, then offer a clear next step
@@ -829,7 +850,10 @@ func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent)
 	}
 
 	var b strings.Builder
-	b.WriteString(`You are an agentic marketing assistant for a business owner on the MarketFlow platform. You help with Forever Living Products (FLP) and any other business use case on the platform.
+	b.WriteString(`You are an agentic AI assistant for a Forever Living Products (FLP) business owner on the MarketFlow platform.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions about FLP products, health & wellness topics, the FBO business opportunity, and marketing for FLP. If asked about general programming, coding, homework, recipes, sports, politics, or anything unrelated to FLP/wellness/business, respond: "I'm Vera, your FLP marketing assistant. I can help with FLP products, business campaigns, or wellness topics — but that's outside what I can assist with here." Do NOT use any tools to answer out-of-scope questions.
 
 TOOLS AVAILABLE:
 Knowledge & Search:
@@ -897,6 +921,9 @@ Do NOT skip straight to text generation — always gather context and verify int
 func (p *Pipeline) buildCodevertexAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
 	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex IT Solutions. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions about Codevertex IT Solutions: its services, Power Suite products, Digitika Academy, and technology consulting. If asked about unrelated topics (general homework, cooking, sports, entertainment, or any topic not related to Codevertex's business), respond: "I'm Vera, the Codevertex AI assistant. I can help with our IT services, platform products, or courses — but that's outside what I can assist with here." Do NOT use any tools to answer out-of-scope questions.
 
 TOOLS AVAILABLE:
 Knowledge & Search:
@@ -973,7 +1000,10 @@ If the ad platform is not connected or returns an account-level error (e.g. mana
 // buildGenericMarketingAgentPrompt returns the agent system prompt for generic (non-FLP, non-Codevertex) tenants.
 func (p *Pipeline) buildGenericMarketingAgentPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(`You are Vera, an agentic AI marketing assistant for a business on the MarketFlow platform. You help business owners and their customers with product enquiries, service information, marketing campaigns, and general business questions.
+	b.WriteString(`You are Vera, an agentic AI assistant for a business on the MarketFlow platform. You help business owners and their customers with product enquiries, service information, and marketing campaigns.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions relevant to this specific business: its products, services, marketing, and business operations. If the user asks about unrelated topics (general coding, homework, sports, entertainment, cooking, or anything not related to this business), respond: "I'm Vera, your business assistant. I can help with products, services, and business questions — but that's outside what I can help with here." Do NOT call any tools for out-of-scope questions.
 
 TOOLS AVAILABLE:
 Knowledge & Search:
@@ -1069,6 +1099,89 @@ func detectNiche(question string) string {
 // cacheKey kept for back-compat with ChatStream; delegates to cache layer.
 func (p *Pipeline) cacheKey(tenantID uuid.UUID, question string) string {
 	return p.cache.exactKey(tenantID, question)
+}
+
+// offTopicMessage returns the niche-appropriate off-topic redirect message.
+func offTopicMessage(businessType string) string {
+	switch businessType {
+	case "flp":
+		return "I'm Vera, your Forever Living Products assistant. I can help with FLP products, health & wellness tips, or the FBO business opportunity — but that question is outside my expertise. What can I help you with today?"
+	case "codevertex":
+		return "I'm Vera, the Codevertex AI assistant. I can help with our IT services, Power Suite products, Digitika Academy courses, or technical questions. What would you like to know?"
+	default:
+		return "I'm Vera, your business assistant. I can help with products, services, and business questions related to this company. What would you like to know?"
+	}
+}
+
+// scopeGuard checks whether a question is clearly outside the tenant's
+// business scope before burning any LLM, embedding, or cache calls.
+// Returns true when the question should be blocked as off-topic.
+//
+// Three layers:
+//  1. Universal patterns — off-scope for every business niche
+//  2. FLP-specific patterns — tech/coding/academic/unrelated topics on health site
+//  3. Generic patterns — general chatbot abuse on any SME widget
+func scopeGuard(businessType, question string) bool {
+	q := strings.ToLower(question)
+
+	// Universal: explicit programming code requests are off-topic for ALL
+	// business widgets. Vera is a support/sales assistant, not a code generator.
+	universalBlocks := []string{
+		"python code", "python script", "javascript code", "java code",
+		"c++ code", "c# code", "php code", "ruby code", "golang code",
+		"rust code", "swift code", "kotlin code", "typescript code",
+		"show me code", "show me a function", "show me a script",
+		"write a program", "write me a program", "sample code",
+		"code snippet", "can i see code", "give me code",
+		"programming tutorial", "coding tutorial",
+		"sorting algorithm", "fibonacci sequence",
+		"binary search algorithm", "recursion example",
+		"import os", "import sys", "console.log(",
+		"def main(", "public static void", "int main()",
+	}
+	for _, p := range universalBlocks {
+		if strings.Contains(q, p) {
+			return true
+		}
+	}
+
+	switch businessType {
+	case "flp":
+		// FLP widgets are strictly health/wellness + FBO business assistants.
+		// Block tech, general coding, academic homework, cooking, finance, etc.
+		flpBlocks := []string{
+			"programming", "write code", "coding", "software developer",
+			"machine learning tutorial", "neural network tutorial",
+			"html tutorial", "css tutorial", "react tutorial",
+			"django tutorial", "flask tutorial", "api tutorial",
+			"database design", "sql tutorial",
+			"write my essay", "homework help", "exam prep help",
+			"study guide for", "assignment help",
+			"how to cook", "baking recipe", "ingredients for",
+			"stock market tip", "forex signal", "crypto signal",
+			"sports score", "movie review", "song lyrics",
+		}
+		for _, p := range flpBlocks {
+			if strings.Contains(q, p) {
+				return true
+			}
+		}
+
+	case "generic":
+		// Generic SME widgets: block obvious general-purpose AI abuse.
+		genericBlocks := []string{
+			"write my essay", "do my homework", "homework help",
+			"stock market tips", "crypto signals", "forex trading tips",
+			"movie review", "celebrity gossip", "song lyrics",
+		}
+		for _, p := range genericBlocks {
+			if strings.Contains(q, p) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func isGreeting(q string) bool {
