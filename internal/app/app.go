@@ -180,6 +180,63 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				agenttools.NewCreateCampaign(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCreateFunnel(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCalculateCost(logger),
+				// Sprint 10: CRM agent tools
+				agenttools.NewCreateDeal(agenttools.CreateDealConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewMovePipelineStage(agenttools.MovePipelineStageConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewCreateActivity(agenttools.CreateActivityConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewCreateTask(agenttools.CreateTaskConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewDraftEmail(agenttools.DraftEmailConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					LLMClient:  groqClient,
+					LLMModel:   groqMainModel,
+					Logger:     logger,
+				}),
+				agenttools.NewAnalyzeDeal(agenttools.AnalyzeDealConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					LLMClient:  groqClient,
+					LLMModel:   groqMainModel,
+					Logger:     logger,
+				}),
+				agenttools.NewScoreLead(agenttools.ScoreLeadConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewGetContact360(agenttools.GetContact360Config{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewEnrichContact(agenttools.EnrichContactConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					Logger:     logger,
+				}),
+				agenttools.NewMeetingPrep(agenttools.MeetingPrepConfig{
+					APIBaseURL: cfg.AI.MarketFlowAPIURL,
+					ServiceKey: cfg.AI.MarketFlowAPIKey,
+					LLMClient:  groqClient,
+					LLMModel:   groqMainModel,
+					Logger:     logger,
+				}),
 			)
 			// Image search uses the same Google CSE key as web_search.
 			if googleCfg.APIKey != "" && googleCfg.CSEID != "" {

@@ -3,7 +3,7 @@ module github.com/bengobox/marketflow-ai
 go 1.24.11
 
 // Auth client module redirect (same pattern as all services)
-replace github.com/Bengo-Hub/shared-auth-client => github.com/Bengo-Hub/auth-client v0.5.0
+replace github.com/Bengo-Hub/shared-auth-client => github.com/Bengo-Hub/auth-client v0.6.1
 
 require (
 	github.com/Bengo-Hub/shared-auth-client v0.4.1

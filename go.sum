@@ -1,5 +1,5 @@
-github.com/Bengo-Hub/auth-client v0.5.0 h1:XYtUqReJRQOGmIZwZuSMSpKGgoiqQ/P8TOh/HzWjQiY=
-github.com/Bengo-Hub/auth-client v0.5.0/go.mod h1:DTfmZRTomkZRFm1YYKO8DmvwjLIchZnM7ZaFArIffsI=
+github.com/Bengo-Hub/auth-client v0.6.1 h1:7yW9wbp70gcirFJlmVQe+b2GDEgFV2DdBqfL8+bAFxs=
+github.com/Bengo-Hub/auth-client v0.6.1/go.mod h1:DTfmZRTomkZRFm1YYKO8DmvwjLIchZnM7ZaFArIffsI=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=
