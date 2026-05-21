@@ -112,7 +112,7 @@ type AIConfig struct {
 	MarketFlowAPIKey string `env:"MARKETFLOW_API_KEY"`
 
 	// Ticketing service for create_ticket agent tool
-	TicketingURL string `env:"TICKETING_URL" envDefault:"http://ticketing-api.ticketing.svc.cluster.local:4000"`
+	TicketingURL string `env:"TICKETING_URL" envDefault:"http://ticketing-api.ticketing.svc.cluster.local:4009"`
 
 }
 
