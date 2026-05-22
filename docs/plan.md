@@ -37,8 +37,8 @@ MarketFlow AI is the intelligence layer powering the Codevertex platform. It ser
 | Dynamic in-chat forms (chat.js) | ✅ Done |
 | Tenant-configurable WhatsApp/phone (data-whatsapp, data-phone) | ✅ Done |
 | Codevertex website ChatBot.tsx linked to marketflow-ai | ✅ Done |
-| Ticketing AI triage endpoint | ❌ Pending |
-| MarketFlow CRM AI enhancements (lead scoring, pipeline insights) | ❌ Pending |
+| Ticketing AI triage endpoint | ✅ Done (Sprint 5) |
+| MarketFlow CRM AI enhancements (lead scoring, pipeline insights) | ✅ Done (Sprint 6) |
 
 ---
 
@@ -119,37 +119,25 @@ InternalServiceKey string
 
 ---
 
-## Sprint 5 — Ticketing Service AI Layer (PENDING)
+## Sprint 5 — Ticketing Service AI Layer ✅ COMPLETE
 
-### Architecture
+**Deployed:** 2026-05-22
 
-```
-Ticket Created (NATS: tickets.created)
-    │
-    ▼
-AI Triage Agent (marketflow-ai)
-    │
-    ├── Classify: tenant_support | platform_support | billing | technical
-    │
-    ├── tenant_support → Query tenant KB → auto-resolve or enrich + assign
-    └── platform_support → Query platform KB → suggest resolution
-```
-
-### Implementation Files (to build)
-
-- `internal/httpapi/handlers/triage.go` — HTTP handler
-- `internal/triage/service.go` — orchestration logic
-- `internal/triage/classifier.go` — ticket type classification
-
-**Endpoint**: `POST /api/v1/internal/triage` (auth: X-API-Key)
+- `internal/httpapi/handlers/triage.go` — TriageHandler with Triage + Classify endpoints
+- `POST /api/v1/internal/triage` (X-API-Key) — full classification with confidence + human_review flag
+- `POST /api/v1/classify` (X-API-Key) — simpler response for ticketing-api
+- Groq 8B intent-router, fail-open on error (returns general/normal rather than blocking)
+- Returns: `{category, priority, confidence, reasoning, requires_human_review}`
 
 ---
 
-## Sprint 6 — MarketFlow CRM AI Enhancement (PENDING)
+## Sprint 6 — MarketFlow CRM AI Enhancement ✅ COMPLETE
 
-- Lead scoring: 0-100 based on engagement, sentiment, intent history
-- Campaign generation: extend to all service types (not just FLP)
-- Pipeline insights: `GET /api/v1/ai/pipeline-summary?tenant_id=X`
+**Deployed:** 2026-05-22
+
+- `internal/httpapi/handlers/crm_ai.go` — CRMAIHandler
+- `POST /api/v1/ai/pipeline-summary` — fetches open deals S2S, Groq 70B analysis, returns deal_health/bottlenecks/at_risk_deals/recommended_actions/win_rate_estimate
+- `POST /api/v1/ai/score-lead` — fetches lead S2S, returns score 0-100 with grade/reasoning/strengths/weaknesses/recommended_action
 
 ---
 
