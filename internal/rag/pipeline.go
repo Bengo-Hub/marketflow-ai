@@ -576,9 +576,10 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	// Jailbreak guard — same as Chat()
 	if blocked, resp := ScreenInput(input.Question); blocked {
 		p.logger.Info("jailbreak attempt blocked (stream)", zap.String("tenant", input.TenantSlug))
-		ch := make(chan ai.StreamDelta, 1)
+		ch := make(chan ai.StreamDelta, 2)
 		go func() {
-			ch <- ai.StreamDelta{Content: resp, Done: true}
+			ch <- ai.StreamDelta{Content: resp}
+			ch <- ai.StreamDelta{Done: true}
 			close(ch)
 		}()
 		return ch, &ChatResult{Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
@@ -591,9 +592,10 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	switch intent {
 	case ai.IntentOffTopic, ai.IntentEscalate:
 		result, _ := p.Chat(ctx, input)
-		ch := make(chan ai.StreamDelta, 1)
+		ch := make(chan ai.StreamDelta, 2)
 		go func() {
-			ch <- ai.StreamDelta{Content: result.Response, Done: true}
+			ch <- ai.StreamDelta{Content: result.Response}
+			ch <- ai.StreamDelta{Done: true}
 			close(ch)
 		}()
 		return ch, result, nil
@@ -617,7 +619,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
-	ch, err := p.groqClient.ChatStream(ctx, ai.ChatRequest{
+	rawCh, err := p.groqClient.ChatStream(ctx, ai.ChatRequest{
 		Model:       p.mainModel,
 		Messages:    messages,
 		Temperature: 0.7,
@@ -634,7 +636,36 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		Model:      p.mainModel,
 	}
 
-	return ch, meta, nil
+	return guardStream(rawCh), meta, nil
+}
+
+// guardStream wraps an upstream delta channel so that ScreenOutput is applied
+// to the fully-accumulated response. Tokens are forwarded in real-time; if the
+// completed text is detected as a jailbreak or schema leak, a replace delta is
+// injected before the Done sentinel so the widget can overwrite the bubble.
+func guardStream(upstream <-chan ai.StreamDelta) <-chan ai.StreamDelta {
+	out := make(chan ai.StreamDelta, 32)
+	go func() {
+		defer close(out)
+		var buf strings.Builder
+		for delta := range upstream {
+			if delta.Done {
+				screened := ScreenOutput(buf.String())
+				if screened != buf.String() {
+					out <- ai.StreamDelta{Type: "replace", Content: screened}
+				}
+				out <- ai.StreamDelta{Done: true}
+				return
+			}
+			if delta.Content != "" {
+				buf.WriteString(delta.Content)
+				out <- delta
+			}
+		}
+		// upstream closed without Done — forward a Done so the handler terminates
+		out <- ai.StreamDelta{Done: true}
+	}()
+	return out
 }
 
 // searchPgVector queries the knowledge_base_embeddings for similar chunks.

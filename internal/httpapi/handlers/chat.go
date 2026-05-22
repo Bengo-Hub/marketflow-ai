@@ -200,7 +200,11 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 		}
 		if delta.Content != "" {
 			escaped, _ := json.Marshal(delta.Content)
-			fmt.Fprintf(w, "data: {\"type\":\"delta\",\"content\":%s}\n\n", escaped)
+			evtType := "delta"
+			if delta.Type == "replace" {
+				evtType = "replace"
+			}
+			fmt.Fprintf(w, "data: {\"type\":%q,\"content\":%s}\n\n", evtType, escaped)
 			flusher.Flush()
 		}
 	}

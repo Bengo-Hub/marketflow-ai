@@ -73,6 +73,7 @@ type ChatResponse struct {
 
 // StreamDelta represents a single chunk in a streaming response.
 type StreamDelta struct {
+	Type         string `json:"type,omitempty"` // "delta" (default) or "replace"
 	Content      string `json:"content"`
 	FinishReason string `json:"finish_reason"`
 	Done         bool   `json:"done"`
