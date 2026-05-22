@@ -333,6 +333,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		usageReporter = handlers.NewHTTPUsageReporter(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
 	}
 	chatHandler := handlers.NewChatHandler(pipeline, sessionService, usageReporter, logger)
+	triageHandler := handlers.NewTriageHandler(groqClient, cfg.AI.GroqRouterModel, logger)
+	crmAIHandler := handlers.NewCRMAIHandler(groqClient, cfg.AI.GroqMainModel, cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -367,13 +369,43 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/chat", chatHandler.Chat)
 	})
 
-	// Authenticated chat — for the dashboard AI chat page where the user
-	// is logged in with a JWT or using the platform X-API-Key.
+	// Authenticated chat + CRM AI — JWT or platform X-API-Key.
 	r.Route("/api/v1", func(r chi.Router) {
 		if authMiddleware != nil {
 			r.Use(authMiddleware.RequireAuth)
 		}
 		r.Post("/chat", chatHandler.Chat)
+		r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
+		r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
+	})
+
+	// Internal S2S routes — X-API-Key only (ticketing-api, marketflow-worker).
+	internalKey := cfg.App.InternalServiceKey
+	r.Route("/api/v1/internal", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if internalKey != "" && req.Header.Get("X-API-Key") != internalKey {
+					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, req)
+			})
+		})
+		r.Post("/triage", triageHandler.Triage)
+	})
+
+	// classify — used by ticketing-api (same X-API-Key auth).
+	r.Route("/api/v1/classify", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if internalKey != "" && req.Header.Get("X-API-Key") != internalKey {
+					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, req)
+			})
+		})
+		r.Post("/", triageHandler.Classify)
 	})
 
 	server := &http.Server{
