@@ -170,6 +170,12 @@ func (p *Pipeline) resolveClient(ctx context.Context) (*ai.Client, string) {
 func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, error) {
 	started := time.Now()
 
+	// ── Jailbreak / prompt-injection guard ───────────────────────────────
+	if blocked, resp := ScreenInput(input.Question); blocked {
+		p.logger.Info("jailbreak attempt blocked", zap.String("tenant", input.TenantSlug))
+		return &ChatResult{Response: resp, Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
+	}
+
 	// ── Niche auto-detection ──────────────────────────────────────────────
 	// If the client did not send business_type (public widget on old pages,
 	// direct API calls, or the codevertex-website ChatBot), detect it from
@@ -377,6 +383,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			// Force the model to call a tool on iter 1 so it cannot skip
 			// straight to generating ad copy / plain text answers.
 			ForceToolUse: intentNeedsTools || intentNeedsLiveData,
+			PublicMode:   input.PublicMode,
 		}
 		// task_execute needs more iterations for full tool chains
 		// (check_integrations → kb_search → search_images → calculate_ad_cost → create_campaign).
@@ -385,6 +392,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		}
 		ares, aerr := p.agentLoop.Run(ctx, agentInput)
 		if aerr == nil && ares != nil && ares.Answer != "" {
+			ares.Answer = ScreenOutput(ares.Answer)
 			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding)
 			p.logger.Info("agentic chat completed",
 				zap.Int("iterations", ares.Iterations),
@@ -492,7 +500,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		return nil, fmt.Errorf("empty response from LLM")
 	}
 
-	raw := resp.Choices[0].Message.Content
+	raw := ScreenOutput(resp.Choices[0].Message.Content)
 	filtered := p.filterAndCache(ctx, input, raw, embedding)
 	p.logger.Debug("single-shot completed", zap.Duration("latency", time.Since(started)))
 	return &ChatResult{
@@ -565,6 +573,17 @@ func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw stri
 
 // ChatStream processes a user question and returns a streaming channel.
 func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.StreamDelta, *ChatResult, error) {
+	// Jailbreak guard — same as Chat()
+	if blocked, resp := ScreenInput(input.Question); blocked {
+		p.logger.Info("jailbreak attempt blocked (stream)", zap.String("tenant", input.TenantSlug))
+		ch := make(chan ai.StreamDelta, 1)
+		go func() {
+			ch <- ai.StreamDelta{Content: resp, Done: true}
+			close(ch)
+		}()
+		return ch, &ChatResult{Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
+	}
+
 	// Classify intent
 	intent, confidence, _ := p.router.ClassifyIntent(ctx, input.Question)
 
@@ -673,6 +692,7 @@ func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chun
 
 	var b strings.Builder
 
+	b.WriteString(identityAnchor("Forever Living Products"))
 	b.WriteString(`You are Vera, the AI assistant for a Forever Living Products (FLP) business. You help customers learn about aloe vera products and the FBO business opportunity.
 
 SCOPE — STRICTLY ENFORCED:
@@ -723,6 +743,7 @@ Focus on product information. When recommending products:
 func (p *Pipeline) buildCodevertexSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
 
+	b.WriteString(identityAnchor("Codevertex IT Solutions"))
 	b.WriteString(`You are Vera, the AI support assistant for Codevertex IT Solutions — a premier technology firm headquartered in Kisumu, Kenya, established in 2020.
 
 SCOPE — STRICTLY ENFORCED:
@@ -800,6 +821,7 @@ Focus on Codevertex service capabilities, integration options, and how the Power
 // Used when businessType == "generic" — for any SME, retailer, or service business using MarketFlow.
 func (p *Pipeline) buildGenericMarketingPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
+	b.WriteString(identityAnchor("this business"))
 	b.WriteString(`You are Vera, a friendly and professional AI assistant for this business. You help customers and visitors with product enquiries, service information, and business opportunities.
 
 SCOPE — STRICTLY ENFORCED:
@@ -850,6 +872,7 @@ func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent)
 	}
 
 	var b strings.Builder
+	b.WriteString(identityAnchor("Forever Living Products"))
 	b.WriteString(`You are an agentic AI assistant for a Forever Living Products (FLP) business owner on the MarketFlow platform.
 
 SCOPE — STRICTLY ENFORCED:
@@ -920,6 +943,7 @@ Do NOT skip straight to text generation — always gather context and verify int
 // buildCodevertexAgentSystemPrompt returns the agent system prompt for Codevertex tenants.
 func (p *Pipeline) buildCodevertexAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
+	b.WriteString(identityAnchor("Codevertex IT Solutions"))
 	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex IT Solutions. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
 
 SCOPE — STRICTLY ENFORCED:
@@ -1000,6 +1024,7 @@ If the ad platform is not connected or returns an account-level error (e.g. mana
 // buildGenericMarketingAgentPrompt returns the agent system prompt for generic (non-FLP, non-Codevertex) tenants.
 func (p *Pipeline) buildGenericMarketingAgentPrompt(intent ai.Intent) string {
 	var b strings.Builder
+	b.WriteString(identityAnchor("this business"))
 	b.WriteString(`You are Vera, an agentic AI assistant for a business on the MarketFlow platform. You help business owners and their customers with product enquiries, service information, and marketing campaigns.
 
 SCOPE — STRICTLY ENFORCED:

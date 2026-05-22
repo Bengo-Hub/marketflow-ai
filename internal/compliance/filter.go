@@ -1,60 +1,81 @@
 package compliance
 
 import (
+	"regexp"
 	"strings"
 )
 
-// Filter checks AI responses for FLP compliance violations and injects required disclaimers.
+// Filter checks AI responses for compliance violations and injects required disclaimers.
 type Filter struct {
-	blockedPhrases     []string
-	nutritionalDiscl   string
-	skinCareDiscl      string
-	incomeDiscl        string
-	weightDiscl        string
+	blockedPatterns     []*regexp.Regexp
+	substituteRules     []substituteRule
+	nutritionalDiscl    string
+	skinCareDiscl       string
+	incomeDiscl         string
+	weightDiscl         string
 	nutritionalTriggers []string
-	skinCareTriggers   []string
-	incomeTriggers     []string
-	weightTriggers     []string
+	skinCareTriggers    []string
+	incomeTriggers      []string
+	weightTriggers      []string
+}
+
+type substituteRule struct {
+	pattern     *regexp.Regexp
+	replacement string
 }
 
 // NewFilter creates a compliance filter with FLP rules.
 func NewFilter() *Filter {
 	return &Filter{
-		blockedPhrases: []string{
-			"cures", "treats disease", "heals disease", "prevents disease", "prevents cancer",
-			"fda approved", "miracle", "magic", "wonder drug",
-			"guaranteed income", "get rich", "financial freedom guaranteed",
-			"no work required", "passive income guaranteed", "easy money",
-			"make money fast",
+		// Regex patterns — cover all tense/form variants so "curing" bypasses are blocked.
+		blockedPatterns: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bcure[sd]?\b|\bcuring\b`),
+			regexp.MustCompile(`(?i)\btreat[sed]?\b|\btreating\b|\btreatment\b`),
+			regexp.MustCompile(`(?i)\bheal[sed]?\b|\bhealing\b`),
+			regexp.MustCompile(`(?i)\bprevent[sed]?\b|\bpreventing\b`),
+			regexp.MustCompile(`(?i)\bfda[\s-]approved\b`),
+			regexp.MustCompile(`(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b`),
+			regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`),
+			regexp.MustCompile(`(?i)\bget\s+rich\b`),
+			regexp.MustCompile(`(?i)\bfinancial\s+freedom\s+guaranteed\b`),
+			regexp.MustCompile(`(?i)\bno\s+work\s+required\b`),
+			regexp.MustCompile(`(?i)\bpassive\s+income\s+guaranteed\b`),
+			regexp.MustCompile(`(?i)\beasy\s+money\b`),
+			regexp.MustCompile(`(?i)\bmake\s+money\s+fast\b`),
+		},
+		substituteRules: []substituteRule{
+			{regexp.MustCompile(`(?i)\bcure[sd]?\b`), "supports"},
+			{regexp.MustCompile(`(?i)\bcuring\b`), "supporting"},
+			{regexp.MustCompile(`(?i)\btreats?\b`), "promotes"},
+			{regexp.MustCompile(`(?i)\bheals?\b`), "helps maintain"},
+			{regexp.MustCompile(`(?i)\bhealing\b`), "helping maintain"},
+			{regexp.MustCompile(`(?i)\bprevents?\s+disease\b`), "supports healthy"},
+			{regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`), "potential earnings (results vary)"},
 		},
 		nutritionalDiscl: "\n\n*These statements have not been evaluated by the Food and Drug Administration. These products are not intended to diagnose, treat, cure, or prevent any disease.*",
 		skinCareDiscl:    "\n\n*These products are not intended to cure or prevent any diseases and are not a substitute for medical advice or therapy.*",
 		incomeDiscl:      "\n\n*Profits and bonuses shown are illustrations and do not reflect typical earnings. Results vary. See the FLP Income Disclosure Statement at foreverliving.com.*",
 		weightDiscl:      "\n\n*Individual results may vary. Combined with proper diet and exercise.*",
 		nutritionalTriggers: []string{"health", "nutrition", "supplement", "vitamin", "immune", "digestive", "energy", "wellness", "aloe"},
-		skinCareTriggers:   []string{"skin", "wrinkle", "anti-aging", "moisturize", "complexion", "sonya", "infinite"},
-		incomeTriggers:     []string{"earn", "income", "money", "salary", "commission", "bonus", "profit", "financial", "manager", "supervisor"},
-		weightTriggers:     []string{"weight", "slim", "fat", "diet", "cleanse", "detox", "c9", "f15", "clean 9", "fit 15"},
+		skinCareTriggers:    []string{"skin", "wrinkle", "anti-aging", "moisturize", "complexion", "sonya", "infinite"},
+		incomeTriggers:      []string{"earn", "income", "money", "salary", "commission", "bonus", "profit", "financial", "manager", "supervisor"},
+		weightTriggers:      []string{"weight", "slim", "fat", "diet", "cleanse", "detox", "c9", "f15", "clean 9", "fit 15"},
 	}
 }
 
 // Check validates an AI response and returns the filtered response with disclaimers.
 // Returns (filteredResponse, blocked, reason). Applies FLP compliance rules.
-// For non-FLP tenants (business_type='generic'), use CheckGeneric instead.
+// For non-FLP tenants use CheckGeneric instead.
 func (f *Filter) Check(response string) (string, bool, string) {
-	lower := strings.ToLower(response)
-
-	// Check for blocked phrases
-	for _, phrase := range f.blockedPhrases {
-		if strings.Contains(lower, phrase) {
-			return "", true, "blocked phrase: " + phrase
+	for _, re := range f.blockedPatterns {
+		if re.MatchString(response) {
+			return "", true, "blocked pattern: " + re.String()
 		}
 	}
 
-	// Apply approved language substitutions
 	response = f.substituteLanguage(response)
 
-	// Inject required disclaimers based on content
+	lower := strings.ToLower(response)
 	disclaimers := ""
 	if f.containsAny(lower, f.nutritionalTriggers) {
 		disclaimers += f.nutritionalDiscl
@@ -80,14 +101,17 @@ func (f *Filter) Check(response string) (string, bool, string) {
 // Applies minimal safety rules (no medical claims, no guaranteed income) but
 // skips FLP-specific disclaimers and product-name substitutions.
 func (f *Filter) CheckGeneric(response string) (string, bool, string) {
-	lower := strings.ToLower(response)
-	hardBlocks := []string{
-		"cures", "miracle", "magic", "wonder drug",
-		"guaranteed income", "get rich", "easy money", "make money fast",
+	hardBlocks := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bcure[sd]?\b|\bcuring\b`),
+		regexp.MustCompile(`(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b`),
+		regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`),
+		regexp.MustCompile(`(?i)\bget\s+rich\b`),
+		regexp.MustCompile(`(?i)\beasy\s+money\b`),
+		regexp.MustCompile(`(?i)\bmake\s+money\s+fast\b`),
 	}
-	for _, phrase := range hardBlocks {
-		if strings.Contains(lower, phrase) {
-			return "", true, "blocked phrase: " + phrase
+	for _, re := range hardBlocks {
+		if re.MatchString(response) {
+			return "", true, "blocked pattern: " + re.String()
 		}
 	}
 	return response, false, ""
@@ -105,15 +129,8 @@ func (f *Filter) CheckForTenant(response, businessType string) (string, bool, st
 
 // substituteLanguage replaces prohibited medical claims with approved language.
 func (f *Filter) substituteLanguage(response string) string {
-	replacements := map[string]string{
-		"cures":             "supports",
-		"treats":            "promotes",
-		"heals":             "helps maintain",
-		"prevents disease":  "supports healthy",
-		"guaranteed income": "potential earnings (results vary)",
-	}
-	for old, replacement := range replacements {
-		response = caseInsensitiveReplace(response, old, replacement)
+	for _, rule := range f.substituteRules {
+		response = rule.pattern.ReplaceAllString(response, rule.replacement)
 	}
 	return response
 }
@@ -125,14 +142,4 @@ func (f *Filter) containsAny(text string, triggers []string) bool {
 		}
 	}
 	return false
-}
-
-func caseInsensitiveReplace(s, old, replacement string) string {
-	lower := strings.ToLower(s)
-	oldLower := strings.ToLower(old)
-	idx := strings.Index(lower, oldLower)
-	if idx < 0 {
-		return s
-	}
-	return s[:idx] + replacement + s[idx+len(old):]
 }

@@ -62,4 +62,5 @@ type Input struct {
 	Question     string
 	MaxIters     int  // optional per-request override; 0 means use Loop default
 	ForceToolUse bool // set true for task_execute / data_query — forces ToolChoice:"required" on iter 1
+	PublicMode   bool // true for /public/chat — mutation tools are blocked, lower tool call cap
 }

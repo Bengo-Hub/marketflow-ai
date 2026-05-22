@@ -72,6 +72,10 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "question is required")
 		return
 	}
+	if len([]rune(req.Question)) > 1000 {
+		writeError(w, http.StatusBadRequest, "message too long (max 1000 characters)")
+		return
+	}
 
 	// Resolve or create the session; load history if existing.
 	sessionID, history, err := h.resolveSession(r.Context(), tenantID, req.SessionID)

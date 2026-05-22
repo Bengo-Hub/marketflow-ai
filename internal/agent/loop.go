@@ -10,6 +10,25 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxToolCallsPerTurn is the hard limit on tool invocations within a single
+// LLM response. Prevents prompt-injection from triggering unbounded tool chains.
+const maxToolCallsPerTurn = 5
+
+// mutationTools are tools that create or modify data. They are blocked when the
+// request comes from the public widget (PublicMode=true) to prevent abuse.
+var mutationTools = map[string]bool{
+	"create_deal":         true,
+	"create_campaign":     true,
+	"create_funnel":       true,
+	"create_task":         true,
+	"create_activity":     true,
+	"create_ticket":       true,
+	"book_meeting":        true,
+	"draft_email":         true,
+	"move_pipeline_stage": true,
+	"enrich_contact":      true,
+}
+
 // Loop drives the tool-calling agentic RAG conversation.
 type Loop struct {
 	client    *ai.Client
@@ -132,8 +151,29 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 		// Append assistant's tool-calling message to history.
 		messages = append(messages, choice.Message)
 
-		// Dispatch each tool call sequentially.
+		// Dispatch each tool call sequentially, subject to per-turn limits.
+		turnToolCalls := 0
 		for _, tc := range choice.Message.ToolCalls {
+			if turnToolCalls >= maxToolCallsPerTurn {
+				l.logger.Warn("per-turn tool call limit reached; truncating",
+					zap.Int("limit", maxToolCallsPerTurn),
+					zap.String("dropped_tool", tc.Function.Name))
+				break
+			}
+
+			// Block mutation tools in public-mode (widget) requests.
+			if in.PublicMode && mutationTools[tc.Function.Name] {
+				toolResult := `{"error":"this action is not available from the public widget"}`
+				entry.ToolCalls = append(entry.ToolCalls, TraceToolCall{
+					Name: tc.Function.Name, Args: tc.Function.Arguments,
+					Error: "blocked in public mode",
+				})
+				messages = append(messages, ai.Message{
+					Role: "tool", Content: toolResult, ToolCallID: tc.ID, Name: tc.Function.Name,
+				})
+				continue
+			}
+
 			tool, ok := l.tools[tc.Function.Name]
 			if !ok {
 				toolResult := fmt.Sprintf(`{"error":"unknown tool: %s"}`, tc.Function.Name)
@@ -157,6 +197,7 @@ func (l *Loop) Run(ctx context.Context, in Input) (*Result, error) {
 			}
 			entry.ToolCalls = append(entry.ToolCalls, rec)
 			result.ToolCallsN++
+			turnToolCalls++
 			messages = append(messages, ai.Message{
 				Role: "tool", Content: out, ToolCallID: tc.ID, Name: tc.Function.Name,
 			})

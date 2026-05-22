@@ -14,6 +14,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/config"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
+	mw "github.com/bengobox/marketflow-ai/internal/middleware"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
@@ -363,9 +364,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Get("/api/v1/openapi.json", httpapi.OpenAPIJSON)
 
 	// Public chat endpoint — no auth required. The embeddable widget on
-	// /p/{slug} and external sites uses this. Rate-limited by tenant slug
-	// (via the existing per-tenant daily caps on web_search + AI credits).
+	// /p/{slug} and external sites uses this. Rate-limited per-IP (15/min)
+	// and per-tenant (100/min) to prevent flooding.
 	r.Route("/api/v1/public", func(r chi.Router) {
+		r.Use(mw.RateLimit(redisClient, 15, 100))
 		r.Post("/chat", chatHandler.Chat)
 	})
 
