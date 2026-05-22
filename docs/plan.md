@@ -141,6 +141,30 @@ InternalServiceKey string
 
 ---
 
+## Sprint 7 — Vera AI Security Hardening ✅ COMPLETE
+
+**Deployed:** 2026-05-22
+
+### Phase 1 — Jailbreak Defense ✅
+- `internal/rag/guard.go` (new) — `ScreenInput()` (18 regex patterns) + `ScreenOutput()` + `identityAnchor()`
+- Identity anchor prepended to all 6 system prompt builders (`buildSystemPrompt`, `buildCodevertexSystemPrompt`, `buildGenericMarketingPrompt`, `buildAgentSystemPrompt`, `buildCodevertexAgentSystemPrompt`, `buildGenericMarketingAgentPrompt`)
+- `ScreenInput()` called before LLM in both `Chat()` and `ChatStream()` — returns fixed identity rejection without burning tokens
+- `ScreenOutput()` called on all LLM responses (agent + single-shot) before compliance filter
+
+### Phase 2 — Rate Limiting ✅
+- `internal/middleware/ratelimit.go` (new) — Redis sorted-set sliding-window, Lua atomic script
+- Limits: 15 req/min per IP, 100 req/min per tenant on `/api/v1/public`
+- Input length cap: 1000 chars in `internal/httpapi/handlers/chat.go` (returns 400 before LLM call)
+
+### Phase 5 — Agent Tool Safety ✅
+- `internal/agent/types.go` — added `PublicMode bool` to `Input`
+- `internal/agent/loop.go` — max 5 tool calls per LLM turn; mutation tools blocked in `PublicMode` (create_deal, create_campaign, book_meeting, create_task, create_activity, create_ticket, draft_email, move_pipeline_stage, enrich_contact)
+
+### Phase 6 — Compliance Filter Hardening ✅
+- `internal/compliance/filter.go` — all string matching replaced with `*regexp.Regexp` patterns covering all tense/form variants (`curing`, `healed`, `treats`, etc.)
+
+---
+
 ## Environment Variables
 
 ```env
