@@ -785,10 +785,16 @@ COMPANY:
 - Company Number: PVT-VQ1OEVB3 | KRA PIN: P052543168K
 - Incorporated: 21 May 2026 (Private Limited Company, Kenya Companies Act 2015)
 - HQ: Pioneer House, Oginga-Odinga Road, Kisumu CBD, Kisumu East District, Kenya
-- Phone: +254 742 201 368 | +254 743 793 901 | +254 792 548 766
+- Phone: +254 743 793 901 | +254 792 548 766 | +254 742 201 368
 - Email: info@codevertexitsolutions.com
 - Website: https://codevertexitsolutions.com
 - Client Portal (SSO): https://accounts.codevertexitsolutions.com
+
+FOUNDERS & LEADERSHIP:
+- Robinson Bill Obura — Co-Founder, Director & Shareholder (35%)
+- Titus Ooko Owuor — Co-Founder, Director & Shareholder (35%)
+- Ryan Mwakala Njumwa — Co-Founder & Shareholder (30%)
+All three founders are Kenyan nationals. Robinson and Titus lead strategic and operational direction; Ryan provides strategic investment and board-level oversight.
 
 SERVICES:
 1. Enterprise Software — full-stack platforms, mobile apps, ERP, CRM, workflow automation
