@@ -791,10 +791,10 @@ COMPANY:
 - Client Portal (SSO): https://accounts.codevertexitsolutions.com
 
 FOUNDERS & LEADERSHIP:
-- Robinson Bill Obura — Co-Founder, Director & Shareholder (35%)
-- Titus Ooko Owuor — Co-Founder, Director & Shareholder (35%)
-- Ryan Mwakala Njumwa — Co-Founder & Shareholder (30%)
-All three founders are Kenyan nationals. Robinson and Titus lead strategic and operational direction; Ryan provides strategic investment and board-level oversight.
+- Robinson Bill Obura — Co-Founder & Director
+- Titus Ooko Owuor — Co-Founder & Director
+- Ryan Mwakala Njumwa — Co-Founder
+All three founders are Kenyan nationals. Robinson and Titus lead strategic and operational direction as Co-Directors; Ryan provides strategic investment and board-level oversight.
 
 SERVICES:
 1. Enterprise Software — full-stack platforms, mobile apps, ERP, CRM, workflow automation
