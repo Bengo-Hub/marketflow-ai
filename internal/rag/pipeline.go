@@ -244,7 +244,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		case "flp":
 			offTopicMsg = "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
 		case "codevertex":
-			offTopicMsg = "I'm Vera, the Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+			offTopicMsg = "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
 		default:
 			offTopicMsg = "I'm Vera, your AI assistant. I can help with products, services, and business questions. What would you like to know?"
 		}
@@ -255,7 +255,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		case "flp":
 			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
 		case "codevertex":
-			escalateMsg = "I'd be happy to connect you with the Codevertex team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, 2nd Floor, Oginga Street, Kisumu."
+			escalateMsg = "I'd be happy to connect you with the Codevertex Africa Limited team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, Oginga-Odinga Road, Kisumu."
 		default:
 			escalateMsg = "I'd be happy to connect you with the team. Please use the contact options below or send them a message directly."
 		}
@@ -270,7 +270,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			case "flp":
 				resp = "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
 			case "codevertex":
-				resp = "Hello! I'm Vera, your Codevertex AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+				resp = "Hello! I'm Vera, your Codevertex Africa Limited AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
 			default:
 				resp = "Hello! I'm Vera, your AI assistant. Feel free to ask me about products, services, or anything else I can help with."
 			}
@@ -551,7 +551,7 @@ func (p *Pipeline) applyFilter(raw, businessType string) string {
 		case "flp":
 			return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 		case "codevertex":
-			return "I appreciate your question! For the most accurate information about Codevertex services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+			return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
 		default:
 			return "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
 		}
@@ -710,7 +710,7 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 //
 // businessType routing:
 //   "flp"        → Forever Living Products persona (compliance rules, FBO focus)
-//   "codevertex" → Codevertex IT Solutions persona (Power Suite, Digitika, services)
+//   "codevertex" → Codevertex Africa Limited persona (Power Suite, Digitika, services)
 //   "generic"    → Neutral marketing assistant persona (any business)
 //   ""           → Codevertex (legacy default; auto-detect should have set a value)
 func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chunks []SearchResult) string {
@@ -774,16 +774,18 @@ Focus on product information. When recommending products:
 func (p *Pipeline) buildCodevertexSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
 
-	b.WriteString(identityAnchor("Codevertex IT Solutions"))
-	b.WriteString(`You are Vera, the AI support assistant for Codevertex IT Solutions — a premier technology firm headquartered in Kisumu, Kenya, established in 2020.
+	b.WriteString(identityAnchor("Codevertex Africa Limited"))
+	b.WriteString(`You are Vera, the AI support assistant for Codevertex Africa Limited — a premier technology firm headquartered in Kisumu, Kenya, incorporated on 21 May 2026 (formerly established in 2020 as Codevertex IT Solutions).
 
 SCOPE — STRICTLY ENFORCED:
-You ONLY answer questions about Codevertex IT Solutions, its services, the Power Suite platform, Digitika Academy courses, and relevant technology consulting. If the user asks about unrelated topics (general homework, celebrity gossip, sports scores, cooking, competitor products unrelated to a comparison, etc.), politely say: "I'm Vera, the Codevertex AI assistant. I can help with our services, courses, or platform — but that's outside what I can assist with here."
+You ONLY answer questions about Codevertex Africa Limited, its services, the Power Suite platform, Digitika Academy courses, and relevant technology consulting. If the user asks about unrelated topics (general homework, celebrity gossip, sports scores, cooking, competitor products unrelated to a comparison, etc.), politely say: "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our services, courses, or platform — but that's outside what I can assist with here."
 
 COMPANY:
-- Full name: Codevertex IT Solutions
-- HQ: Pioneer House, 2nd Floor, Oginga Street, Kisumu, Kenya
-- Phone: +254 743 793 901 | +254 792 548 766
+- Full name: Codevertex Africa Limited
+- Company Number: PVT-VQ1OEVB3 | KRA PIN: P052543168K
+- Incorporated: 21 May 2026 (Private Limited Company, Kenya Companies Act 2015)
+- HQ: Pioneer House, Oginga-Odinga Road, Kisumu CBD, Kisumu East District, Kenya
+- Phone: +254 742 201 368 | +254 743 793 901 | +254 792 548 766
 - Email: info@codevertexitsolutions.com
 - Website: https://codevertexitsolutions.com
 - Client Portal (SSO): https://accounts.codevertexitsolutions.com
@@ -832,7 +834,7 @@ When answering about products or services, mention the specific platform URL, pr
 `)
 	case ai.IntentBusinessOpp, ai.IntentRecruitment:
 		b.WriteString(`
-Focus on Codevertex service capabilities, integration options, and how the Power Suite can solve the user's business problem. Mention relevant case studies or the Digitika Academy if training is relevant.
+Focus on Codevertex Africa Limited service capabilities, integration options, and how the Power Suite can solve the user's business problem. Mention relevant case studies or the Digitika Academy if training is relevant.
 `)
 	}
 
@@ -891,7 +893,7 @@ PERSONA RULES:
 //
 // businessType routing:
 //   "flp"        → FLP marketing agent (product links, compliance, FBO tools)
-//   "codevertex" → Codevertex agent (Power Suite, Digitika, S2S data tools)
+//   "codevertex" → Codevertex Africa Limited agent (Power Suite, Digitika, S2S data tools)
 //   "generic"    → Generic marketing agent (any business, neutral persona)
 //   ""           → Codevertex (legacy default)
 func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent) string {
@@ -974,11 +976,11 @@ Do NOT skip straight to text generation — always gather context and verify int
 // buildCodevertexAgentSystemPrompt returns the agent system prompt for Codevertex tenants.
 func (p *Pipeline) buildCodevertexAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("Codevertex IT Solutions"))
-	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex IT Solutions. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
+	b.WriteString(identityAnchor("Codevertex Africa Limited"))
+	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex Africa Limited. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
 
 SCOPE — STRICTLY ENFORCED:
-You ONLY answer questions about Codevertex IT Solutions: its services, Power Suite products, Digitika Academy, and technology consulting. If asked about unrelated topics (general homework, cooking, sports, entertainment, or any topic not related to Codevertex's business), respond: "I'm Vera, the Codevertex AI assistant. I can help with our IT services, platform products, or courses — but that's outside what I can assist with here." Do NOT use any tools to answer out-of-scope questions.
+You ONLY answer questions about Codevertex Africa Limited: its services, Power Suite products, Digitika Academy, and technology consulting. If asked about unrelated topics (general homework, cooking, sports, entertainment, or any topic not related to Codevertex's business), respond: "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our IT services, platform products, or courses — but that's outside what I can assist with here." Do NOT use any tools to answer out-of-scope questions.
 
 TOOLS AVAILABLE:
 Knowledge & Search:
@@ -1002,7 +1004,7 @@ RULES:
 - Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
 - When recommending a Digitika course, always mention the KES price and payment method (M-Pesa / card via books.codevertexitsolutions.com).
 - When discussing Power Suite products, include the relevant URL (e.g. pos.codevertexitsolutions.com).
-- For technical or custom project enquiries, suggest contacting info@codevertexitsolutions.com or +254 743 793 901.
+- For technical or custom project enquiries, suggest contacting info@codevertexitsolutions.com or +254 742 201 368.
 - Format responses with markdown: **bold** for key terms, bullet points for lists.
 - Keep responses comprehensive but concise — aim for 150–300 words.
 `)
@@ -1133,7 +1135,7 @@ func detectNiche(question string) string {
 
 	// Codevertex / platform keywords
 	cvKW := []string{
-		"codevertex", "digitika", "power suite", "marketflow", "marktflow",
+		"codevertex", "codevertex africa", "digitika", "power suite", "marketflow", "marktflow",
 		"erp", "pos system", "isp billing", "truload", "logistics app",
 		"ordering app", "superset analytics", "books treasury",
 		"ccna", "icdl", "software engineering course", "web dev course",
@@ -1163,7 +1165,7 @@ func offTopicMessage(businessType string) string {
 	case "flp":
 		return "I'm Vera, your Forever Living Products assistant. I can help with FLP products, health & wellness tips, or the FBO business opportunity — but that question is outside my expertise. What can I help you with today?"
 	case "codevertex":
-		return "I'm Vera, the Codevertex AI assistant. I can help with our IT services, Power Suite products, Digitika Academy courses, or technical questions. What would you like to know?"
+		return "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our IT services, Power Suite products, Digitika Academy courses, or technical questions. What would you like to know?"
 	default:
 		return "I'm Vera, your business assistant. I can help with products, services, and business questions related to this company. What would you like to know?"
 	}
