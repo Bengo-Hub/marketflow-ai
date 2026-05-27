@@ -68,29 +68,39 @@ func (c *cacheLayer) getSemantic(ctx context.Context, tenantID uuid.UUID, embedd
 		return "", false
 	}
 	pattern := c.semPrefix(tenantID) + "*"
-	keys, err := c.redis.Keys(ctx, pattern).Result()
-	if err != nil || len(keys) == 0 {
-		return "", false
-	}
-	// Scan up to 50 recent entries; if any has cosine sim > 0.92, return it.
-	limit := 50
-	if len(keys) < limit {
-		limit = len(keys)
-	}
-	for _, k := range keys[:limit] {
-		raw, err := c.redis.Get(ctx, k).Result()
-		if err != nil || raw == "" {
-			continue
+	// Use SCAN instead of KEYS to avoid blocking Redis on large keyspaces.
+	// Stop after inspecting 50 candidates — sufficient for semantic matching.
+	const scanLimit = 50
+	var cursor uint64
+	checked := 0
+	for {
+		keys, next, err := c.redis.Scan(ctx, cursor, pattern, 20).Result()
+		if err != nil {
+			return "", false
 		}
-		var entry semCacheEntry
-		if json.Unmarshal([]byte(raw), &entry) != nil || len(entry.Embedding) == 0 {
-			continue
+		for _, k := range keys {
+			raw, err := c.redis.Get(ctx, k).Result()
+			if err != nil || raw == "" {
+				continue
+			}
+			var entry semCacheEntry
+			if json.Unmarshal([]byte(raw), &entry) != nil || len(entry.Embedding) == 0 {
+				continue
+			}
+			sim := cosineSim(embedding, entry.Embedding)
+			if sim >= 0.92 {
+				c.logger.Debug("semantic cache hit", zap.Float64("sim", sim), zap.String("key", k))
+				return entry.Response, true
+			}
+			checked++
+			if checked >= scanLimit {
+				return "", false
+			}
 		}
-		sim := cosineSim(embedding, entry.Embedding)
-		if sim >= 0.92 {
-			c.logger.Debug("semantic cache hit", zap.Float64("sim", sim), zap.String("key", k))
-			return entry.Response, true
+		if next == 0 {
+			break
 		}
+		cursor = next
 	}
 	return "", false
 }
