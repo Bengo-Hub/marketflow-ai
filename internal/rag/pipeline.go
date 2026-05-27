@@ -245,6 +245,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			offTopicMsg = "I'm here to help with Forever Living Products and business opportunities. Could you ask me about our products, wellness tips, or the FBO business?"
 		case "codevertex":
 			offTopicMsg = "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+		case "cafe":
+			offTopicMsg = "I'm Vera, your cafe assistant. I can help with our menu, upcoming events, table reservations, or anything about your dining experience. What would you like to know?"
 		default:
 			offTopicMsg = "I'm Vera, your AI assistant. I can help with products, services, and business questions. What would you like to know?"
 		}
@@ -256,6 +258,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
 		case "codevertex":
 			escalateMsg = "I'd be happy to connect you with the Codevertex Africa Limited team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, Oginga-Odinga Road, Kisumu."
+		case "cafe":
+			escalateMsg = "I'd be happy to help you get in touch with our team. Please use the contact details on our website, give us a call, or visit us in person — we'd love to see you!"
 		default:
 			escalateMsg = "I'd be happy to connect you with the team. Please use the contact options below or send them a message directly."
 		}
@@ -271,6 +275,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 				resp = "Hello! Welcome to Forever Living Products. I can help you with product info, the business opportunity, or anything else about Forever. What would you like to know?"
 			case "codevertex":
 				resp = "Hello! I'm Vera, your Codevertex Africa Limited AI assistant. I can help with our IT services, Digitika Academy courses, or the Power Suite platform. What would you like to know?"
+			case "cafe":
+				resp = "Hello! Welcome! I'm Vera, your cafe assistant. I can help with our menu, upcoming events, table reservations, or anything about your visit. What can I help you with today?"
 			default:
 				resp = "Hello! I'm Vera, your AI assistant. Feel free to ask me about products, services, or anything else I can help with."
 			}
@@ -552,6 +558,8 @@ func (p *Pipeline) applyFilter(raw, businessType string) string {
 			return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 		case "codevertex":
 			return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+		case "cafe":
+			return "I appreciate your question! For the most accurate information, please contact the cafe directly or visit us in person."
 		default:
 			return "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
 		}
@@ -711,13 +719,19 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 // businessType routing:
 //   "flp"        → Forever Living Products persona (compliance rules, FBO focus)
 //   "codevertex" → Codevertex Africa Limited persona (Power Suite, Digitika, services)
+//   "cafe"       → Cafe/restaurant persona (menu, events, reservations)
 //   "generic"    → Neutral marketing assistant persona (any business)
 //   ""           → Codevertex (legacy default; auto-detect should have set a value)
 func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chunks []SearchResult) string {
-	if businessType == "generic" {
+	switch businessType {
+	case "generic":
 		return p.buildGenericMarketingPrompt(intent, chunks)
-	}
-	if businessType != "flp" {
+	case "cafe":
+		return p.buildCafeSystemPrompt(intent, chunks)
+	case "flp":
+		// handled below
+	default:
+		// "codevertex", "", or any unrecognised type → Codevertex persona
 		return p.buildCodevertexSystemPrompt(intent, chunks)
 	}
 
@@ -900,13 +914,18 @@ PERSONA RULES:
 // businessType routing:
 //   "flp"        → FLP marketing agent (product links, compliance, FBO tools)
 //   "codevertex" → Codevertex Africa Limited agent (Power Suite, Digitika, S2S data tools)
+//   "cafe"       → Cafe agent (menu, events, reservations)
 //   "generic"    → Generic marketing agent (any business, neutral persona)
 //   ""           → Codevertex (legacy default)
 func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent) string {
-	if businessType == "generic" {
+	switch businessType {
+	case "generic":
 		return p.buildGenericMarketingAgentPrompt(intent)
-	}
-	if businessType != "flp" {
+	case "cafe":
+		return p.buildCafeAgentSystemPrompt(intent)
+	case "flp":
+		// handled below
+	default:
 		return p.buildCodevertexAgentSystemPrompt(intent)
 	}
 
@@ -1114,6 +1133,77 @@ If wallet balance is insufficient, guide to /settings/billing.
 	return b.String()
 }
 
+// buildCafeSystemPrompt returns the Vera persona for cafe/restaurant tenants.
+func (p *Pipeline) buildCafeSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
+	var b strings.Builder
+	b.WriteString(identityAnchor("this cafe"))
+	b.WriteString(`You are Vera, a warm and knowledgeable AI assistant for this cafe. You help guests with menu enquiries, event information, table reservations, opening hours, and anything about their dining experience.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions relevant to this cafe: its food, drinks, menu, events, opening hours, table reservations, location, and dining experience. If the user asks about unrelated topics (general programming, homework, sports, politics, or anything not related to this cafe), respond: "I'm Vera, your cafe assistant. I can help with our menu, events, reservations, and anything related to your dining experience — but that's outside what I can help with here."
+
+PERSONA RULES:
+- Warm, hospitable, and inviting — like a knowledgeable barista or gracious host
+- Keep responses concise (2–4 sentences for simple questions, structured lists for menu items)
+- Never make up menu items, prices, or contact details — draw only from the knowledge base context provided
+- If you don't know something specific, say so warmly and suggest the guest contact the cafe directly or visit in person
+- Format responses with markdown: **bold** for key terms, bullet points for lists
+- Always be enthusiastic about the food, drinks, and overall experience — make guests excited to visit!
+`)
+
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString("\nWhen answering about menu items or drinks, include any relevant pricing, dietary info, and availability. Suggest pairings or daily specials if context is available.\n")
+	case ai.IntentEscalate:
+		b.WriteString("\nThe guest wants to speak to someone directly. Offer the available contact options: phone, email, walk-in, or a reservation booking link if available.\n")
+	}
+
+	if len(chunks) > 0 {
+		b.WriteString("\n--- KNOWLEDGE BASE CONTEXT ---\n")
+		for _, c := range chunks {
+			b.WriteString(fmt.Sprintf("[%s] %s: %s\n\n", c.Category, c.Title, c.ChunkText))
+		}
+		b.WriteString("--- END CONTEXT ---\n")
+		b.WriteString("Use the above context to answer. If the context doesn't cover the question, say so honestly.\n")
+	}
+
+	return b.String()
+}
+
+// buildCafeAgentSystemPrompt returns the agent system prompt for cafe/restaurant tenants.
+func (p *Pipeline) buildCafeAgentSystemPrompt(intent ai.Intent) string {
+	var b strings.Builder
+	b.WriteString(identityAnchor("this cafe"))
+	b.WriteString(`You are Vera, an agentic AI assistant for a cafe. You help guests with menu enquiries, event information, table reservations, and general questions about their dining experience.
+
+SCOPE — STRICTLY ENFORCED:
+You ONLY answer questions relevant to this cafe: its food, drinks, events, opening hours, and reservations. If asked about unrelated topics, respond: "I'm Vera, your cafe assistant. I can help with our menu, events, or reservations — but that's outside what I can help with here." Do NOT call any tools for out-of-scope questions.
+
+TOOLS AVAILABLE:
+Knowledge & Search:
+- kb_search: semantic search over the cafe's knowledge base (menu, events, FAQ, hours, location). ALWAYS try this first.
+- get_faq: fetch FAQ entries by keyword.
+- web_search: live web search. Use only when KB doesn't cover the topic.
+
+RULES:
+- Call tools iteratively; reason step by step.
+- Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
+- Keep responses concise — 150–300 words with relevant details.
+- Never make up menu items, prices, or contact information — cite only what tools or the KB return.
+- Format responses with markdown: **bold** for key terms, bullet points for lists.
+- Always be warm and hospitable in tone — you represent a welcoming dining experience.
+`)
+
+	switch intent {
+	case ai.IntentProductQA:
+		b.WriteString("\nFocus on the specific menu item or drink: name, description, price if known, and any dietary notes. Suggest pairings or specials if relevant.\n")
+	case ai.IntentServiceInquiry:
+		b.WriteString("\nFocus on the event or service the guest is asking about. Include date, time, price if known, and how to book or attend.\n")
+	}
+
+	return b.String()
+}
+
 // detectNiche infers businessType from question keywords when the client does not
 // send an explicit business_type. Returns "flp", "codevertex", or "generic".
 // This is a fast heuristic — no LLM call, runs in microseconds.
@@ -1156,6 +1246,21 @@ func detectNiche(question string) string {
 		}
 	}
 
+	// Cafe / restaurant keywords
+	cafeKW := []string{
+		"menu", "food", "drink", "coffee", "espresso", "latte", "cappuccino",
+		"brunch", "lunch", "dinner", "breakfast", "table reservation", "reserve a table",
+		"book a table", "dining", "restaurant", "cafe", "bistro", "bakery",
+		"pastry", "dessert", "cocktail", "wine", "beer", "smoothie",
+		"opening hours", "opening time", "what time do you open", "what time do you close",
+		"urban loft", "urbanloft",
+	}
+	for _, kw := range cafeKW {
+		if strings.Contains(q, kw) {
+			return "cafe"
+		}
+	}
+
 	// Default: generic — neutral marketing assistant for any other business
 	return "generic"
 }
@@ -1172,6 +1277,8 @@ func offTopicMessage(businessType string) string {
 		return "I'm Vera, your Forever Living Products assistant. I can help with FLP products, health & wellness tips, or the FBO business opportunity — but that question is outside my expertise. What can I help you with today?"
 	case "codevertex":
 		return "I'm Vera, the Codevertex Africa Limited AI assistant. I can help with our IT services, Power Suite products, Digitika Academy courses, or technical questions. What would you like to know?"
+	case "cafe":
+		return "I'm Vera, your cafe assistant. I can help with the menu, upcoming events, table reservations, or anything about your dining experience — but that question is a bit outside my area. What can I help you with today?"
 	default:
 		return "I'm Vera, your business assistant. I can help with products, services, and business questions related to this company. What would you like to know?"
 	}
@@ -1226,6 +1333,19 @@ func scopeGuard(businessType, question string) bool {
 			"sports score", "movie review", "song lyrics",
 		}
 		for _, p := range flpBlocks {
+			if strings.Contains(q, p) {
+				return true
+			}
+		}
+
+	case "cafe":
+		cafeBlocks := []string{
+			"write my essay", "do my homework", "homework help",
+			"stock market tips", "crypto signals", "forex trading tips",
+			"movie review", "celebrity gossip", "song lyrics",
+			"programming", "write code", "coding tutorial",
+		}
+		for _, p := range cafeBlocks {
 			if strings.Contains(q, p) {
 				return true
 			}

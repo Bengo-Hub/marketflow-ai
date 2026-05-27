@@ -87,13 +87,22 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Detect if this is a public/widget request (no auth required).
 	isPublic := strings.Contains(r.URL.Path, "/public/")
 
+	// X-Widget-Persona is a fallback when the widget does not explicitly send
+	// business_type in the request body (e.g. older embed codes or non-MarketFlow widgets).
+	businessType := req.BusinessType
+	if businessType == "" {
+		if persona := r.Header.Get("X-Widget-Persona"); persona != "" {
+			businessType = personaToBusinessType(persona)
+		}
+	}
+
 	input := rag.ChatInput{
 		TenantID:     tenantID,
 		TenantSlug:   r.Header.Get("X-Tenant-ID"), // original slug for tool lookups
 		SessionID:    sessionID,
 		Question:     req.Question,
 		History:      history,
-		BusinessType: req.BusinessType,
+		BusinessType: businessType,
 		PublicMode:   isPublic,
 	}
 
@@ -240,6 +249,22 @@ func extractTenantID(r *http.Request) (uuid.UUID, error) {
 	// rows (which power most public chat) are always included regardless.
 	slugUUID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("marketflow:tenant:"+header))
 	return slugUUID, nil
+}
+
+// personaToBusinessType maps the X-Widget-Persona header value to a businessType
+// recognised by the RAG pipeline. Used when the widget embed does not send business_type.
+func personaToBusinessType(persona string) string {
+	p := strings.ToLower(persona)
+	switch {
+	case strings.Contains(p, "cafe") || strings.Contains(p, "loft") || strings.Contains(p, "restaurant") || strings.Contains(p, "bistro"):
+		return "cafe"
+	case strings.Contains(p, "flp") || strings.Contains(p, "forever"):
+		return "flp"
+	case strings.Contains(p, "codevertex"):
+		return "codevertex"
+	default:
+		return "generic"
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
