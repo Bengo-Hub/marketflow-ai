@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
@@ -18,6 +19,10 @@ import (
 type Service struct {
 	db     *sql.DB
 	logger *zap.Logger
+
+	// tenantCache memoises slug/uuid → real tenant UUID lookups so chat_sessions
+	// rows satisfy the FK to tenants. Keyed by the raw X-Tenant-ID header value.
+	tenantCache sync.Map // map[string]uuid.UUID
 }
 
 // NewService creates a new session service.
@@ -26,6 +31,44 @@ func NewService(db *sql.DB, logger *zap.Logger) *Service {
 		db:     db,
 		logger: logger.Named("sessions"),
 	}
+}
+
+// ResolveTenantID maps a raw X-Tenant-ID header value (either a tenant slug or a
+// UUID) to the REAL tenant UUID stored in the shared tenants table. The chat
+// handler used to synthesise a deterministic SHA1 UUID from the slug, but that
+// value never matched a tenants row — so every chat_sessions insert failed its
+// foreign key (SQLSTATE 23503) and conversation history silently stopped
+// persisting. Resolving against the actual table keeps the FK satisfied.
+//
+// Returns (uuid, true) when a real tenant exists; (Nil, false) for unknown
+// tenants (e.g. arbitrary public-widget embeds) so the caller can fall back to
+// an ephemeral, non-persisted session instead of triggering an FK error.
+func (s *Service) ResolveTenantID(ctx context.Context, raw string) (uuid.UUID, bool) {
+	if s == nil || s.db == nil || raw == "" {
+		return uuid.Nil, false
+	}
+	if cached, ok := s.tenantCache.Load(raw); ok {
+		return cached.(uuid.UUID), true
+	}
+
+	var id uuid.UUID
+	var err error
+	if parsed, perr := uuid.Parse(raw); perr == nil {
+		// Looks like a UUID — confirm it actually exists before trusting it.
+		err = s.db.QueryRowContext(ctx, `SELECT id FROM tenants WHERE id = $1`, parsed).Scan(&id)
+	} else {
+		// Treat as a slug.
+		err = s.db.QueryRowContext(ctx, `SELECT id FROM tenants WHERE slug = $1`, raw).Scan(&id)
+	}
+	if err != nil {
+		if err != sql.ErrNoRows {
+			s.logger.Warn("resolve tenant failed", zap.String("raw", raw), zap.Error(err))
+		}
+		return uuid.Nil, false
+	}
+
+	s.tenantCache.Store(raw, id)
+	return id, true
 }
 
 // CreateSession creates a new chat session.

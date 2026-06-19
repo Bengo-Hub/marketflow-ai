@@ -62,6 +62,20 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the raw header to the REAL tenant UUID so chat_sessions rows
+	// satisfy their FK to tenants. extractTenantID returns a synthetic SHA1
+	// UUID for slug callers (fine for KB scoping / Redis keys, but it never
+	// matches a tenants row). Only persist sessions when the tenant is real;
+	// otherwise use an ephemeral session to avoid FK violations (23503).
+	rawTenant := r.Header.Get("X-Tenant-ID")
+	persist := false
+	if h.sessions != nil {
+		if realID, ok := h.sessions.ResolveTenantID(r.Context(), rawTenant); ok {
+			tenantID = realID
+			persist = true
+		}
+	}
+
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -78,7 +92,7 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve or create the session; load history if existing.
-	sessionID, history, err := h.resolveSession(r.Context(), tenantID, req.SessionID)
+	sessionID, history, err := h.resolveSession(r.Context(), tenantID, req.SessionID, persist)
 	if err != nil {
 		h.logger.Warn("session resolve failed", zap.Error(err))
 		sessionID = uuid.New()
@@ -107,7 +121,7 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		h.handleStream(w, r, input)
+		h.handleStream(w, r, input, persist)
 		return
 	}
 
@@ -125,7 +139,7 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	if savedAssistant == "" {
 		savedAssistant = result.Response
 	}
-	if h.sessions != nil {
+	if persist && h.sessions != nil {
 		_ = h.sessions.AppendMessages(r.Context(), tenantID, sessionID,
 			ai.Message{Role: "user", Content: req.Question},
 			ai.Message{Role: "assistant", Content: savedAssistant},
@@ -147,8 +161,11 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveSession loads an existing session's history or creates a new one.
-func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, raw string) (uuid.UUID, []ai.Message, error) {
-	if h.sessions == nil {
+// When persist is false (unknown/public tenant with no tenants row) it returns
+// an ephemeral in-memory session id and skips all DB writes, so we never trip
+// the chat_sessions → tenants foreign key.
+func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, raw string, persist bool) (uuid.UUID, []ai.Message, error) {
+	if h.sessions == nil || !persist {
 		return uuid.New(), nil, nil
 	}
 	if raw != "" {
@@ -168,7 +185,10 @@ func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, ra
 }
 
 // handleStream sends Server-Sent Events for streaming chat responses.
-func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input rag.ChatInput) {
+// When persist is true the assembled answer is written back to the session
+// history once the stream completes, so the dashboard chat (which always
+// streams) keeps conversation memory across turns.
+func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input rag.ChatInput, persist bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming not supported")
@@ -201,10 +221,12 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 		flusher.Flush()
 	}
 
+	var assembled strings.Builder
 	for delta := range ch {
 		if delta.Done {
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
+			h.persistStreamTurn(r.Context(), input, assembled.String(), persist)
 			return
 		}
 		if delta.Content != "" {
@@ -212,11 +234,27 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 			evtType := "delta"
 			if delta.Type == "replace" {
 				evtType = "replace"
+				assembled.Reset()
 			}
+			assembled.WriteString(delta.Content)
 			fmt.Fprintf(w, "data: {\"type\":%q,\"content\":%s}\n\n", evtType, escaped)
 			flusher.Flush()
 		}
 	}
+	// Channel closed without an explicit Done sentinel — still persist what we have.
+	h.persistStreamTurn(r.Context(), input, assembled.String(), persist)
+}
+
+// persistStreamTurn appends the user question and the assembled streamed answer
+// to the session history. No-op for ephemeral (unknown-tenant) sessions.
+func (h *ChatHandler) persistStreamTurn(ctx context.Context, input rag.ChatInput, answer string, persist bool) {
+	if !persist || h.sessions == nil || answer == "" {
+		return
+	}
+	_ = h.sessions.AppendMessages(ctx, input.TenantID, input.SessionID,
+		ai.Message{Role: "user", Content: input.Question},
+		ai.Message{Role: "assistant", Content: answer},
+	)
 }
 
 // Health responds with service status.

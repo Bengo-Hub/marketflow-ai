@@ -8,11 +8,68 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// textualToolCallRe matches the inline tool-call syntax some Groq/Llama models
+// emit instead of structured tool_calls, e.g.
+//
+//	<function=kb_search={"query":"aloe"}</function>
+//	<function=kb_search>{"query":"aloe"}</function>
+//
+// Group 1 is the tool name; group 2 is the JSON argument object (anchored on the
+// closing tag so nested braces are captured correctly).
+var textualToolCallRe = regexp.MustCompile(`(?s)<function=([a-zA-Z0-9_]+)\s*[=>]\s*(\{.*?\})\s*</function>`)
+
+// recoverToolUseFailed reconstructs a structured ChatResponse from a Groq 400
+// "tool_use_failed" error body by parsing the inline tool call the model meant
+// to make. Returns ok=false when the body is not a recoverable tool_use_failed
+// error so the caller can surface the original error and fall back.
+func recoverToolUseFailed(body []byte, model string) (*ChatResponse, bool) {
+	var e struct {
+		Error struct {
+			Code             string `json:"code"`
+			FailedGeneration string `json:"failed_generation"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) != nil ||
+		e.Error.Code != "tool_use_failed" ||
+		e.Error.FailedGeneration == "" {
+		return nil, false
+	}
+
+	matches := textualToolCallRe.FindAllStringSubmatch(e.Error.FailedGeneration, -1)
+	calls := make([]ToolCall, 0, len(matches))
+	for i, m := range matches {
+		name, args := m[1], strings.TrimSpace(m[2])
+		if !json.Valid([]byte(args)) {
+			continue
+		}
+		var tc ToolCall
+		tc.ID = fmt.Sprintf("call_%s_%d", name, i)
+		tc.Type = "function"
+		tc.Function.Name = name
+		tc.Function.Arguments = args
+		calls = append(calls, tc)
+	}
+	if len(calls) == 0 {
+		return nil, false
+	}
+
+	resp := &ChatResponse{ID: "recovered"}
+	resp.Choices = []struct {
+		Index   int     `json:"index"`
+		Message Message `json:"message"`
+		Finish  string  `json:"finish_reason"`
+	}{
+		{Index: 0, Message: Message{Role: "assistant", ToolCalls: calls}, Finish: "tool_calls"},
+	}
+	return resp, true
+}
 
 // Message represents a chat message in the OpenAI format.
 // ToolCalls is populated on assistant messages when the model wants to invoke tools.
@@ -143,6 +200,19 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 
 		if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(resp.Body)
+			// Groq's Llama models intermittently emit tool calls as inline text
+			// (`<function=name={...}</function>`) instead of structured tool_calls,
+			// which the API rejects with 400 code "tool_use_failed". The intended
+			// call is returned in `failed_generation` — recover it so the agentic
+			// loop can still dispatch the tool instead of degrading to single-shot.
+			if resp.StatusCode == http.StatusBadRequest {
+				if recovered, ok := recoverToolUseFailed(respBody, req.Model); ok {
+					c.logger.Warn("recovered tool call from tool_use_failed",
+						zap.String("model", req.Model),
+						zap.Int("tool_calls", len(recovered.Choices[0].Message.ToolCalls)))
+					return recovered, nil
+				}
+			}
 			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
 		}
 
