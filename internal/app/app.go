@@ -159,6 +159,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				Logger:     logger,
 			}))
 			logger.Info("query_service_data tool enabled (codevertex, ordering, treasury, ...)")
+
+			// tax_advisor: Kenya tax/statutory rates + compliance calendar from the
+			// treasury Smart Tax & Compliance module (read-only S2S).
+			tools = append(tools, agenttools.NewTaxAdvisor(agenttools.TaxAdvisorConfig{
+				ServiceKey: cfg.App.InternalServiceKey,
+				Logger:     logger,
+			}))
+			logger.Info("tax_advisor tool enabled (Kenya tax rates + compliance calendar)")
 		} else {
 			logger.Warn("MF_AI_INTERNAL_SERVICE_KEY not set; query_service_data tool disabled — set it to enable live course/enrollment/order queries")
 		}
