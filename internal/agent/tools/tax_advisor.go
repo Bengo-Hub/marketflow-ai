@@ -38,7 +38,7 @@ func NewTaxAdvisor(cfg TaxAdvisorConfig) *TaxAdvisor {
 func (*TaxAdvisor) Name() string { return "tax_advisor" }
 
 func (*TaxAdvisor) Description() string {
-	return "Looks up live Kenya tax/statutory rates and the upcoming tax compliance calendar (filing/remittance deadlines) for the business. Use for questions about VAT, PAYE, withholding tax, turnover tax, NSSF/SHIF/housing levy, corporate tax, capital allowances, or 'when is my next tax due'. Returns authoritative rates from the treasury Tax & Compliance module — prefer this over general knowledge for Kenyan rates and deadlines."
+	return "Looks up live Kenya tax/statutory rates, the upcoming compliance calendar (filing/remittance deadlines), and the business's tax-registration eligibility position. Use for questions about VAT, PAYE, withholding tax, turnover tax, NSSF/SHIF/housing levy, corporate tax, capital allowances, 'when is my next tax due', or 'do I need to register for VAT / am I compliant' (eligibility checks turnover vs the VAT KES 5M / TOT thresholds and whether eTIMS is active). Returns authoritative data from the treasury Tax & Compliance module — prefer this over general knowledge."
 }
 
 func (*TaxAdvisor) Schema() map[string]any {
@@ -47,8 +47,8 @@ func (*TaxAdvisor) Schema() map[string]any {
 		"properties": map[string]any{
 			"query_type": map[string]any{
 				"type":        "string",
-				"enum":        []string{"rates", "calendar"},
-				"description": "'rates' for statutory/tax rates, 'calendar' for upcoming filing deadlines",
+				"enum":        []string{"rates", "calendar", "eligibility"},
+				"description": "'rates' for statutory/tax rates, 'calendar' for upcoming filing deadlines, 'eligibility' for the business's turnover-vs-threshold tax-registration position + compliance warnings",
 			},
 			"category": map[string]any{
 				"type":        "string",
@@ -77,13 +77,15 @@ func (t *TaxAdvisor) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	switch args.QueryType {
 	case "calendar":
 		path = fmt.Sprintf("/api/v1/s2s/%s/compliance-calendar", tenantID.String())
+	case "eligibility":
+		path = fmt.Sprintf("/api/v1/s2s/%s/eligibility-position", tenantID.String())
 	case "rates", "":
 		path = fmt.Sprintf("/api/v1/s2s/%s/statutory-rates", tenantID.String())
 		if args.Category != "" {
 			path += "?category=" + args.Category
 		}
 	default:
-		return "", fmt.Errorf("unknown query_type %q (use 'rates' or 'calendar')", args.QueryType)
+		return "", fmt.Errorf("unknown query_type %q (use 'rates', 'calendar' or 'eligibility')", args.QueryType)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
