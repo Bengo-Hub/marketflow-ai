@@ -47,8 +47,8 @@ func (*TaxAdvisor) Schema() map[string]any {
 		"properties": map[string]any{
 			"query_type": map[string]any{
 				"type":        "string",
-				"enum":        []string{"rates", "calendar", "eligibility", "position", "deductions"},
-				"description": "'rates' for statutory/tax rates, 'calendar' for upcoming filing deadlines, 'eligibility' for the turnover-vs-threshold registration position + warnings, 'position' for the current-period VAT/TOT liability estimate + per-obligation due dates & penalty exposure, 'deductions' for the deductible-expense optimizer (deductible vs at-risk under 'No eTIMS No Expense' + tax exposure of unvalidated costs)",
+				"enum":        []string{"rates", "calendar", "eligibility", "position", "deductions", "allowances"},
+				"description": "'rates' statutory/tax rates; 'calendar' upcoming filing deadlines; 'eligibility' turnover-vs-threshold registration position + warnings; 'position' current-period VAT/TOT liability + per-obligation due dates & penalty exposure; 'deductions' deductible-expense optimizer ('No eTIMS No Expense') + CIT projection; 'allowances' the capital-allowance (wear-and-tear) schedule per KRA asset class",
 			},
 			"category": map[string]any{
 				"type":        "string",
@@ -83,13 +83,15 @@ func (t *TaxAdvisor) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 		path = fmt.Sprintf("/api/v1/s2s/%s/position-estimate", tenantID.String())
 	case "deductions":
 		path = fmt.Sprintf("/api/v1/s2s/%s/deductions", tenantID.String())
+	case "allowances":
+		path = fmt.Sprintf("/api/v1/s2s/%s/capital-allowances", tenantID.String())
 	case "rates", "":
 		path = fmt.Sprintf("/api/v1/s2s/%s/statutory-rates", tenantID.String())
 		if args.Category != "" {
 			path += "?category=" + args.Category
 		}
 	default:
-		return "", fmt.Errorf("unknown query_type %q (use 'rates', 'calendar', 'eligibility', 'position' or 'deductions')", args.QueryType)
+		return "", fmt.Errorf("unknown query_type %q (use rates/calendar/eligibility/position/deductions/allowances)", args.QueryType)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
