@@ -47,8 +47,8 @@ func (*TaxAdvisor) Schema() map[string]any {
 		"properties": map[string]any{
 			"query_type": map[string]any{
 				"type":        "string",
-				"enum":        []string{"rates", "calendar", "eligibility", "position"},
-				"description": "'rates' for statutory/tax rates, 'calendar' for upcoming filing deadlines, 'eligibility' for the turnover-vs-threshold registration position + warnings, 'position' for the current-period VAT/TOT liability estimate + per-obligation due dates & penalty exposure",
+				"enum":        []string{"rates", "calendar", "eligibility", "position", "deductions"},
+				"description": "'rates' for statutory/tax rates, 'calendar' for upcoming filing deadlines, 'eligibility' for the turnover-vs-threshold registration position + warnings, 'position' for the current-period VAT/TOT liability estimate + per-obligation due dates & penalty exposure, 'deductions' for the deductible-expense optimizer (deductible vs at-risk under 'No eTIMS No Expense' + tax exposure of unvalidated costs)",
 			},
 			"category": map[string]any{
 				"type":        "string",
@@ -81,13 +81,15 @@ func (t *TaxAdvisor) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 		path = fmt.Sprintf("/api/v1/s2s/%s/eligibility-position", tenantID.String())
 	case "position":
 		path = fmt.Sprintf("/api/v1/s2s/%s/position-estimate", tenantID.String())
+	case "deductions":
+		path = fmt.Sprintf("/api/v1/s2s/%s/deductions", tenantID.String())
 	case "rates", "":
 		path = fmt.Sprintf("/api/v1/s2s/%s/statutory-rates", tenantID.String())
 		if args.Category != "" {
 			path += "?category=" + args.Category
 		}
 	default:
-		return "", fmt.Errorf("unknown query_type %q (use 'rates', 'calendar', 'eligibility' or 'position')", args.QueryType)
+		return "", fmt.Errorf("unknown query_type %q (use 'rates', 'calendar', 'eligibility', 'position' or 'deductions')", args.QueryType)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
