@@ -63,7 +63,6 @@ func (t *CheckIntegrations) Invoke(ctx context.Context, tenantID uuid.UUID, args
 		{"linkedin", "linkedin_ads", "ads", "LinkedIn Ads", "/settings/integrations"},
 		{"x", "x_ads", "ads", "X (Twitter) Ads", "/settings/integrations"},
 		{"google_calendar", "google_calendar", "oauth", "Google Calendar", "/settings/integrations"},
-		{"calcom", "calcom", "default", "Cal.com", "/settings/integrations"},
 	}
 
 	result := map[string]any{}

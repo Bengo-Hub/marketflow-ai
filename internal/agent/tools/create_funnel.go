@@ -52,7 +52,7 @@ func (*CreateFunnel) Schema() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"block_type":  map[string]any{"type": "string", "description": "form | whatsapp | product | recruit | calcom | content"},
+						"block_type":  map[string]any{"type": "string", "description": "form | whatsapp | product | recruit | google_calendar | content"},
 						"title":       map[string]any{"type": "string"},
 						"description": map[string]any{"type": "string"},
 						"cta_text":    map[string]any{"type": "string"},

@@ -47,7 +47,7 @@ Profile & Links:
 - generate_links: create distribID-embedded product links, shop links, recruit links, WhatsApp links, profile URLs.
 
 Marketing Workflows:
-- check_integrations: verify which ad platforms (Meta, Google Ads, TikTok, LinkedIn) and scheduling tools (Calendar, Cal.com) the tenant has connected.
+- check_integrations: verify which ad platforms (Meta, Google Ads, TikTok, LinkedIn) and scheduling tools (Google Calendar) the tenant has connected.
 - book_meeting: schedule a meeting on the tenant's Google Calendar.
 - create_campaign: create a campaign on marketflow-api (name, platform, budget, audience, duration).
 - create_funnel: create a landing page funnel at /f/{slug} with form fields, WhatsApp block, product block.
