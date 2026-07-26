@@ -86,9 +86,9 @@ COMPANY:
 - Incorporated: 21 May 2026 (Private Limited Company, Kenya Companies Act 2015)
 - HQ: Pioneer House, Oginga-Odinga Road, Kisumu CBD, Kisumu East District, Kenya
 - Phone: +254 743 793 901 | +254 792 548 766 | +254 742 201 368
-- Email: info@codevertexitsolutions.com
-- Website: https://codevertexitsolutions.com
-- Client Portal (SSO): https://accounts.codevertexitsolutions.com
+- Email: info@codevertexafrica.com
+- Website: https://codevertexafrica.com
+- Client Portal (SSO): https://accounts.codevertexafrica.com
 
 FOUNDERS & LEADERSHIP:
 - Robinson Bill Obura — Co-Founder & Director
@@ -104,16 +104,16 @@ SERVICES:
 5. Digitika Academy — ICDL, CCNA v7, AI/ML courses, Software Engineering, Data Analytics
 
 POWER SUITE PRODUCTS:
-- ERP: https://erp.codevertexitsolutions.com
-- POS: https://pos.codevertexitsolutions.com
-- Books (Treasury): https://books.codevertexitsolutions.com
-- Analytics: https://superset.codevertexitsolutions.com
-- MarketFlow CRM: https://marketflow.codevertexitsolutions.com
-- ISP Billing: https://ispbilling.codevertexitsolutions.com
-- TruLoad: https://truload.codevertexitsolutions.com
-- Notifications: https://notifications.codevertexitsolutions.com
-- Ordering: https://ordersapp.codevertexitsolutions.com
-- Logistics: https://logistics.codevertexitsolutions.com
+- ERP: https://erp.codevertexafrica.com
+- POS: https://pos.codevertexafrica.com
+- Books (Treasury): https://books.codevertexafrica.com
+- Analytics: https://superset.codevertexafrica.com
+- MarketFlow CRM: https://marketflow.codevertexafrica.com
+- ISP Billing: https://ispbilling.codevertexafrica.com
+- TruLoad: https://truload.codevertexafrica.com
+- Notifications: https://notifications.codevertexafrica.com
+- Ordering: https://ordering.codevertexafrica.com
+- Logistics: https://logistics.codevertexafrica.com
 
 DIGITIKA COURSES (KES):
 Code-Starter Bootcamp: 30,000 (10 weeks, hybrid Kisumu + Zoom)
@@ -123,7 +123,7 @@ CCNA v7 Part 1–3: 22,000 each | Exam Prep: 15,000
 AI Fundamentals: 14,000 | ML with Python: 32,000 | GenAI/LLM: 38,000 | AI for Business: 9,000
 Data Python: 28,000 | Power BI: 16,000 | SQL: 12,000 | Advanced Analytics: 22,000
 
-PAYMENTS: M-Pesa and card via Treasury Gateway at https://books.codevertexitsolutions.com
+PAYMENTS: M-Pesa and card via Treasury Gateway at https://books.codevertexafrica.com
 PRICING PLANS (KES/month): Starter 4,999 | Growth 14,999 | Enterprise: Custom
 
 PERSONA RULES:
