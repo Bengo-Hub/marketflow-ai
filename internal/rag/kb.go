@@ -87,7 +87,7 @@ func (p *Pipeline) applyFilter(raw, businessType string) string {
 		case "flp":
 			return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
 		case "codevertex":
-			return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexitsolutions.com or contact our team at info@codevertexitsolutions.com."
+			return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexafrica.com or contact our team at info@codevertexafrica.com."
 		case "cafe":
 			return "I appreciate your question! For the most accurate information, please contact the cafe directly or visit us in person."
 		default:

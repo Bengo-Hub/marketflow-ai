@@ -129,7 +129,7 @@ func (t *CreateFunnel) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 	if json.Unmarshal(rb, &created) == nil {
 		slug, _ := created["slug"].(string)
 		if slug != "" {
-			created["public_url"] = fmt.Sprintf("https://marketflow.codevertexitsolutions.com/f/%s", slug)
+			created["public_url"] = fmt.Sprintf("https://marketflow.codevertexafrica.com/f/%s", slug)
 		}
 		enriched, _ := json.Marshal(created)
 		t.logger.Info("funnel created", zap.String("tenant", tenantID.String()), zap.String("slug", slug))

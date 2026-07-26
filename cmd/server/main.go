@@ -20,7 +20,7 @@ import (
 // @description RAG-powered AI chatbot for Forever Living Products marketing automation. Two-tier routing: 8B classifier + 70B responder via Groq, with pgvector RAG and FLP compliance filtering.
 // @BasePath /api/v1
 // @schemes https http
-// @host marketflowai.codevertexitsolutions.com
+// @host marketflowai.codevertexafrica.com
 // @securityDefinitions.apikey bearerAuth
 // @in header
 // @name Authorization

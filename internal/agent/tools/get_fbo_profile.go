@@ -109,7 +109,7 @@ func (t *GetFBOProfile) Invoke(ctx context.Context, tenantID uuid.UUID, _ string
 		"name":        name,
 		"slug":        slug,
 		"distrib_id":  did,
-		"profile_url": fmt.Sprintf("https://marketflow.codevertexitsolutions.com/p/%s", slug),
+		"profile_url": fmt.Sprintf("https://marketflow.codevertexafrica.com/p/%s", slug),
 	}
 	if did != "" {
 		result["shop_link"] = fmt.Sprintf("https://shop.foreverliving.com/retail/entry/Shop.do?store=%s&language=%s&distribID=%s", store, lang, did)

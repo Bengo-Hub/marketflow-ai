@@ -51,15 +51,15 @@ type RedisConfig struct {
 }
 
 type SecurityConfig struct {
-	JWKSUrl        string `env:"JWKS_URL" envDefault:"https://sso.codevertexitsolutions.com/api/v1/.well-known/jwks.json"`
-	JWTIssuer      string `env:"JWT_ISSUER" envDefault:"https://sso.codevertexitsolutions.com"`
+	JWKSUrl        string `env:"JWKS_URL" envDefault:"https://sso.codevertexafrica.com/api/v1/.well-known/jwks.json"`
+	JWTIssuer      string `env:"JWT_ISSUER" envDefault:"https://sso.codevertexafrica.com"`
 	JWTAudience    string `env:"JWT_AUDIENCE" envDefault:"codevertex"`
 	RequireJWT     bool   `env:"REQUIRE_JWT" envDefault:"true"`
 	EncryptionKey  string `env:"ENCRYPTION_KEY"`
 	// AuthServiceURL points at auth-api for platform X-API-Key validation
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
-	AuthServiceURL string `env:"AUTH_SERVICE_URL" envDefault:"https://sso.codevertexitsolutions.com"`
+	AuthServiceURL string `env:"AUTH_SERVICE_URL" envDefault:"https://sso.codevertexafrica.com"`
 	// SubscriptionsURL points to subscriptions-api for usage event reporting.
 	SubscriptionsURL string `env:"SUBSCRIPTIONS_URL" envDefault:"http://subscription-api.subscriptions.svc.cluster.local:4000"`
 	SubscriptionsKey string `env:"SUBSCRIPTIONS_API_KEY"`

@@ -114,7 +114,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		case "flp":
 			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
 		case "codevertex":
-			escalateMsg = "I'd be happy to connect you with the Codevertex Africa Limited team. You can reach us at info@codevertexitsolutions.com, call +254 743 793 901, or visit our office at Pioneer House, Oginga-Odinga Road, Kisumu."
+			escalateMsg = "I'd be happy to connect you with the Codevertex Africa Limited team. You can reach us at info@codevertexafrica.com, call +254 743 793 901, or visit our office at Pioneer House, Oginga-Odinga Road, Kisumu."
 		case "cafe":
 			escalateMsg = "I'd be happy to help you get in touch with our team. Please use the contact details on our website, give us a call, or visit us in person — we'd love to see you!"
 		default:

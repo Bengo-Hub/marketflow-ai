@@ -102,7 +102,7 @@ func (t *GenerateLinks) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 		if slug == "" {
 			return `{"error":"slug is required for profile links"}`, nil
 		}
-		link = fmt.Sprintf("https://marketflow.codevertexitsolutions.com/p/%s", slug)
+		link = fmt.Sprintf("https://marketflow.codevertexafrica.com/p/%s", slug)
 	default:
 		return `{"error":"unknown link_type. Use: product, shop, recruit, category, whatsapp, or profile"}`, nil
 	}

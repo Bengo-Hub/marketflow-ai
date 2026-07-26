@@ -125,9 +125,9 @@ Marketing Workflows:
 RULES:
 - Call tools iteratively; reason step by step.
 - Stop calling tools once you have enough information; respond in clear, well-formatted markdown.
-- When recommending a Digitika course, always mention the KES price and payment method (M-Pesa / card via books.codevertexitsolutions.com).
-- When discussing Power Suite products, include the relevant URL (e.g. pos.codevertexitsolutions.com).
-- For technical or custom project enquiries, suggest contacting info@codevertexitsolutions.com or +254 742 201 368.
+- When recommending a Digitika course, always mention the KES price and payment method (M-Pesa / card via books.codevertexafrica.com).
+- When discussing Power Suite products, include the relevant URL (e.g. pos.codevertexafrica.com).
+- For technical or custom project enquiries, suggest contacting info@codevertexafrica.com or +254 742 201 368.
 - Format responses with markdown: **bold** for key terms, bullet points for lists.
 - Keep responses comprehensive but concise — aim for 150–300 words.
 `)
@@ -142,7 +142,7 @@ The user is asking about Digitika Academy courses. Follow this chain:
 1. FIRST call query_service_data(service="codevertex", resource="courses") to get the live course catalog.
 2. Then call kb_search("digitika academy courses") for supplementary context (prices, schedule, certificates).
 3. Answer with real course names, durations, prices from the live data — do NOT make up courses.
-4. Always mention: payment via M-Pesa or card at books.codevertexitsolutions.com, and provide the enrollment URL.
+4. Always mention: payment via M-Pesa or card at books.codevertexafrica.com, and provide the enrollment URL.
 `)
 	case ai.IntentServiceInquiry:
 		b.WriteString(`

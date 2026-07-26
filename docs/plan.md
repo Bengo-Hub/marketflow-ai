@@ -189,7 +189,7 @@ MF_INTERNAL_SERVICE_KEY=<REPLACE_ME>  # shared INTERNAL_SERVICE_KEY
 All services (including codevertex-website) must configure:
 ```
 INTERNAL_SERVICE_KEY=<shared-key>
-MARKETFLOW_AI_URL=https://marketflowai.codevertexitsolutions.com
+MARKETFLOW_AI_URL=https://marketflowai.codevertexafrica.com
 ```
 
 The codevertex-website `/api/chat` route proxies to marketflow-ai first, falls back to direct Anthropic if unavailable.

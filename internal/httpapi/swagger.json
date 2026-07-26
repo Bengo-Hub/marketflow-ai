@@ -10,7 +10,7 @@
         "contact": {},
         "version": "1.0.0"
     },
-    "host": "marketflowai.codevertexitsolutions.com",
+    "host": "marketflowai.codevertexafrica.com",
     "basePath": "/api/v1",
     "paths": {
         "/chat": {
