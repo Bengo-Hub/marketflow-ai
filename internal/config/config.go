@@ -14,7 +14,7 @@ type Config struct {
 	HTTP     HTTPConfig     `envPrefix:"HTTP_"`
 	Database DatabaseConfig `envPrefix:""`
 	Redis    RedisConfig    `envPrefix:"REDIS_"`
-	Security SecurityConfig `envPrefix:"MF_SECURITY_"`
+	Security SecurityConfig `envPrefix:""`
 	AI       AIConfig       `envPrefix:"MF_AI_"`
 }
 
@@ -50,19 +50,22 @@ type RedisConfig struct {
 	Namespace string `env:"NAMESPACE" envDefault:"marketflow-ai"`
 }
 
+// SecurityConfig fields carry their full, previously MF_SECURITY_-prefixed names explicitly
+// (envPrefix on the parent field removed) except SubscriptionsURL, which uses the canonical,
+// service-agnostic SUBSCRIPTION_BASE_URL name standardized fleet-wide 2026-08-07.
 type SecurityConfig struct {
-	JWKSUrl        string `env:"JWKS_URL" envDefault:"https://sso.codevertexafrica.com/api/v1/.well-known/jwks.json"`
-	JWTIssuer      string `env:"JWT_ISSUER" envDefault:"https://sso.codevertexafrica.com"`
-	JWTAudience    string `env:"JWT_AUDIENCE" envDefault:"codevertex"`
-	RequireJWT     bool   `env:"REQUIRE_JWT" envDefault:"true"`
-	EncryptionKey  string `env:"ENCRYPTION_KEY"`
+	JWKSUrl        string `env:"MF_SECURITY_JWKS_URL" envDefault:"https://sso.codevertexafrica.com/api/v1/.well-known/jwks.json"`
+	JWTIssuer      string `env:"MF_SECURITY_JWT_ISSUER" envDefault:"https://sso.codevertexafrica.com"`
+	JWTAudience    string `env:"MF_SECURITY_JWT_AUDIENCE" envDefault:"codevertex"`
+	RequireJWT     bool   `env:"MF_SECURITY_REQUIRE_JWT" envDefault:"true"`
+	EncryptionKey  string `env:"MF_SECURITY_ENCRYPTION_KEY"`
 	// AuthServiceURL points at auth-api for platform X-API-Key validation
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
-	AuthServiceURL string `env:"AUTH_SERVICE_URL" envDefault:"https://sso.codevertexafrica.com"`
+	AuthServiceURL string `env:"MF_SECURITY_AUTH_SERVICE_URL" envDefault:"https://sso.codevertexafrica.com"`
 	// SubscriptionsURL points to subscriptions-api for usage event reporting.
-	SubscriptionsURL string `env:"SUBSCRIPTIONS_URL" envDefault:"http://subscription-api.subscriptions.svc.cluster.local:4000"`
-	SubscriptionsKey string `env:"SUBSCRIPTIONS_API_KEY"`
+	SubscriptionsURL string `env:"SUBSCRIPTION_BASE_URL" envDefault:"http://subscription-api.subscriptions.svc.cluster.local:4000"`
+	SubscriptionsKey string `env:"MF_SECURITY_SUBSCRIPTIONS_API_KEY"`
 }
 
 // AIConfig holds AI/LLM provider settings (defaults; overridden by ProviderSetting DB).
