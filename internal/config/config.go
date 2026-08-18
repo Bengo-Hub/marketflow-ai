@@ -54,11 +54,11 @@ type RedisConfig struct {
 // (envPrefix on the parent field removed) except SubscriptionsURL, which uses the canonical,
 // service-agnostic SUBSCRIPTION_BASE_URL name standardized fleet-wide 2026-08-07.
 type SecurityConfig struct {
-	JWKSUrl        string `env:"MF_SECURITY_JWKS_URL" envDefault:"https://sso.codevertexafrica.com/api/v1/.well-known/jwks.json"`
-	JWTIssuer      string `env:"MF_SECURITY_JWT_ISSUER" envDefault:"https://sso.codevertexafrica.com"`
-	JWTAudience    string `env:"MF_SECURITY_JWT_AUDIENCE" envDefault:"codevertex"`
-	RequireJWT     bool   `env:"MF_SECURITY_REQUIRE_JWT" envDefault:"true"`
-	EncryptionKey  string `env:"MF_SECURITY_ENCRYPTION_KEY"`
+	JWKSUrl       string `env:"MF_SECURITY_JWKS_URL" envDefault:"https://sso.codevertexafrica.com/api/v1/.well-known/jwks.json"`
+	JWTIssuer     string `env:"MF_SECURITY_JWT_ISSUER" envDefault:"https://sso.codevertexafrica.com"`
+	JWTAudience   string `env:"MF_SECURITY_JWT_AUDIENCE" envDefault:"codevertex"`
+	RequireJWT    bool   `env:"MF_SECURITY_REQUIRE_JWT" envDefault:"true"`
+	EncryptionKey string `env:"MF_SECURITY_ENCRYPTION_KEY"`
 	// AuthServiceURL points at auth-api for platform X-API-Key validation
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
@@ -71,25 +71,25 @@ type SecurityConfig struct {
 // AIConfig holds AI/LLM provider settings (defaults; overridden by ProviderSetting DB).
 type AIConfig struct {
 	// Groq (primary LLM)
-	GroqAPIKey      string `env:"GROQ_API_KEY"`
-	GroqBaseURL     string `env:"GROQ_BASE_URL" envDefault:"https://api.groq.com/openai/v1"`
-	GroqRouterModel string `env:"GROQ_ROUTER_MODEL" envDefault:"llama-3.1-8b-instant"`
-	GroqMainModel   string `env:"GROQ_MAIN_MODEL" envDefault:"llama-3.3-70b-versatile"`
-	GroqFallback    string `env:"GROQ_FALLBACK_MODEL" envDefault:"llama-3.1-8b-instant"`
+	GroqAPIKey      string  `env:"GROQ_API_KEY"`
+	GroqBaseURL     string  `env:"GROQ_BASE_URL" envDefault:"https://api.groq.com/openai/v1"`
+	GroqRouterModel string  `env:"GROQ_ROUTER_MODEL" envDefault:"llama-3.1-8b-instant"`
+	GroqMainModel   string  `env:"GROQ_MAIN_MODEL" envDefault:"llama-3.3-70b-versatile"`
+	GroqFallback    string  `env:"GROQ_FALLBACK_MODEL" envDefault:"llama-3.1-8b-instant"`
 	Temperature     float64 `env:"TEMPERATURE" envDefault:"0.7"`
-	MaxTokens       int    `env:"MAX_TOKENS" envDefault:"2048"`
+	MaxTokens       int     `env:"MAX_TOKENS" envDefault:"2048"`
 
 	// Ollama (embeddings) — shared cluster-wide pod in shared-infra namespace.
-	OllamaURL      string `env:"OLLAMA_URL" envDefault:"http://ollama.shared-infra.svc.cluster.local:11434"`
-	EmbeddingModel string `env:"EMBEDDING_MODEL" envDefault:"nomic-embed-text"`
-	EmbeddingDim   int    `env:"EMBEDDING_DIM" envDefault:"768"`
+	OllamaURL           string `env:"OLLAMA_URL" envDefault:"http://ollama.shared-infra.svc.cluster.local:11434"`
+	EmbeddingModel      string `env:"EMBEDDING_MODEL" envDefault:"nomic-embed-text"`
+	EmbeddingDim        int    `env:"EMBEDDING_DIM" envDefault:"768"`
 	OllamaFallbackModel string `env:"OLLAMA_FALLBACK_MODEL" envDefault:"llama3.1:8b"`
 
 	// Anthropic (configurable primary or fallback)
-	ClaudeAPIKey   string `env:"CLAUDE_API_KEY"`
-	ClaudeModel    string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-4-5-20251001"`
-	ClaudeBaseURL  string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
-	ClaudeVersion  string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
+	ClaudeAPIKey    string `env:"CLAUDE_API_KEY"`
+	ClaudeModel     string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-4-5-20251001"`
+	ClaudeBaseURL   string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
+	ClaudeVersion   string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
 	PrimaryProvider string `env:"PRIMARY_PROVIDER" envDefault:"groq"` // groq | anthropic | ollama
 
 	// MarketFlow API for KB/provider config
@@ -117,6 +117,9 @@ type AIConfig struct {
 	// Ticketing service for create_ticket agent tool
 	TicketingURL string `env:"TICKETING_URL" envDefault:"http://ticketing-api.ticketing.svc.cluster.local:4009"`
 
+	// Auth service for the request_integration agent tool (in-cluster DNS, not the public
+	// ingress -- this is a plain S2S call, not JWKS/token validation).
+	AuthAPIURL string `env:"AUTH_API_URL" envDefault:"http://auth-api.auth.svc.cluster.local:4000"`
 }
 
 func Load() (*Config, error) {

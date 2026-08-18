@@ -13,17 +13,18 @@ import (
 type Intent string
 
 const (
-	IntentSimpleFAQ      Intent = "simple_faq"
-	IntentProductQA      Intent = "product_qa"
-	IntentBusinessOpp    Intent = "business_opportunity"
-	IntentRecruitment    Intent = "recruitment"
-	IntentTaskExecute    Intent = "task_execute"
-	IntentOffTopic       Intent = "off_topic"
-	IntentEscalate       Intent = "escalate"
-	IntentServiceInquiry Intent = "service_inquiry"  // questions about Codevertex platform services
-	IntentCourseInquiry  Intent = "course_inquiry"   // questions about Digitika courses
-	IntentSupportRequest Intent = "support_request"  // explicit support/help ticket request
-	IntentDataQuery      Intent = "data_query"       // query live service data
+	IntentSimpleFAQ           Intent = "simple_faq"
+	IntentProductQA           Intent = "product_qa"
+	IntentBusinessOpp         Intent = "business_opportunity"
+	IntentRecruitment         Intent = "recruitment"
+	IntentTaskExecute         Intent = "task_execute"
+	IntentOffTopic            Intent = "off_topic"
+	IntentEscalate            Intent = "escalate"
+	IntentServiceInquiry      Intent = "service_inquiry"      // questions about Codevertex platform services
+	IntentCourseInquiry       Intent = "course_inquiry"       // questions about Digitika courses
+	IntentSupportRequest      Intent = "support_request"      // explicit support/help ticket request
+	IntentDataQuery           Intent = "data_query"           // query live service data
+	IntentIntegrationInterest Intent = "integration_interest" // wants to connect/integrate a platform integration (eTIMS, TruLoad, cameras, PLCs, Arduino/IoT)
 )
 
 // Router classifies user questions and routes them to the appropriate model.
@@ -62,6 +63,7 @@ Categories:
 - "course_inquiry": Questions about Digitika courses, Code-Starter bootcamp, enrollment, pricing, curriculum, schedule, certificates
 - "support_request": User needs technical help, reports a bug, asks for support, wants to open a ticket
 - "data_query": User asks for live data: "what are my orders", "show my invoices", "check inventory", "what is my subscription status"
+- "integration_interest": User wants to CONNECT or INTEGRATE something with the Codevertex platform: KRA eTIMS/tax fiscalization, TruLoad weighing hardware/software, camera systems, PLCs, Arduino, or general IoT/hardware automation. This is a Codevertex integration topic, NOT general programming — e.g. "how do I integrate eTIMS", "can you connect to our weighbridge", "we want to hook up our PLC/Arduino/cameras to your system" are integration_interest, not off_topic
 - "off_topic": Questions unrelated to business products, services, or the company — includes general programming tutorials, code samples unrelated to a Codevertex service, weather, sports, politics, homework, cooking, general knowledge
 - "escalate": User explicitly asks to speak to a human, requests a call, or expresses serious frustration`
 
@@ -158,6 +160,22 @@ func HeuristicClassify(question string) (Classification, bool) {
 		}
 	}
 
+	// Integration-interest signals — checked before the generic service-inquiry
+	// patterns below since "integrate treasury" etc. should route here, not there.
+	integrationPatterns := []string{
+		"etims", "kra pin", "kra integration", "tax fiscalization", "fiscal device",
+		"truload", "weighbridge", "weighing hardware", "weighing software",
+		"integrate with", "integration with", "connect our", "connect my",
+		"hook up our", "camera integration", "cctv integration", "plc",
+		"arduino", "iot automation", "iot integration", "hardware automation",
+		"developer portal", "api access", "api integration",
+	}
+	for _, p := range integrationPatterns {
+		if strings.Contains(q, p) {
+			return Classification{Intent: IntentIntegrationInterest, Confidence: 0.85}, true
+		}
+	}
+
 	// Service inquiry signals.
 	servicePatterns := []string{
 		"marketflow", "ordering", "pos ", "point of sale", "logistics",
@@ -223,7 +241,8 @@ func (r *Router) Classify(ctx context.Context, question string) (Classification,
 	intent := Intent(result.Intent)
 	switch intent {
 	case IntentSimpleFAQ, IntentProductQA, IntentBusinessOpp, IntentRecruitment, IntentTaskExecute,
-		IntentOffTopic, IntentEscalate, IntentServiceInquiry, IntentCourseInquiry, IntentSupportRequest, IntentDataQuery:
+		IntentOffTopic, IntentEscalate, IntentServiceInquiry, IntentCourseInquiry, IntentSupportRequest, IntentDataQuery,
+		IntentIntegrationInterest:
 		r.logger.Debug("classified intent",
 			zap.String("intent", string(intent)),
 			zap.Float64("confidence", result.Confidence),

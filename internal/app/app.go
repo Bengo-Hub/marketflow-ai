@@ -84,7 +84,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	var ollamaClient *ai.Client
 	var ollamaLLMClient *ai.Client
 	if cfg.AI.OllamaURL != "" {
-		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger)        // embeddings: /api/embeddings
+		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger)          // embeddings: /api/embeddings
 		ollamaLLMClient = ai.NewClient(cfg.AI.OllamaURL+"/v1", "", logger) // LLM tier-3: /v1/chat/completions
 	}
 
@@ -167,6 +167,29 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				Logger:     logger,
 			}))
 			logger.Info("tax_advisor tool enabled (Kenya tax rates + compliance calendar)")
+
+			// create_ticket: opens a support ticket in ticketing-service. (Was defined but
+			// never actually registered here -- fixed alongside adding request_integration below.)
+			if cfg.AI.TicketingURL != "" {
+				tools = append(tools, agenttools.NewCreateTicket(agenttools.CreateTicketConfig{
+					TicketingURL: cfg.AI.TicketingURL,
+					ServiceKey:   cfg.App.InternalServiceKey,
+					Logger:       logger,
+				}))
+				logger.Info("create_ticket tool enabled")
+			}
+
+			// request_integration: submits a platform-integration request (eTIMS, TruLoad
+			// weighing, cameras, PLCs, Arduino/IoT) and notifies support via auth-api's
+			// existing Slack/email notifier.
+			if cfg.AI.AuthAPIURL != "" {
+				tools = append(tools, agenttools.NewRequestIntegration(agenttools.RequestIntegrationConfig{
+					AuthAPIURL: cfg.AI.AuthAPIURL,
+					ServiceKey: cfg.App.InternalServiceKey,
+					Logger:     logger,
+				}))
+				logger.Info("request_integration tool enabled")
+			}
 		} else {
 			logger.Warn("MF_AI_INTERNAL_SERVICE_KEY not set; query_service_data tool disabled — set it to enable live course/enrollment/order queries")
 		}
@@ -352,7 +375,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(120 * time.Second)) // longer for AI responses
 	r.Use(cors.Handler(cors.Options{
-		AllowOriginFunc: func(r *http.Request, origin string) bool { return true },
+		AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Tenant-ID", "X-API-Key", "X-Widget-Mode", "X-Widget-Persona"},
 		AllowCredentials: true,
