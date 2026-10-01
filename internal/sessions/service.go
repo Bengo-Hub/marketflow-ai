@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sync"
+	sharedcache "github.com/Bengo-Hub/cache"
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
@@ -20,16 +20,18 @@ type Service struct {
 	db     *sql.DB
 	logger *zap.Logger
 
-	// tenantCache memoises slug/uuid → real tenant UUID lookups so chat_sessions
-	// rows satisfy the FK to tenants. Keyed by the raw X-Tenant-ID header value.
-	tenantCache sync.Map // map[string]uuid.UUID
+	// tenantCache memoises slug/uuid -> real tenant UUID lookups so chat_sessions rows
+	// satisfy the FK to tenants. Keyed by the raw X-Tenant-ID header value, which callers
+	// control, so it is bounded (LRU) and expiring: an unbounded map grew with every value.
+	tenantCache *sharedcache.Local[string, uuid.UUID]
 }
 
 // NewService creates a new session service.
 func NewService(db *sql.DB, logger *zap.Logger) *Service {
 	return &Service{
-		db:     db,
-		logger: logger.Named("sessions"),
+		db:          db,
+		logger:      logger.Named("sessions"),
+		tenantCache: sharedcache.NewLocal[string, uuid.UUID](5000, time.Hour),
 	}
 }
 
@@ -47,8 +49,8 @@ func (s *Service) ResolveTenantID(ctx context.Context, raw string) (uuid.UUID, b
 	if s == nil || s.db == nil || raw == "" {
 		return uuid.Nil, false
 	}
-	if cached, ok := s.tenantCache.Load(raw); ok {
-		return cached.(uuid.UUID), true
+	if cached, ok := s.tenantCache.Get(raw); ok {
+		return cached, true
 	}
 
 	var id uuid.UUID
@@ -67,7 +69,7 @@ func (s *Service) ResolveTenantID(ctx context.Context, raw string) (uuid.UUID, b
 		return uuid.Nil, false
 	}
 
-	s.tenantCache.Store(raw, id)
+	s.tenantCache.Set(raw, id)
 	return id, true
 }
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	sharedcache "github.com/Bengo-Hub/cache"
+	"github.com/Bengo-Hub/httpware"
+	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
 	"net/http"
 	"time"
 
@@ -54,13 +57,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	// ── Redis ─────────────────────────────────────────────────────────────
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:            cfg.Redis.Addr,
-		Password:        cfg.Redis.Password,
-		DB:              cfg.Redis.DB,
-		DisableIdentity: true,
+	redisClient, err := sharedcache.NewRedis(ctx, sharedcache.RedisConfig{
+		Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
 	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 
@@ -371,9 +371,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
+	// Never chi RealIP: it trusts client-sent True-Client-IP/X-Forwarded-For.
+	r.Use(ratelimit.TrustedRealIP)
 	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Timeout(120 * time.Second)) // longer for AI responses
+	// Longer for AI responses; streamed (SSE) answers end on their own or on disconnect.
+	r.Use(httpware.BypassForStreaming(chimiddleware.Timeout(120 * time.Second)))
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
@@ -398,7 +400,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// /p/{slug} and external sites uses this. Rate-limited per-IP (15/min)
 	// and per-tenant (100/min) to prevent flooding.
 	r.Route("/api/v1/public", func(r chi.Router) {
-		r.Use(mw.RateLimit(redisClient, 15, 100))
+		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100))
 		r.Post("/chat", chatHandler.Chat)
 	})
 
