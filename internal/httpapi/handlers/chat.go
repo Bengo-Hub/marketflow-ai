@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/rag"
@@ -14,26 +15,65 @@ import (
 	"go.uber.org/zap"
 )
 
-// UsageReporter reports usage events to subscriptions-api (fire-and-forget).
-type UsageReporter interface {
-	Report(tenantID, metric string, value float64)
-}
-
 // ChatHandler handles AI chat HTTP requests.
 type ChatHandler struct {
 	pipeline *rag.Pipeline
 	sessions *sessions.Service
-	usage    UsageReporter
+	credits  CreditSpender
 	logger   *zap.Logger
 }
 
-// NewChatHandler creates a new chat handler.
-func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, usage UsageReporter, logger *zap.Logger) *ChatHandler {
+// NewChatHandler creates a new chat handler. credits may be nil (no billing configured, as in local
+// development); every message then runs unmetered.
+func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, credits CreditSpender, logger *zap.Logger) *ChatHandler {
 	return &ChatHandler{
 		pipeline: pipeline,
 		sessions: sess,
-		usage:    usage,
+		credits:  credits,
 		logger:   logger.Named("chat.handler"),
+	}
+}
+
+// chargeMessage spends one AI credit for the tenant before a message runs. It returns the charge
+// key for a later refund (empty when nothing was charged) and false after writing the refusal.
+// Only a tenant that resolved to a real tenant row is billed: a slug the platform could not
+// resolve has nobody to charge, and the shared platform tenant answers as exempt.
+func (h *ChatHandler) chargeMessage(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, billable bool) (string, bool) {
+	if h.credits == nil || !billable {
+		return "", true
+	}
+	key := "chat:" + uuid.NewString()
+	dec, err := h.credits.Spend(r.Context(), tenantID, 1, key)
+	if err != nil {
+		h.logger.Warn("ai credit check failed (fail-closed)", zap.String("tenant_id", tenantID.String()), zap.Error(err))
+		writeError(w, http.StatusServiceUnavailable, "AI credits could not be checked right now, try again shortly")
+		return "", false
+	}
+	if !dec.Allowed {
+		h.logger.Info("ai message refused", zap.String("tenant_id", tenantID.String()), zap.String("reason", dec.Reason))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":   dec.Reason,
+			"message": "AI credits are used up. Buy a bundle from your billing page to keep chatting.",
+		})
+		return "", false
+	}
+	if dec.Exempt {
+		return "", true
+	}
+	return key, true
+}
+
+// refund returns the credit when a message produced no answer.
+func (h *ChatHandler) refund(r *http.Request, tenantID uuid.UUID, key string) {
+	if key == "" || h.credits == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	if err := h.credits.Refund(ctx, tenantID, key); err != nil {
+		h.logger.Error("ai credit refund did not go through", zap.String("tenant_id", tenantID.String()), zap.String("key", key), zap.Error(err))
 	}
 }
 
@@ -120,8 +160,13 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		PublicMode:   isPublic,
 	}
 
+	chargeKey, ok := h.chargeMessage(w, r, tenantID, persist)
+	if !ok {
+		return
+	}
+
 	if req.Stream {
-		h.handleStream(w, r, input, persist)
+		h.handleStream(w, r, input, persist, tenantID, chargeKey)
 		return
 	}
 
@@ -129,6 +174,7 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	result, err := h.pipeline.Chat(r.Context(), input)
 	if err != nil {
 		h.logger.Error("chat failed", zap.Error(err))
+		h.refund(r, tenantID, chargeKey)
 		writeError(w, http.StatusInternalServerError, "AI processing failed")
 		return
 	}
@@ -144,11 +190,6 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 			ai.Message{Role: "user", Content: req.Question},
 			ai.Message{Role: "assistant", Content: savedAssistant},
 		)
-	}
-
-	// Report AI chat usage to subscriptions-api (fire-and-forget).
-	if h.usage != nil {
-		h.usage.Report(tenantID.String(), "ai_chat_messages", 1)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -188,9 +229,10 @@ func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, ra
 // When persist is true the assembled answer is written back to the session
 // history once the stream completes, so the dashboard chat (which always
 // streams) keeps conversation memory across turns.
-func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input rag.ChatInput, persist bool) {
+func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input rag.ChatInput, persist bool, tenantID uuid.UUID, chargeKey string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		h.refund(r, tenantID, chargeKey)
 		writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
@@ -204,6 +246,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 
 	ch, meta, err := h.pipeline.ChatStream(r.Context(), input)
 	if err != nil {
+		h.refund(r, tenantID, chargeKey)
 		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
 		flusher.Flush()
 		return

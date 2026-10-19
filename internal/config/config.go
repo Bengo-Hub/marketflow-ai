@@ -63,7 +63,8 @@ type SecurityConfig struct {
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
 	AuthServiceURL string `env:"MF_SECURITY_AUTH_SERVICE_URL" envDefault:"https://sso.codevertexafrica.com"`
-	// SubscriptionsURL points to subscriptions-api for usage event reporting.
+	// SubscriptionsURL points to subscriptions-api, which owns AI credit balances (each chat message
+	// spends one through the internal service key).
 	SubscriptionsURL string `env:"SUBSCRIPTION_BASE_URL" envDefault:"http://subscription-api.subscriptions.svc.cluster.local:4000"`
 	SubscriptionsKey string `env:"MF_SECURITY_SUBSCRIPTIONS_API_KEY"`
 }

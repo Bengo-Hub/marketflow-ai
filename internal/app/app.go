@@ -360,11 +360,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	// ── Chat Handler ──────────────────────────────────────────────────────
-	var usageReporter handlers.UsageReporter
-	if cfg.Security.SubscriptionsURL != "" {
-		usageReporter = handlers.NewHTTPUsageReporter(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
+	// AI credits are owned by subscriptions-api: each chat message spends one there.
+	var creditSpender handlers.CreditSpender
+	if cfg.Security.SubscriptionsURL != "" && cfg.Security.SubscriptionsKey != "" {
+		creditSpender = handlers.NewHTTPCreditSpender(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
 	}
-	chatHandler := handlers.NewChatHandler(pipeline, sessionService, usageReporter, logger)
+	chatHandler := handlers.NewChatHandler(pipeline, sessionService, creditSpender, logger)
 	triageHandler := handlers.NewTriageHandler(groqClient, cfg.AI.GroqRouterModel, logger)
 	crmAIHandler := handlers.NewCRMAIHandler(groqClient, cfg.AI.GroqMainModel, cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
 
