@@ -133,23 +133,28 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		Model:      model,
 	}
 
-	return guardStream(rawCh), meta, nil
+	businessType := input.BusinessType
+	return guardStream(rawCh, func(text string) string {
+		// Same output rules as the non-streaming path: jailbreak and schema-leak screen,
+		// then the tenant's compliance filter (blocked claims, substitutions, disclaimers).
+		return p.applyFilter(ScreenOutput(text), businessType)
+	}), meta, nil
 }
 
-// guardStream wraps an upstream delta channel so that ScreenOutput is applied
-// to the fully-accumulated response. Tokens are forwarded in real-time; if the
-// completed text is detected as a jailbreak or schema leak, a replace delta is
-// injected before the Done sentinel so the widget can overwrite the bubble.
-func guardStream(upstream <-chan ai.StreamDelta) <-chan ai.StreamDelta {
+// guardStream wraps an upstream delta channel so that finalize (output screen plus
+// compliance filter) is applied to the fully-accumulated response. Tokens are forwarded in
+// real-time; if the finalized text differs (a blocked claim, a substituted word, an added
+// disclaimer, a jailbreak), a replace delta is injected before the Done sentinel so the
+// widget overwrites the bubble with the compliant text.
+func guardStream(upstream <-chan ai.StreamDelta, finalize func(string) string) <-chan ai.StreamDelta {
 	out := make(chan ai.StreamDelta, 32)
 	go func() {
 		defer close(out)
 		var buf strings.Builder
 		for delta := range upstream {
 			if delta.Done {
-				screened := ScreenOutput(buf.String())
-				if screened != buf.String() {
-					out <- ai.StreamDelta{Type: "replace", Content: screened}
+				if final := finalize(buf.String()); final != buf.String() {
+					out <- ai.StreamDelta{Type: "replace", Content: final}
 				}
 				out <- ai.StreamDelta{Done: true}
 				return
@@ -159,7 +164,11 @@ func guardStream(upstream <-chan ai.StreamDelta) <-chan ai.StreamDelta {
 				out <- delta
 			}
 		}
-		// upstream closed without Done — forward a Done so the handler terminates
+		// Upstream closed without Done: still finalize, so an abrupt provider close cannot
+		// skip the compliance filter, then forward a Done so the handler terminates.
+		if final := finalize(buf.String()); final != buf.String() {
+			out <- ai.StreamDelta{Type: "replace", Content: final}
+		}
 		out <- ai.StreamDelta{Done: true}
 	}()
 	return out

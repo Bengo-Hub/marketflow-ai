@@ -19,6 +19,22 @@ type Filter struct {
 	weightTriggers      []string
 }
 
+// genericHardBlocks apply to every tenant that is not FLP. They are compiled once. They cover
+// medical cure claims and financial promises that are misleading for any business (Consumer
+// Protection Act 2012). "treat" and "heal" are deliberately not here: everyday copy such as
+// "treat yourself" would be blocked for cafes and shops.
+var genericHardBlocks = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bcure[sd]?\b|\bcuring\b`),
+	regexp.MustCompile(`(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b`),
+	regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`),
+	regexp.MustCompile(`(?i)\bget\s+rich\b`),
+	regexp.MustCompile(`(?i)\beasy\s+money\b`),
+	regexp.MustCompile(`(?i)\bmake\s+money\s+fast\b`),
+	regexp.MustCompile(`(?i)\bguaranteed?\s+(returns?|profits?)\b`),
+	regexp.MustCompile(`(?i)\brisk[\s-]free\s+(investment|returns?|profits?)\b`),
+	regexp.MustCompile(`(?i)\bdouble\s+your\s+(money|investment)\b`),
+}
+
 type substituteRule struct {
 	pattern     *regexp.Regexp
 	replacement string
@@ -101,15 +117,7 @@ func (f *Filter) Check(response string) (string, bool, string) {
 // Applies minimal safety rules (no medical claims, no guaranteed income) but
 // skips FLP-specific disclaimers and product-name substitutions.
 func (f *Filter) CheckGeneric(response string) (string, bool, string) {
-	hardBlocks := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bcure[sd]?\b|\bcuring\b`),
-		regexp.MustCompile(`(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b`),
-		regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`),
-		regexp.MustCompile(`(?i)\bget\s+rich\b`),
-		regexp.MustCompile(`(?i)\beasy\s+money\b`),
-		regexp.MustCompile(`(?i)\bmake\s+money\s+fast\b`),
-	}
-	for _, re := range hardBlocks {
+	for _, re := range genericHardBlocks {
 		if re.MatchString(response) {
 			return "", true, "blocked pattern: " + re.String()
 		}

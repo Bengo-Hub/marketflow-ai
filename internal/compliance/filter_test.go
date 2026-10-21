@@ -40,6 +40,56 @@ func TestFilter_NeutralisesMedicalClaims(t *testing.T) {
 	}
 }
 
+// TestCheckGeneric_BlocksMisleadingPromises covers the rules every non-FLP tenant gets.
+func TestCheckGeneric_BlocksMisleadingPromises(t *testing.T) {
+	f := NewFilter()
+	blocked := []string{
+		"This tea cures headaches.",
+		"A miracle offer for you.",
+		"Guaranteed income every week.",
+		"Get rich with our course.",
+		"Easy money, start today.",
+		"Make money fast from home.",
+		"Invest now for guaranteed returns.",
+		"Enjoy guaranteed profits monthly.",
+		"A risk-free investment in our scheme.",
+		"Risk free returns of 20 percent.",
+		"Double your money in 30 days.",
+	}
+	for _, in := range blocked {
+		t.Run(in, func(t *testing.T) {
+			if _, isBlocked, _ := f.CheckGeneric(in); !isBlocked {
+				t.Fatalf("expected %q to be blocked", in)
+			}
+		})
+	}
+}
+
+// TestCheckGeneric_AllowsEverydayCopy guards against false positives that would break ordinary
+// business copy for cafes, shops, schools and service businesses.
+func TestCheckGeneric_AllowsEverydayCopy(t *testing.T) {
+	f := NewFilter()
+	allowed := []string{
+		"Treat yourself to our new pastries.",
+		"Satisfaction guaranteed or your money back.",
+		"Our POS keeps your sales safe even offline.",
+		"Learn Python in our 8-week course.",
+		"Healthy lunch bowls from KES 450.",
+		"Your guaranteed delivery slot is confirmed.",
+	}
+	for _, in := range allowed {
+		t.Run(in, func(t *testing.T) {
+			out, isBlocked, reason := f.CheckGeneric(in)
+			if isBlocked {
+				t.Fatalf("everyday copy %q was blocked (%s)", in, reason)
+			}
+			if out != in {
+				t.Fatalf("generic filter must not rewrite copy: %q became %q", in, out)
+			}
+		})
+	}
+}
+
 // TestFilter_Preserves_ApprovedLanguage confirms the FLP-approved vocabulary
 // survives a filter round-trip.
 func TestFilter_Preserves_ApprovedLanguage(t *testing.T) {
