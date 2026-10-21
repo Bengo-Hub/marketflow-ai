@@ -8,6 +8,7 @@ import (
 	"github.com/Bengo-Hub/httpware"
 	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
 	"net/http"
+	"strings"
 	"time"
 
 	authclient "github.com/Bengo-Hub/shared-auth-client"
@@ -24,7 +25,6 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/tasks"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -377,13 +377,17 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Use(chimiddleware.Recoverer)
 	// Longer for AI responses; streamed (SSE) answers end on their own or on disconnect.
 	r.Use(httpware.BypassForStreaming(chimiddleware.Timeout(120 * time.Second)))
-	r.Use(cors.Handler(cors.Options{
-		AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Tenant-ID", "X-API-Key", "X-Widget-Mode", "X-Widget-Persona"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	// Platform apps and ALLOWED_ORIGINS get credentialed CORS. The embeddable chat widget runs on
+	// customer sites, so any other origin is answered with "*" (no credentials); the pattern order
+	// matters because the first match wins.
+	corsOrigins := []string{"http://localhost:*", "https://*.codevertexafrica.com"}
+	for _, o := range strings.Split(cfg.HTTP.AllowedOrigins, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			corsOrigins = append(corsOrigins, o)
+		}
+	}
+	corsOrigins = append(corsOrigins, "*")
+	r.Use(httpware.CORS(httpware.StandardCORS(corsOrigins, "X-Widget-Mode", "X-Widget-Persona")))
 
 	// Base URL redirects to Swagger docs
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -418,29 +422,13 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// Internal S2S routes — X-API-Key only (ticketing-api, marketflow-worker).
 	internalKey := cfg.App.InternalServiceKey
 	r.Route("/api/v1/internal", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				if internalKey != "" && req.Header.Get("X-API-Key") != internalKey {
-					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-					return
-				}
-				next.ServeHTTP(w, req)
-			})
-		})
+		r.Use(httpware.RequireServiceKey(internalKey))
 		r.Post("/triage", triageHandler.Triage)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).
 	r.Route("/api/v1/classify", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				if internalKey != "" && req.Header.Get("X-API-Key") != internalKey {
-					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-					return
-				}
-				next.ServeHTTP(w, req)
-			})
-		})
+		r.Use(httpware.RequireServiceKey(internalKey))
 		r.Post("/", triageHandler.Classify)
 	})
 
