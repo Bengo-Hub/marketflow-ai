@@ -207,3 +207,18 @@ The codevertex-website `/api/chat` route proxies to marketflow-ai first, falls b
 | Widget mode | `data-mode="platform\|tenant"` | Single file; behaviour driven by attribute |
 | Provider config | env primary + DB ProviderSetting overrides | Tenants can bring own Claude/Groq keys |
 | wa.me format | `https://wa.me/{number}` | Inbox link (not WhatsApp Business API) |
+
+---
+
+## Ads Autopilot (planned 2026-10-22)
+
+Design: `.claude/plans/marketflow-ads-autopilot-2026-10-22.md`. Sprint files: `docs/sprint-plans/sprint-14` to `sprint-20` in the marketflow docs folder.
+
+| Phase | marketflow-ai scope |
+|---|---|
+| 0 Foundations (Sprint 14) | Compliance filter for every tenant, with FLP rules on top (`internal/compliance/filter.go`); 30-day `chat_sessions` TTL with a daily RunOnce prune and a rolling memory summary (`internal/sessions/service.go`) |
+| 1 Creative studio (Sprint 15) | Provider port (Quote, Submit, Status, Fetch, Cancel); adapters for Creatomate, Shotstack, HeyGen, Creatify, fal.ai, Azure and ElevenLabs TTS; model registry in platform ProviderSetting rows with output hosting fields; router with fallback and canary; shutdown-date watcher; JSON script generation with hooks; JSON Patch revisions with scene hash cache; bounded context; golden-brief eval; output hosting decision (provider public, provider share, public R2 copy, private option); cost and margin report |
+| 3 WhatsApp assistant (Sprint 17) | Consumer for `notifications.whatsapp.inbound`; verified-phone identity and permissions; brief, quote, review and publish flow with buttons; proposals with single-use confirmation tokens (15 min, action-hash bound); OTP above a threshold |
+| 6 Autopilot (Sprint 20) | "Describe your agent" builder; proposal-style tools (`generate_ad_brief`, `generate_script`, `render_creative`, `schedule_publish`, `launch_campaign`, `pause_campaign`, `get_campaign_insights`); `content_planner` weekly calendar |
+
+Security rules for this work: the LLM never mutates spend or publishing directly. Third-party text (lead messages, comments, fetched pages) goes through a quarantined summariser with no tools. Outputs are schema-validated. URL fetches pass an SSRF guard. Lead PII never goes to generation providers.
