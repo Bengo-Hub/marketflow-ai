@@ -13,7 +13,7 @@ import (
 
 // CRMAIHandler handles CRM-specific AI inference endpoints.
 type CRMAIHandler struct {
-	groqClient      *ai.Client
+	groqClient      ai.ChatClient
 	mainModel       string
 	marketflowURL   string
 	internalKey     string
@@ -21,7 +21,7 @@ type CRMAIHandler struct {
 }
 
 // NewCRMAIHandler creates a new CRM AI handler.
-func NewCRMAIHandler(groqClient *ai.Client, mainModel, marketflowURL, internalKey string, logger *zap.Logger) *CRMAIHandler {
+func NewCRMAIHandler(groqClient ai.ChatClient, mainModel, marketflowURL, internalKey string, logger *zap.Logger) *CRMAIHandler {
 	return &CRMAIHandler{
 		groqClient:    groqClient,
 		mainModel:     mainModel,

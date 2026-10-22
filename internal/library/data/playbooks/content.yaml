@@ -1,0 +1,176 @@
+# Content playbooks. Distilled from the marketingskills plugin (MIT,
+# github.com/coreyhaines31/marketingskills).
+playbooks:
+  - key: copywriting
+    name: Page and product copy
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: copywriting, license: MIT}
+    specialist: content_creator
+    model_class: premium
+    output_contract: answer
+    when_to_use: Writing or rewriting copy for a landing page, profile page, product or service description, about page or funnel.
+    keywords: [copy, landing page, description, website text, maelezo, page, headline, profile, funnel]
+    required_inputs: [offering]
+    optional_inputs: [audience, url, goal]
+    method:
+      - Diagnose first - a blank brief gets a draft; existing copy in the owner's voice is deepened, not replaced; a one-line fix changes only that line.
+      - Lead with the outcome the customer wants, then how it works, proof, objections and one clear call to action.
+      - Use the customer's words from reviews and messages; benefits before features; one idea per section.
+      - Offer two headline alternatives with the reason for each.
+    rules:
+      - "Clarity over cleverness; if a line would work unchanged for a competitor, rewrite it or flag [NEED: differentiator]."
+    starters:
+      - {title: "Write my product page", template: "Write the page copy for ${offering} for ${audience}."}
+
+  - key: copy-editing
+    name: Copy editing
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: copy-editing, license: MIT}
+    specialist: content_creator
+    model_class: standard
+    output_contract: answer
+    when_to_use: The owner has existing copy and wants it improved, shortened, proofread or made to sound less like AI.
+    keywords: [edit, improve, rewrite, proofread, polish, shorten, sounds like ai, rekebisha, boresha]
+    required_inputs: [topic]
+    optional_inputs: [audience]
+    method:
+      - Sweep in order - clarity, voice, so what, proof, specificity, emotion, risk reversal.
+      - Remove AI tells and filler; keep the owner's voice and emphasis.
+      - Return the edited text and a short list of what changed and why.
+    rules:
+      - A request to fix one line changes only that line.
+    starters:
+      - {title: "Polish my text", template: "Improve this text and keep my voice: ${topic}"}
+
+  - key: social
+    name: Social posts
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: social, license: MIT}
+    specialist: content_creator
+    model_class: premium
+    output_contract: social_posts
+    when_to_use: Writing organic posts, captions, reels ideas or WhatsApp status updates for Facebook, Instagram, TikTok, LinkedIn or X.
+    keywords: [post, caption, instagram, facebook, tiktok, linkedin, status, reel, chapisho, social media]
+    required_inputs: [offering]
+    optional_inputs: [platforms, audience, period, topic]
+    method:
+      - Open with a hook that earns the next second - a specific situation, a number, a story or a contrarian take grounded in fact.
+      - One idea per post; end with the point or a real question, not engagement bait.
+      - Adapt length and format per platform; suggest the visual (photo, poster, short video) for each post.
+      - For short video give the first 3 seconds, the beats and on-screen text of at most two lines.
+    rules:
+      - No broetry, no emoji bullets on every line, no "Agree?" or "Thoughts?" endings.
+    starters:
+      - {title: "Posts for my page", template: "Write ${platforms} posts about ${offering} for this week."}
+
+  - key: video-script
+    name: Video ad script
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: video, license: MIT}
+    specialist: content_creator
+    model_class: premium
+    output_contract: video_script
+    when_to_use: Writing a short video or reel script, storyboard or voiceover for an ad or post, including turning product photos into a video.
+    keywords: [video, reel, script, voiceover, short video, tiktok video, video ad, video ya tangazo]
+    required_inputs: [offering]
+    optional_inputs: [platforms, language, audience, objective, period]
+    method:
+      - Hook in the first 3 seconds with the buyer's situation or the result; show the product early.
+      - 15 to 30 seconds, 4 to 6 scenes; each scene has duration, visual, voiceover, on-screen text and shot type.
+      - Give 3 alternative hooks.
+      - Use the product photos the owner provides for image-to-video scenes; describe motion simply (slow push-in, rotate, hand reveal).
+      - End with one call to action matching the objective (WhatsApp, call, visit, buy).
+    rules:
+      - Vertical 9:16 with text inside the safe area; captions at most two lines.
+      - Synthetic people are labelled AI-generated; never use a real public figure.
+    starters:
+      - {title: "Turn my photos into a video ad", template: "Make a 30-second video ad for ${offering} from my product photos, in ${language}."}
+
+  - key: ugc-video
+    name: UGC-style video ad
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: ad-creative (short-form-video-specs, motion-video-ads), license: MIT}
+    specialist: content_creator
+    model_class: premium
+    output_contract: video_script
+    when_to_use: A creator-style or user-generated-content (UGC) video ad - a person talking to camera about the product, a reaction plus demo, an unboxing or texture video, a talking-head review, or the owner's own phone footage turned into an ad.
+    keywords: [ugc, user generated, creator style, influencer style, talking head, testimonial video, review video, unboxing, mtu akionyesha, mtu anaongea, video ya mteja, like tiktok videos, kama za tiktok]
+    required_inputs: [offering]
+    optional_inputs: [platforms, language, audience, objective, period, winners]
+    method:
+      - Pick one format per variant from the format library - presenter talking to camera (Yapper), presenter hook then hard cut to the product (Reaction plus Demo), faceless product-in-motion from the owner's photos, presenter over product images (commentary), owner's own footage with captions, or a real customer review read aloud with attribution.
+      - Hook in the first 2 to 3 seconds in the buyer's own situation and words; show the product by second 3; one message; one call to action (WhatsApp, call, visit, order).
+      - Write 15 to 35 seconds as scenes - for each, the shot (presenter, product clip from photo, owner footage, end card), voiceover, on-screen caption of at most two lines, and duration.
+      - Product scenes come from the owner's real photos or footage animated by the image-to-video model; never generate a different-looking product.
+      - Vary the presenter voice and look per variant so A/B variants are distinguishable.
+    rules:
+      - A synthetic presenter explains and recommends; it never claims to be a customer or to have used, tried or tested the product ("I tried it", "it changed my skin", "my results").
+      - Customer experiences appear only from real testimonials the business holds (with consent), quoted and attributed, never invented or reworded into stronger claims.
+      - Every synthetic person carries an on-screen "AI-generated" note, and the platform AI label is set.
+      - Vertical 9:16, captions inside the safe band (720x1200 centred), music baked in for paid ads.
+      - No real public figures, no voice cloning without recorded consent.
+    starters:
+      - {title: "UGC video of someone showing my product", template: "Make a UGC-style video ad of a presenter showing ${offering}, in ${language}, for ${platforms}."}
+      - {title: "Video ya mtu akionyesha bidhaa", template: "Nataka video ya mtu akionyesha ${offering} kama za TikTok, bajeti ${budget}."}
+
+  - key: poster-brief
+    name: Poster and static image ad
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: image, license: MIT}
+    specialist: content_creator
+    model_class: standard
+    output_contract: poster_brief
+    when_to_use: Designing a poster, flyer, static image ad, carousel or social graphic.
+    keywords: [poster, flyer, image, picture, graphic, carousel, banner, picha, bango]
+    required_inputs: [offering]
+    optional_inputs: [platforms, audience, language]
+    method:
+      - One message per poster - headline under 8 words, a supporting line and one call to action.
+      - Pick the layout (product hero, before and after only when allowed, stat callout with a real number, review card with a real review, offer card).
+      - Write the image prompt for the background or product scene and the overlay text separately, so text is rendered cleanly.
+      - Give sizes needed (1080x1080, 1080x1350, 1080x1920) and the brand colours.
+    rules:
+      - Never generate fake reviews or ratings on a poster.
+    starters:
+      - {title: "Design a poster", template: "Make a poster for ${offering} for ${platforms}."}
+
+  - key: emails
+    name: Emails and sequences
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: emails, license: MIT}
+    specialist: content_creator
+    model_class: standard
+    output_contract: answer
+    when_to_use: Writing an email, newsletter or a welcome, nurture, re-engagement or win-back sequence.
+    keywords: [email, newsletter, sequence, follow up email, barua pepe, nurture]
+    required_inputs: [goal]
+    optional_inputs: [offering, audience]
+    method:
+      - One email, one job; value before the ask.
+      - For a sequence give each email's day, goal, subject line options, preview text and body.
+      - Subject lines are specific and honest.
+    rules:
+      - Marketing email needs consent and an unsubscribe.
+    starters:
+      - {title: "Write a follow-up email", template: "Write an email to ${audience} about ${offering}."}
+
+  - key: whatsapp-sms
+    name: WhatsApp and SMS messages
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: sms, license: MIT}
+    specialist: content_creator
+    model_class: standard
+    output_contract: answer
+    when_to_use: Writing WhatsApp broadcasts, WhatsApp templates, status updates or SMS campaigns and flows.
+    keywords: [whatsapp, sms, broadcast, text message, ujumbe, status, template]
+    required_inputs: [goal]
+    optional_inputs: [offering, audience, language]
+    method:
+      - Every message must pass "would they be glad they got this?".
+      - Name the sender at the start, keep one call to action and one link, and keep SMS within 160 characters.
+      - For WhatsApp, free-form replies only within 24 hours of the customer's last message; outside it use an approved template with links as buttons.
+      - Include the opt-out.
+    rules:
+      - Send only to people who opted in.
+    starters:
+      - {title: "WhatsApp broadcast", template: "Write a WhatsApp broadcast about ${offering} for my customers."}

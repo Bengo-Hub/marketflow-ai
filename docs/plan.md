@@ -238,7 +238,7 @@ Design: `.claude/plans/marketflow-marketing-os-2026-10-22.md`. Checklist: `marke
 |---|---|---|
 | `internal/ai` | `ChatClient` interface for every provider; Anthropic prompt caching, effort and cache usage; JSON response format | Written, not committed |
 | `internal/llm` | Model router: classes nano, standard, premium, premium_plus; platform policy `ai_routing/policy`; breaker per model; usage meter and Prometheus cost counters; class-bound clients for legacy callers | Written, not committed |
-| `internal/decide` | Jev decide port (TypeSafe, OpenRouter, Groq fallback) for Choice, Score and Noul decisions | Planned in this sprint |
+| `internal/decide` | Jev decide port (TypeSafe direct, Groq fallback; OpenRouter only serves a chat router, not the typed API) for Choice, Score and Noul decisions | Built, not committed |
 | `internal/library` | Embedded skill playbooks (from the marketingskills plugin, MIT) and a curated prompts.chat subset (CC0), with NOTICE | Planned in this sprint |
 | `internal/promptopt` | Prompt optimiser: deterministic parsing plus decide, nano only for wording | Planned in this sprint |
 | `internal/team` | Marketing Manager plus specialists, manager routing or planning, Reviewer | Planned in this sprint |

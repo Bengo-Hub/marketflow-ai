@@ -86,12 +86,12 @@ type AIConfig struct {
 	EmbeddingDim        int    `env:"EMBEDDING_DIM" envDefault:"768"`
 	OllamaFallbackModel string `env:"OLLAMA_FALLBACK_MODEL" envDefault:"llama3.1:8b"`
 
-	// Anthropic (configurable primary or fallback)
-	ClaudeAPIKey    string `env:"CLAUDE_API_KEY"`
-	ClaudeModel     string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-4-5-20251001"`
-	ClaudeBaseURL   string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
-	ClaudeVersion   string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
-	PrimaryProvider string `env:"PRIMARY_PROVIDER" envDefault:"groq"` // groq | anthropic | ollama
+	// Anthropic. Which classes use Claude is set by the routing policy
+	// (ai_routing/policy); this model is only the provider's default.
+	ClaudeAPIKey  string `env:"CLAUDE_API_KEY"`
+	ClaudeModel   string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-5-5"`
+	ClaudeBaseURL string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
+	ClaudeVersion string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
 
 	// MarketFlow API for KB/provider config
 	MarketFlowAPIURL string `env:"MARKETFLOW_API_URL" envDefault:"http://marketflow-api.marketflow.svc.cluster.local:4000"`

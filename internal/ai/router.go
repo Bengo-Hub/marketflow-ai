@@ -30,13 +30,13 @@ const (
 // Router classifies user questions and routes them to the appropriate model.
 // Uses a fast 8B model for classification, then routes to 70B for complex responses.
 type Router struct {
-	routerClient *Client // fast 8B model (Groq llama-3.1-8b-instant)
+	routerClient ChatClient // fast 8B model (Groq llama-3.1-8b-instant)
 	routerModel  string
 	logger       *zap.Logger
 }
 
 // NewRouter creates a new intent router.
-func NewRouter(routerClient *Client, routerModel string, logger *zap.Logger) *Router {
+func NewRouter(routerClient ChatClient, routerModel string, logger *zap.Logger) *Router {
 	return &Router{
 		routerClient: routerClient,
 		routerModel:  routerModel,

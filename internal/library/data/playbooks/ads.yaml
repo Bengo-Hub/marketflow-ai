@@ -1,0 +1,72 @@
+# Paid ads playbooks. Distilled from the marketingskills plugin (MIT,
+# github.com/coreyhaines31/marketingskills).
+playbooks:
+  - key: ad-creative
+    name: Ad copy batch
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: ad-creative, license: MIT}
+    specialist: ads_specialist
+    model_class: premium
+    output_contract: ad_copy_batch
+    when_to_use: Writing or iterating ad copy - headlines, primary text, hooks and calls to action - for Meta, TikTok, Google or WhatsApp ads, including learning from winning ads.
+    keywords: [ad, ads, advert, tangazo, matangazo, boost, headline, hook, promote, sponsored, campaign copy]
+    required_inputs: [offering]
+    optional_inputs: [platforms, audience, objective, budget, period, language, winners]
+    method:
+      - Pick 3 to 5 distinct angles (pain, outcome, social proof, comparison, identity, real urgency, curiosity), each a different reason to click.
+      - Write the number of variants the Creative Plan allows, spread across the angles; vary structure and opening, not just synonyms.
+      - When winners are given, double down on their hooks and angles with fresh wording, extend the best two, and test one or two new angles.
+      - Keep every field within the platform limits - Meta primary text 125 characters visible and headline 40; TikTok ad text 100; Google headline 30 and description 90.
+      - Give each variant a test hypothesis that can lose, naming the metric, the comparison and the expected direction.
+    rules:
+      - Ground every variant in the brand context, catalog, reviews or winners; cite which one.
+      - Never copy a competitor's headline or trademark; learn the pattern, write your own words.
+      - Use the exact product name given.
+      - No hook slop ("Stop scrolling", generic "POV:") and no CTA slop ("Get started today"); name the action and what they get.
+    starters:
+      - {title: "Ads for my product this week", template: "Write ads for ${offering} on ${platforms} this week, budget ${budget}."}
+      - {title: "Tangazo la wiki hii", template: "Nataka matangazo ya ${offering} wiki hii, budget ${budget}."}
+
+  - key: ads
+    name: Paid campaign strategy
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: ads, license: MIT}
+    specialist: ads_specialist
+    model_class: premium
+    output_contract: answer
+    when_to_use: Planning, structuring, budgeting or optimising paid campaigns; choosing platforms and audiences; deciding to kill, keep or scale ads.
+    keywords: [campaign, budget, targeting, audience, roas, cpl, cost per lead, scale, pause, kampeni, bajeti]
+    required_inputs: [objective]
+    optional_inputs: [offering, budget, period, platforms, audience]
+    method:
+      - Pick the platform by where the buyers are and the objective (leads, sales, messages, awareness).
+      - Structure campaigns simply - one objective per campaign, few ad sets, 3 to 5 ads each.
+      - During tests keep about 70 percent on proven ads and 30 percent on new ones; when scaling raise budgets about 20 percent at a time with 3 to 5 days between moves.
+      - Retarget visitors and engagers with a different offer, and exclude existing customers.
+      - End every review with one call - HOLD, FIX, TEST or INVESTIGATE - and the facts, hypotheses and MISSING data behind it.
+    rules:
+      - Judge an ad only after enough spend and impressions (about 1,000 impressions or the minimum test spend).
+      - Spend, CPL and ROAS come from tools or code; label anything unavailable MISSING.
+      - Ad money stays on the client's own ad account; never suggest paying ads through Codevertex.
+    starters:
+      - {title: "Is my campaign working?", template: "Review my ${platforms} campaign for ${offering} and tell me what to change."}
+
+  - key: ab-testing
+    name: A/B test design
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: ab-testing, license: MIT}
+    specialist: ads_specialist
+    model_class: standard
+    output_contract: answer
+    when_to_use: Comparing two versions of an ad, post, page or message, or planning a test.
+    keywords: [test, a/b, split test, which is better, compare versions, jaribio]
+    required_inputs: [topic]
+    optional_inputs: [budget, period]
+    method:
+      - Write a falsifiable hypothesis - because of an observation, changing X will move metric Y for audience Z.
+      - Test one change at a time with one primary metric and a guardrail metric.
+      - Size the test from current volumes; if traffic is too low, say so and suggest a bigger change or a longer run.
+      - Decide the stopping rule before starting; do not peek and stop early.
+    rules: []
+    starters:
+      - {title: "Test two versions", template: "Help me test two versions of ${topic}."}

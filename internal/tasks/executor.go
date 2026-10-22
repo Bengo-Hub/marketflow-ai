@@ -188,7 +188,7 @@ Output ONLY valid JSON:
 }
 
 // Execute runs an AI task based on the user's request.
-func (e *Executor) Execute(ctx context.Context, client *ai.Client, model string, question string, ragContext string) (*TaskResult, error) {
+func (e *Executor) Execute(ctx context.Context, client ai.ChatClient, model string, question string, ragContext string) (*TaskResult, error) {
 	// Step 1: Classify the task type
 	taskType, err := e.classifyTask(ctx, client, model, question)
 	if err != nil {
@@ -260,7 +260,7 @@ func (e *Executor) Execute(ctx context.Context, client *ai.Client, model string,
 }
 
 // classifyTask determines what type of task the user is requesting.
-func (e *Executor) classifyTask(ctx context.Context, client *ai.Client, model string, question string) (TaskType, error) {
+func (e *Executor) classifyTask(ctx context.Context, client ai.ChatClient, model string, question string) (TaskType, error) {
 	resp, err := client.Chat(ctx, ai.ChatRequest{
 		Model: model,
 		Messages: []ai.Message{

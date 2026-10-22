@@ -9,6 +9,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"go.uber.org/zap"
 )
 
@@ -150,8 +151,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 					}
 				}
 			}
-			client, model := p.resolveClient(ctx)
-			result, err := p.taskExecutor.Execute(ctx, client, model, input.Question, ragCtx)
+			result, err := p.taskExecutor.Execute(ctx, p.llm.Client(llm.Standard), string(llm.Standard), input.Question, ragCtx)
 			if err != nil {
 				return nil, fmt.Errorf("task execution failed: %w", err)
 			}
@@ -283,85 +283,14 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
-	// ── LLM fallback ladder ─────────────────────────────────────────────
-	//
-	// Tier 1: Groq main (DB-resolved) — primary, ~82ms
-	// Tier 2: Groq fallback model (same API, smaller/faster)
-	// Tier 3: Ollama local LLM (cluster-internal, no quota)
-	// Tier 4: OpenAI (DB-resolved, graceful skip on quota 429)
-	// Tier 5: Anthropic Claude (DB-resolved, graceful skip on credits 400)
-
-	client, model := p.resolveClient(ctx)
-	resp, err := client.Chat(ctx, ai.ChatRequest{
-		Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 2048,
+	// Provider fallback, breakers and metering live in the model router.
+	resp, call, err := p.llm.Complete(ctx, llm.Standard, ai.ChatRequest{
+		Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
-
-	// Tier 2: Groq fallback model (gemma2-9b-it or llama-3.1-8b-instant)
-	if err != nil {
-		p.logger.Warn("Groq main failed, trying Groq fallback model",
-			zap.String("model", model), zap.Error(err))
-		model = p.fallbackModel
-		resp, err = p.groqClient.Chat(ctx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-	}
-
-	// Tier 3: Ollama local LLM — cluster-internal, no external quota
-	if err != nil && p.ollamaLLMClient != nil {
-		p.logger.Warn("Groq fallback failed, trying Ollama local LLM",
-			zap.String("model", p.ollamaLLMModel), zap.Error(err))
-		ollamaCtx, ollamaCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer ollamaCancel()
-		model = p.ollamaLLMModel
-		resp, err = p.ollamaLLMClient.Chat(ollamaCtx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err != nil {
-			p.logger.Warn("Ollama local LLM failed", zap.Error(err))
-		}
-	}
-
-	// Tier 4: OpenAI (gpt-4o-mini) — skip fast if quota/auth error
-	if err != nil && p.openaiClient != nil {
-		p.logger.Warn("Ollama failed, trying OpenAI fallback",
-			zap.String("model", p.openaiModel), zap.Error(err))
-		oaiCtx, oaiCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer oaiCancel()
-		model = p.openaiModel
-		resp, err = p.openaiClient.Chat(oaiCtx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err != nil {
-			p.logger.Warn("OpenAI fallback failed (quota/credits?)", zap.Error(err))
-		}
-	}
-
-	// Tier 5: Anthropic Claude — last resort, fresh context to avoid Groq cancellation
-	if err != nil && p.claudeClient != nil {
-		p.logger.Warn("OpenAI failed, trying Claude last resort",
-			zap.String("model", p.claudeModel), zap.Error(err))
-		claudeCtx, claudeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer claudeCancel()
-		claudeModel := p.claudeModel
-		if claudeModel == "" {
-			claudeModel = "claude-haiku-4-5-20251001"
-		}
-		resp, err = p.claudeClient.Chat(claudeCtx, ai.ChatRequest{
-			Model: claudeModel, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err == nil {
-			model = claudeModel
-		} else {
-			p.logger.Warn("Claude last resort failed (credits?)", zap.Error(err))
-		}
-	}
-
 	if err != nil {
 		return nil, fmt.Errorf("all LLM providers exhausted: %w", err)
 	}
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("empty response from LLM")
-	}
+	model := call.Model
 
 	raw := ScreenOutput(resp.Choices[0].Message.Content)
 	filtered := p.filterAndCache(ctx, input, raw, embedding)

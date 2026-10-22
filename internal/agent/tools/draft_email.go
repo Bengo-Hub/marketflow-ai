@@ -19,7 +19,7 @@ import (
 type DraftEmail struct {
 	apiBaseURL string
 	serviceKey string
-	llm        *ai.Client
+	llm        ai.ChatClient
 	llmModel   string
 	http       *http.Client
 	logger     *zap.Logger
@@ -29,7 +29,7 @@ type DraftEmail struct {
 type DraftEmailConfig struct {
 	APIBaseURL string
 	ServiceKey string
-	LLMClient  *ai.Client
+	LLMClient  ai.ChatClient
 	LLMModel   string
 	Logger     *zap.Logger
 }

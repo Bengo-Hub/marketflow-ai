@@ -56,8 +56,14 @@ func (c *HTTPCreditSpender) post(ctx context.Context, path string, body map[stri
 
 // Spend implements CreditSpender.
 func (c *HTTPCreditSpender) Spend(ctx context.Context, tenantID uuid.UUID, units int64, key string) (CreditDecision, error) {
+	return c.SpendFor(ctx, tenantID, units, key, "AI chat message")
+}
+
+// SpendFor spends with the description shown on the tenant's credit history
+// ("Marketing team request", "Ad copy batch").
+func (c *HTTPCreditSpender) SpendFor(ctx context.Context, tenantID uuid.UUID, units int64, key, description string) (CreditDecision, error) {
 	resp, err := c.post(ctx, "/api/v1/s2s/credits/ai_credits/consume", map[string]any{
-		"tenant_id": tenantID.String(), "units": units, "key": key, "description": "AI chat message",
+		"tenant_id": tenantID.String(), "units": units, "key": key, "description": description,
 	})
 	if err != nil {
 		return CreditDecision{}, fmt.Errorf("ai credit spend: %w", err)
@@ -71,6 +77,44 @@ func (c *HTTPCreditSpender) Spend(ctx context.Context, tenantID uuid.UUID, units
 		return CreditDecision{}, fmt.Errorf("ai credit spend decode: %w", err)
 	}
 	return d, nil
+}
+
+// Balance returns the tenant's spendable AI credits: the plan allowance left
+// plus purchased bundles. unlimited is true for an unlimited allowance; exempt
+// tenants (the platform) report unlimited too. It uses the check endpoint with
+// zero units, so nothing is spent.
+func (c *HTTPCreditSpender) Balance(ctx context.Context, tenantID uuid.UUID) (credits int64, unlimited bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/v1/s2s/credits/ai_credits/check?tenant_id=%s&units=0", c.baseURL, tenantID), nil)
+	if err != nil {
+		return 0, false, err
+	}
+	req.Header.Set("X-API-Key", c.apiKey)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, false, fmt.Errorf("ai credit balance: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, false, fmt.Errorf("ai credit balance: status %d", resp.StatusCode)
+	}
+	var d struct {
+		Exempt        bool  `json:"exempt"`
+		QuotaBalance  int64 `json:"quota_balance"`
+		BundleBalance int64 `json:"bundle_balance"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return 0, false, fmt.Errorf("ai credit balance decode: %w", err)
+	}
+	if d.Exempt || d.QuotaBalance < 0 {
+		return 0, true, nil
+	}
+	return d.QuotaBalance + d.BundleBalance, false, nil
+}
+
+// CreditBalance reads a tenant's spendable AI credits.
+type CreditBalance interface {
+	Balance(ctx context.Context, tenantID uuid.UUID) (credits int64, unlimited bool, err error)
 }
 
 // Refund implements CreditSpender.

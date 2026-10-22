@@ -67,13 +67,46 @@ type anthropicToolDef struct {
 	InputSchema map[string]any `json:"input_schema"`
 }
 
+// anthropicRequest never carries temperature: current Claude models reject
+// non-default sampling parameters, so the provider default is always used.
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
-	Stream    bool               `json:"stream,omitempty"`
+	Model        string                 `json:"model"`
+	MaxTokens    int                    `json:"max_tokens"`
+	System       any                    `json:"system,omitempty"` // string | []anthropicSystemBlock
+	Messages     []anthropicMessage     `json:"messages"`
+	Tools        []anthropicToolDef     `json:"tools,omitempty"`
+	Stream       bool                   `json:"stream,omitempty"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+}
+
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string `json:"type"` // "ephemeral" (5 minute TTL)
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// systemField renders the system prompt. With caching requested it becomes one
+// text block carrying a cache breakpoint, so tools plus system are cached together
+// (prefixes under the model minimum are simply not cached, without error).
+func systemField(system string, cache bool) any {
+	if system == "" {
+		return nil
+	}
+	if !cache {
+		return system
+	}
+	return []anthropicSystemBlock{{
+		Type: "text", Text: system,
+		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+	}}
 }
 
 type anthropicResponse struct {
@@ -91,8 +124,10 @@ type anthropicResponse struct {
 	StopReason   string `json:"stop_reason"`
 	StopSequence string `json:"stop_sequence"`
 	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -100,7 +135,7 @@ type anthropicResponse struct {
 // The internal OpenAI-format request is translated automatically.
 func (c *AnthropicClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	antReq, systemPrompt := c.translateRequest(req)
-	antReq.System = systemPrompt
+	antReq.System = systemField(systemPrompt, req.CacheSystem)
 	antReq.Stream = false
 
 	body, err := json.Marshal(antReq)
@@ -139,7 +174,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, req ChatRequest) (*ChatRespo
 // ChatStream streams a chat completion response from the Anthropic Messages API.
 func (c *AnthropicClient) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamDelta, error) {
 	antReq, systemPrompt := c.translateRequest(req)
-	antReq.System = systemPrompt
+	antReq.System = systemField(systemPrompt, req.CacheSystem)
 	antReq.Stream = true
 
 	body, err := json.Marshal(antReq)
@@ -274,6 +309,9 @@ func (c *AnthropicClient) translateRequest(req ChatRequest) (anthropicRequest, s
 		MaxTokens: maxTokens,
 		Messages:  messages,
 	}
+	if req.Effort != "" {
+		antReq.OutputConfig = &anthropicOutputConfig{Effort: req.Effort}
+	}
 
 	if len(req.Tools) > 0 {
 		for _, t := range req.Tools {
@@ -323,14 +361,15 @@ func (c *AnthropicClient) translateResponse(antResp *anthropicResponse, model st
 		}{
 			{Index: 0, Message: msg, Finish: finishReason},
 		},
-		Usage: struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-		}{
-			PromptTokens:     antResp.Usage.InputTokens,
+		// input_tokens is only the uncached remainder, so the prompt total adds the
+		// cached reads and writes back in.
+		Usage: Usage{
+			PromptTokens:     antResp.Usage.InputTokens + antResp.Usage.CacheReadInputTokens + antResp.Usage.CacheCreationInputTokens,
 			CompletionTokens: antResp.Usage.OutputTokens,
-			TotalTokens:      antResp.Usage.InputTokens + antResp.Usage.OutputTokens,
+			TotalTokens: antResp.Usage.InputTokens + antResp.Usage.CacheReadInputTokens +
+				antResp.Usage.CacheCreationInputTokens + antResp.Usage.OutputTokens,
+			CacheReadTokens:  antResp.Usage.CacheReadInputTokens,
+			CacheWriteTokens: antResp.Usage.CacheCreationInputTokens,
 		},
 	}
 }

@@ -37,13 +37,13 @@ type TriageResult struct {
 
 // TriageHandler handles AI-powered ticket triage.
 type TriageHandler struct {
-	groqClient  *ai.Client
+	groqClient  ai.ChatClient
 	routerModel string
 	logger      *zap.Logger
 }
 
 // NewTriageHandler creates a new triage handler.
-func NewTriageHandler(groqClient *ai.Client, routerModel string, logger *zap.Logger) *TriageHandler {
+func NewTriageHandler(groqClient ai.ChatClient, routerModel string, logger *zap.Logger) *TriageHandler {
 	return &TriageHandler{
 		groqClient:  groqClient,
 		routerModel: routerModel,

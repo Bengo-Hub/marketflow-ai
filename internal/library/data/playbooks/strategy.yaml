@@ -1,0 +1,174 @@
+# Strategy playbooks. Distilled from the marketingskills plugin (MIT,
+# github.com/coreyhaines31/marketingskills) unless the source says otherwise.
+# Inputs use the TaskSpec entity names: offering, audience, objective, platforms,
+# budget, period, language, goal, topic, url, competitors.
+playbooks:
+  - key: marketing-plan
+    name: Marketing plan
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: marketing-plan, license: MIT}
+    specialist: strategist
+    model_class: premium_plus
+    output_contract: answer
+    when_to_use: The owner wants a full marketing plan, strategy or growth roadmap for the business or a product line.
+    keywords: [plan, strategy, roadmap, growth, mpango, mkakati, quarter, year]
+    required_inputs: [goal]
+    optional_inputs: [offering, audience, budget, period]
+    method:
+      - Restate the business goal as a number and a date (for example new customers per month by a month).
+      - Describe the current state from the brand context and catalog; list what is MISSING.
+      - Map the funnel with AARRR (acquisition, activation, retention, referral, revenue) and pick the weakest stage.
+      - Choose 2 to 3 channels that fit the audience and budget; explain why each, and what is dropped.
+      - Split the budget, keeping about 70 percent on proven work and 30 percent on tests.
+      - Give a 30/60/90-day plan with owners, weekly cadence and one metric per channel.
+      - End with risks, assumptions and the first three actions this week.
+    rules:
+      - Treat marketing as an investment; every channel needs an expected cost per customer or a test to find it.
+      - Prefer owned channels (WhatsApp list, email, community) as the durable asset; rented social reach can vanish.
+    starters:
+      - {title: "Plan my next 90 days", template: "Make a 90-day marketing plan for ${offering} to reach ${goal}, budget ${budget} per month."}
+
+  - key: content-strategy
+    name: Content strategy and weekly calendar
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: content-strategy, license: MIT}
+    specialist: strategist
+    model_class: premium
+    output_contract: content_calendar
+    when_to_use: The owner does not know what to post, wants content ideas, pillars or a weekly or monthly content calendar.
+    keywords: [content, calendar, post ideas, what to post, should i post, what can i post, nini ku-post, ni-post nini, ratiba, pillars, schedule, weekly plan]
+    required_inputs: [offering]
+    optional_inputs: [audience, platforms, period, goal]
+    method:
+      - Pick 3 to 5 content pillars from the offering, the audience's problems and the brand voice.
+      - Split the mix about 60 percent searchable or useful, 30 percent shareable (stories, opinions, proof), 10 percent experiments.
+      - For each slot give the day, platform, pillar, format (post, reel, poster, carousel, WhatsApp status), hook and call to action.
+      - Tie every promotional slot to a catalog item, course intake or real event; no invented occasions.
+      - Mark which items are worth turning into ads.
+    rules:
+      - Create once, distribute twice; each flagship piece is cut into shorter posts.
+      - Keep the cadence the owner can sustain; fewer good posts beat a calendar nobody follows.
+    starters:
+      - {title: "What should I post this week?", template: "Plan this week's posts for ${offering} on ${platforms}."}
+
+  - key: offers
+    name: Offer design
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: offers, license: MIT}
+    specialist: strategist
+    model_class: premium
+    output_contract: answer
+    when_to_use: The owner wants a better offer, bundle, promotion, guarantee or bonus for what they sell.
+    keywords: [offer, deal, promotion, bundle, discount, ofa, punguzo, guarantee, bonus]
+    required_inputs: [offering]
+    optional_inputs: [audience, budget]
+    method:
+      - Score the current offer on the value equation (dream outcome, perceived likelihood, time delay, effort) and name the weakest lever.
+      - Build the six parts of a complete offer - core deliverable, bonuses, guarantee, real urgency, a clear name, price and payment terms (including M-Pesa instalments when offered).
+      - Give two alternatives that raise value without cutting price.
+    rules:
+      - Urgency and scarcity only when real; state the true end date or quantity.
+      - Banned words - game-changing, revolutionary, secret, "worth KES X" without a comparable, "100% guaranteed" without conditions.
+    starters:
+      - {title: "Make my offer irresistible", template: "Improve my offer for ${offering}. My customers are ${audience}."}
+
+  - key: launch
+    name: Launch plan
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: launch, license: MIT}
+    specialist: strategist
+    model_class: premium
+    output_contract: answer
+    when_to_use: The owner is launching a new product, service, branch, course intake or feature.
+    keywords: [launch, opening, new product, intake, uzinduzi, mpya, grand opening]
+    required_inputs: [offering]
+    optional_inputs: [period, budget, audience]
+    method:
+      - Check readiness - the offer, the landing or catalog page, the way to buy (M-Pesa, booking, form) and stock or capacity.
+      - Plan owned, rented and borrowed channels (WhatsApp list and status, social pages, partners or influencers).
+      - Lay out pre-launch (teasers, waitlist), launch day and two weeks after, with one message per stage.
+      - List the launch-day checklist and who does what.
+    rules:
+      - Do not promise a date the owner has not confirmed.
+    starters:
+      - {title: "Launch something new", template: "Plan the launch of ${offering} on ${period}."}
+
+  - key: brand-context
+    name: Brand context interview
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: product-marketing, license: MIT}
+    specialist: strategist
+    model_class: premium_plus
+    output_contract: brand_context
+    when_to_use: Setting up or updating the business's positioning, audience, voice and key messages that every other task reads first.
+    keywords: [brand, positioning, voice, about my business, who we are, target customer, chapa]
+    required_inputs: []
+    optional_inputs: [offering, audience, url]
+    method:
+      - Ask at most five plain questions - what you sell, who buys it and why, what makes you different, what customers say, and words you never use.
+      - Turn the answers into positioning, audience segments, key offers, proof points, voice (with example sentences) and banned claims.
+      - Keep a Learnings list for what worked and what did not.
+    rules:
+      - Use the owner's own words; do not upgrade their vocabulary.
+    starters:
+      - {title: "Set up my brand profile", template: "Help me describe my business so the team writes like us."}
+
+  - key: marketing-ideas
+    name: Marketing ideas
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: marketing-ideas, license: MIT}
+    specialist: strategist
+    model_class: standard
+    output_contract: answer
+    when_to_use: The owner asks for ideas to get more customers or sales without a specific channel in mind.
+    keywords: [ideas, more customers, more sales, wateja, mauzo, how do i grow, nifanye nini]
+    required_inputs: []
+    optional_inputs: [offering, budget, goal]
+    method:
+      - Ask or infer the stage, budget and timeline.
+      - Give 5 to 8 ideas ranked by expected impact and effort, each with the first step and the metric that shows it works.
+      - Favour low-cost ideas for small budgets (WhatsApp status, referrals, partnerships, local listings).
+    rules:
+      - Ideas must fit the business's real offer and location.
+    starters:
+      - {title: "Give me ideas to grow", template: "Give me ideas to get more customers for ${offering} with a budget of ${budget}."}
+
+  - key: influencer-marketing
+    name: Influencer and creator partnerships
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: influencer-marketing, license: MIT}
+    specialist: strategist
+    model_class: standard
+    output_contract: answer
+    when_to_use: Working with influencers, creators or brand ambassadors.
+    keywords: [influencer, creator, ambassador, collab, tiktoker, mwanamuziki]
+    required_inputs: [offering]
+    optional_inputs: [budget, audience, platforms]
+    method:
+      - Define the audience fit before reach; prefer micro creators whose followers match the buyer.
+      - Draft outreach, the deal (fee, product, commission or code), a short creative brief and the tracking link or code.
+      - Measure by sales or leads per creator, not views.
+    rules:
+      - Paid partnerships must be disclosed as ads.
+    starters:
+      - {title: "Find creators to promote me", template: "Plan an influencer campaign for ${offering} with ${budget}."}
+
+  - key: events
+    name: Events
+    version: 1
+    source: {repo: coreyhaines31/marketingskills, skill: events, license: MIT}
+    specialist: strategist
+    model_class: standard
+    output_contract: answer
+    when_to_use: Planning, hosting, sponsoring or attending events, webinars, open days or pop-ups.
+    keywords: [event, webinar, open day, pop-up, expo, tukio, warsha, workshop]
+    required_inputs: [goal]
+    optional_inputs: [offering, budget, period]
+    method:
+      - Choose the role (host, sponsor, attend) and format that fits the goal.
+      - Put 80 percent of the work before and after the event - invitations, reminders, follow-up within 48 hours.
+      - Turn the event into content (clips, photos, recap post).
+      - Measure leads and sales, not attendance.
+    rules: []
+    starters:
+      - {title: "Plan an event", template: "Plan an event to promote ${offering} with goal ${goal}."}

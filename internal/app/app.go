@@ -16,13 +16,18 @@ import (
 	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/config"
+	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
+	"github.com/bengobox/marketflow-ai/internal/library"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	mw "github.com/bengobox/marketflow-ai/internal/middleware"
+	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/tasks"
+	"github.com/bengobox/marketflow-ai/internal/team"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -67,29 +72,27 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// ── Provider Resolver (platform-level AI config from DB, cached in Redis) ─
 	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
 
-	// ── AI Clients (DB-resolved, env fallback) ───────────────────────────
-	// Resolve Groq settings from the ProviderSetting table so the platform
-	// owner manages the key via /platform/providers without touching env vars.
-	resolveStartup, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
-	groqClient, groqMainModel, _, err := resolver.ResolveGroqClient(resolveStartup)
-	resolveCancel()
-	if err != nil {
-		logger.Warn("Groq resolver failed, using env fallback", zap.Error(err))
-		groqClient = ai.NewClient(cfg.AI.GroqBaseURL, cfg.AI.GroqAPIKey, logger)
-		groqMainModel = cfg.AI.GroqMainModel
-	} else {
-		logger.Info("Groq resolved from DB", zap.String("model", groqMainModel))
-	}
-	_ = groqMainModel // used by router + agent below
+	// ── Model router ──────────────────────────────────────────────────────
+	// Every generative call names a class (nano, standard, premium, premium_plus);
+	// providers are resolved DB-first with env fallback and re-read every five
+	// minutes, and the routing policy is the platform ProviderSetting
+	// ai_routing/policy merged over the code defaults.
+	modelRouter := llm.NewRouter(llm.Config{
+		Providers: newLLMProviders(resolver, &cfg.AI, logger),
+		Policy:    routingPolicySource(resolver),
+		Defaults:  llm.DefaultPolicy(llm.Defaults{OllamaModel: cfg.AI.OllamaFallbackModel}),
+		Logger:    logger,
+	})
+	nanoLLM := modelRouter.Client(llm.Nano)
+	standardLLM := modelRouter.Client(llm.Standard)
+
 	var ollamaClient *ai.Client
-	var ollamaLLMClient *ai.Client
 	if cfg.AI.OllamaURL != "" {
-		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger)          // embeddings: /api/embeddings
-		ollamaLLMClient = ai.NewClient(cfg.AI.OllamaURL+"/v1", "", logger) // LLM tier-3: /v1/chat/completions
+		ollamaClient = ai.NewClient(cfg.AI.OllamaURL, "", logger) // embeddings: /api/embeddings
 	}
 
 	// ── Intent Router ─────────────────────────────────────────────────────
-	router := ai.NewRouter(groqClient, cfg.AI.GroqRouterModel, logger)
+	router := ai.NewRouter(nanoLLM, cfg.AI.GroqRouterModel, logger)
 
 	// ── Chat Session Service ──────────────────────────────────────────────
 	sessionService := sessions.NewService(db, logger)
@@ -99,6 +102,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── Agentic RAG Loop (platform-level tools: KB + Tavily web search) ───
 	var agentLoop *agent.Loop
+	var agentTools []agent.Tool // shared with the Marketing OS team (read-only subset)
 	if cfg.AI.AgentEnabled {
 		tools := []agent.Tool{
 			agenttools.NewKBSearcher(db, ollamaClient, cfg.AI.EmbeddingModel, logger),
@@ -236,15 +240,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				agenttools.NewDraftEmail(agenttools.DraftEmailConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
 					ServiceKey: cfg.AI.MarketFlowAPIKey,
-					LLMClient:  groqClient,
-					LLMModel:   groqMainModel,
+					LLMClient:  standardLLM,
+					LLMModel:   string(llm.Standard),
 					Logger:     logger,
 				}),
 				agenttools.NewAnalyzeDeal(agenttools.AnalyzeDealConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
 					ServiceKey: cfg.AI.MarketFlowAPIKey,
-					LLMClient:  groqClient,
-					LLMModel:   groqMainModel,
+					LLMClient:  standardLLM,
+					LLMModel:   string(llm.Standard),
 					Logger:     logger,
 				}),
 				agenttools.NewScoreLead(agenttools.ScoreLeadConfig{
@@ -265,8 +269,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				agenttools.NewMeetingPrep(agenttools.MeetingPrepConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
 					ServiceKey: cfg.AI.MarketFlowAPIKey,
-					LLMClient:  groqClient,
-					LLMModel:   groqMainModel,
+					LLMClient:  standardLLM,
+					LLMModel:   string(llm.Standard),
 					Logger:     logger,
 				}),
 			)
@@ -277,9 +281,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		} else {
 			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
 		}
+		agentTools = tools
 		agentLoop = agent.New(agent.Config{
-			Client:   groqClient,
-			Model:    cfg.AI.GroqMainModel,
+			Client:   standardLLM,
+			Model:    string(llm.Standard),
 			Tools:    tools,
 			MaxIters: cfg.AI.AgentMaxIters,
 			TokenCap: cfg.AI.AgentTokenCap,
@@ -288,50 +293,21 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		logger.Info("agentic RAG enabled", zap.Int("tools", len(tools)))
 	}
 
-	// ── Tier-4: OpenAI (DB-resolved, optional, graceful 429 skip) ────────
-	resolveOAI, resolveOAICancel := context.WithTimeout(ctx, 5*time.Second)
-	openaiClient, openaiModel, err := resolver.ResolveOpenAIClient(resolveOAI)
-	resolveOAICancel()
-	if err != nil {
-		logger.Info("OpenAI not available (tier-4 fallback disabled)", zap.Error(err))
-	} else {
-		logger.Info("OpenAI tier-4 fallback enabled", zap.String("model", openaiModel))
-	}
-
-	// ── Tier-5: Anthropic Claude (DB-first, env fallback, graceful 400 skip) ──
-	resolveC, resolveCCancel := context.WithTimeout(ctx, 5*time.Second)
-	claudeClient, claudeModel, err := resolver.ResolveAnthropicClientFromDB(resolveC)
-	resolveCCancel()
-	if err != nil {
-		logger.Warn("Claude tier-5 fallback disabled", zap.Error(err))
-	} else {
-		logger.Info("Claude tier-5 fallback enabled", zap.String("model", claudeModel))
-	}
-
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
 	pipeline := rag.NewPipeline(rag.Config{
-		DB:              db,
-		Redis:           redisClient,
-		GroqClient:      groqClient,
-		ClaudeClient:    claudeClient,
-		ClaudeModel:     claudeModel,
-		OllamaClient:    ollamaClient,
-		OllamaLLMClient: ollamaLLMClient,
-		OllamaLLMModel:  cfg.AI.OllamaFallbackModel,
-		OpenAIClient:    openaiClient,
-		OpenAIModel:     openaiModel,
-		Router:          router,
-		Resolver:        resolver,
-		SessionService:  sessionService,
-		TaskExecutor:    taskExecutor,
-		Agent:           agentLoop,
-		AgentEnabled:    cfg.AI.AgentEnabled,
-		EmbeddingModel:  cfg.AI.EmbeddingModel,
-		MainModel:       cfg.AI.GroqMainModel,
-		FallbackModel:   cfg.AI.GroqFallback,
-		EmbeddingDim:    cfg.AI.EmbeddingDim,
-		RedisNamespace:  cfg.Redis.Namespace,
-		Logger:          logger,
+		DB:             db,
+		Redis:          redisClient,
+		LLM:            modelRouter,
+		OllamaClient:   ollamaClient,
+		Router:         router,
+		SessionService: sessionService,
+		TaskExecutor:   taskExecutor,
+		Agent:          agentLoop,
+		AgentEnabled:   cfg.AI.AgentEnabled,
+		EmbeddingModel: cfg.AI.EmbeddingModel,
+		EmbeddingDim:   cfg.AI.EmbeddingDim,
+		RedisNamespace: cfg.Redis.Namespace,
+		Logger:         logger,
 	})
 
 	// ── Auth Middleware ────────────────────────────────────────────────────
@@ -366,8 +342,35 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		creditSpender = handlers.NewHTTPCreditSpender(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
 	}
 	chatHandler := handlers.NewChatHandler(pipeline, sessionService, creditSpender, logger)
-	triageHandler := handlers.NewTriageHandler(groqClient, cfg.AI.GroqRouterModel, logger)
-	crmAIHandler := handlers.NewCRMAIHandler(groqClient, cfg.AI.GroqMainModel, cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
+	// ── Marketing OS (Sprint 21): decide layer, library, optimiser, team ──
+	lib := library.MustLoad()
+	decider := decide.New(decide.Config{
+		Primary:  typeSafeSource(resolver),
+		Fallback: decide.NewLLMFallback(modelRouter),
+		Ceiling:  func(ctx context.Context) float64 { return modelRouter.Policy(ctx).Decide.MonthlyUSDCeiling },
+		Spend:    decide.RedisSpend{Client: redisClient, Namespace: cfg.Redis.Namespace},
+		Logger:   logger,
+	})
+	optimizer := promptopt.New(promptopt.Config{
+		Library: lib, Decider: decider, Router: modelRouter,
+		Redis: redisClient, Namespace: cfg.Redis.Namespace, Logger: logger,
+	})
+	registrySource := newRegistrySource(resolver, logger)
+	osContext := &team.APISource{
+		BaseURL: cfg.AI.MarketFlowAPIURL, Key: cfg.App.InternalServiceKey,
+		Redis: redisClient, Namespace: cfg.Redis.Namespace,
+	}
+	teamRuntime := team.New(team.Config{
+		Library: lib, Opt: optimizer, Router: modelRouter, Decider: decider,
+		Registry: registrySource.Get, Tools: agentTools, Source: osContext, Logger: logger,
+	})
+	osHandler := handlers.NewOSHandler(handlers.OSConfig{
+		Runtime: teamRuntime, Opt: optimizer, Library: lib, Source: osContext, Pipeline: pipeline,
+		Agent: agentLoop, Credits: creditSpender, Registry: registrySource.Get, Logger: logger,
+	})
+
+	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
+	crmAIHandler := handlers.NewCRMAIHandler(standardLLM, string(llm.Standard), cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -417,13 +420,27 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/chat", chatHandler.Chat)
 		r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
 		r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
+
+		// Marketing OS. Tenant comes from the token; a mismatched X-Tenant-ID is refused.
+		r.Route("/os", func(r chi.Router) {
+			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), 30, 120))
+			r.Post("/ask", osHandler.Ask)
+			r.Post("/optimize", osHandler.Optimize)
+			r.Post("/plan/quote", osHandler.Quote)
+			r.Get("/library/templates", osHandler.Templates)
+			r.Get("/team", osHandler.Team)
+		})
 	})
+
+	// Custom-agent runs from the worker (the route it always called), S2S only.
+	r.With(httpware.RequireServiceKey(cfg.App.InternalServiceKey)).Post("/api/v1/agent/run", osHandler.AgentRun)
 
 	// Internal S2S routes — X-API-Key only (ticketing-api, marketflow-worker).
 	internalKey := cfg.App.InternalServiceKey
 	r.Route("/api/v1/internal", func(r chi.Router) {
 		r.Use(httpware.RequireServiceKey(internalKey))
 		r.Post("/triage", triageHandler.Triage)
+		r.Post("/os/daily-brief", osHandler.DailyBrief)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

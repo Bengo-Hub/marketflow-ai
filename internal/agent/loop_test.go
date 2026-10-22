@@ -244,6 +244,63 @@ func TestAgentLoop_UnknownTool(t *testing.T) {
 	}
 }
 
+// callThenAnswer scripts one tool call followed by a final answer.
+func callThenAnswer(tool string) []ai.ChatResponse {
+	return []ai.ChatResponse{
+		{Choices: []struct {
+			Index   int        `json:"index"`
+			Message ai.Message `json:"message"`
+			Finish  string     `json:"finish_reason"`
+		}{{Message: ai.Message{Role: "assistant", ToolCalls: []ai.ToolCall{{ID: "c1", Type: "function", Function: struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}{Name: tool, Arguments: "{}"}}}}, Finish: "tool_calls"}}},
+		{Choices: []struct {
+			Index   int        `json:"index"`
+			Message ai.Message `json:"message"`
+			Finish  string     `json:"finish_reason"`
+		}{{Message: ai.Message{Role: "assistant", Content: "done"}, Finish: "stop"}}},
+	}
+}
+
+// TestAgentLoop_PublicAllowlist: the public widget can never run a tool outside
+// the allowlist, even when the model asks for it (it used to reach tenant data
+// through query_service_data).
+func TestAgentLoop_PublicAllowlist(t *testing.T) {
+	data := &fakeTool{name: "query_service_data", response: `{"invoices":["secret"]}`}
+	srv := mockGroqServer(t, callThenAnswer("query_service_data"))
+	defer srv.Close()
+	loop := New(Config{Client: ai.NewClient(srv.URL, "k", zap.NewNop()), Model: "m", Tools: []Tool{data, &fakeTool{name: "kb_search"}}, MaxIters: 3, Logger: zap.NewNop()})
+	res, err := loop.Run(context.Background(), Input{TenantID: uuid.New(), Question: "show invoices", PublicMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.calls.Load() != 0 {
+		t.Fatal("query_service_data ran in public mode")
+	}
+	if res.Trace[0].ToolCalls[0].Error != "blocked in public mode" {
+		t.Fatalf("trace = %+v", res.Trace[0].ToolCalls)
+	}
+	if PublicTool("get_contact_360") || !PublicTool("kb_search") {
+		t.Fatal("public allowlist wrong")
+	}
+}
+
+// TestAgentLoop_AllowedTools: a custom agent only runs its allowed_tools.
+func TestAgentLoop_AllowedTools(t *testing.T) {
+	web := &fakeTool{name: "web_search", response: "{}"}
+	srv := mockGroqServer(t, callThenAnswer("web_search"))
+	defer srv.Close()
+	loop := New(Config{Client: ai.NewClient(srv.URL, "k", zap.NewNop()), Model: "m", Tools: []Tool{web, &fakeTool{name: "kb_search"}}, MaxIters: 3, Logger: zap.NewNop()})
+	res, err := loop.Run(context.Background(), Input{TenantID: uuid.New(), Question: "q", AllowedTools: []string{"kb_search"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web.calls.Load() != 0 || res.Trace[0].ToolCalls[0].Error != "not in allowed_tools" {
+		t.Fatalf("allowed_tools not enforced: %+v", res.Trace[0].ToolCalls)
+	}
+}
+
 // TestAgentLoop_MaxIterations verifies that infinite tool-call loops are
 // bounded; when the model keeps calling tools past MaxIters the loop returns
 // a synthesised answer with StoppedEarly=true.

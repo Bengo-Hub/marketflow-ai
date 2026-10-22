@@ -20,7 +20,7 @@ import (
 type MeetingPrep struct {
 	apiBaseURL string
 	serviceKey string
-	llm        *ai.Client
+	llm        ai.ChatClient
 	llmModel   string
 	http       *http.Client
 	logger     *zap.Logger
@@ -30,7 +30,7 @@ type MeetingPrep struct {
 type MeetingPrepConfig struct {
 	APIBaseURL string
 	ServiceKey string
-	LLMClient  *ai.Client
+	LLMClient  ai.ChatClient
 	LLMModel   string
 	Logger     *zap.Logger
 }

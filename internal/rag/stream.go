@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"go.uber.org/zap"
 )
 
@@ -57,74 +58,15 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
-	// ── LLM fallback ladder — mirrors Chat()'s tiers so streaming gets the
-	// same DB-resolved client and the same resilience against a stale/rate
-	// limited provider. Unlike Chat()'s per-tier timeout contexts, these calls
-	// use ctx directly: ChatStream's response body is read by a goroutine that
-	// outlives this function call, so a deferred cancel here would tear down
-	// an in-flight stream instead of just bounding a synchronous request.
-	client, model := p.resolveClient(ctx)
-	rawCh, err := client.ChatStream(ctx, ai.ChatRequest{
-		Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 2048,
+	// The router keeps the same provider order as Chat() and opens the stream on
+	// the first healthy target. No per-target timeout: the stream outlives this call.
+	rawCh, call, err := p.llm.Stream(ctx, llm.Standard, ai.ChatRequest{
+		Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
-
-	// Tier 2: Groq fallback model
-	if err != nil {
-		p.logger.Warn("Groq main stream failed, trying Groq fallback model",
-			zap.String("model", model), zap.Error(err))
-		model = p.fallbackModel
-		rawCh, err = p.groqClient.ChatStream(ctx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-	}
-
-	// Tier 3: Ollama local LLM — cluster-internal, no external quota
-	if err != nil && p.ollamaLLMClient != nil {
-		p.logger.Warn("Groq fallback stream failed, trying Ollama local LLM",
-			zap.String("model", p.ollamaLLMModel), zap.Error(err))
-		model = p.ollamaLLMModel
-		rawCh, err = p.ollamaLLMClient.ChatStream(ctx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err != nil {
-			p.logger.Warn("Ollama local LLM stream failed", zap.Error(err))
-		}
-	}
-
-	// Tier 4: OpenAI — skip fast if quota/auth error
-	if err != nil && p.openaiClient != nil {
-		p.logger.Warn("Ollama stream failed, trying OpenAI fallback",
-			zap.String("model", p.openaiModel), zap.Error(err))
-		model = p.openaiModel
-		rawCh, err = p.openaiClient.ChatStream(ctx, ai.ChatRequest{
-			Model: model, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err != nil {
-			p.logger.Warn("OpenAI fallback stream failed (quota/credits?)", zap.Error(err))
-		}
-	}
-
-	// Tier 5: Anthropic Claude — last resort
-	if err != nil && p.claudeClient != nil {
-		claudeModel := p.claudeModel
-		if claudeModel == "" {
-			claudeModel = "claude-haiku-4-5-20251001"
-		}
-		p.logger.Warn("OpenAI stream failed, trying Claude last resort",
-			zap.String("model", claudeModel), zap.Error(err))
-		rawCh, err = p.claudeClient.ChatStream(ctx, ai.ChatRequest{
-			Model: claudeModel, Messages: messages, Temperature: 0.7, MaxTokens: 1024,
-		})
-		if err == nil {
-			model = claudeModel
-		} else {
-			p.logger.Warn("Claude stream last resort failed (credits?)", zap.Error(err))
-		}
-	}
-
 	if err != nil {
 		return nil, nil, fmt.Errorf("all LLM providers exhausted (stream): %w", err)
 	}
+	model := call.Model
 
 	meta := &ChatResult{
 		Intent:     string(intent),

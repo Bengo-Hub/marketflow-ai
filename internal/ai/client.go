@@ -111,6 +111,16 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream,omitempty"`
 	Tools       []ToolDef `json:"tools,omitempty"`
 	ToolChoice  string    `json:"tool_choice,omitempty"` // "auto", "required", "none"
+	// ResponseFormat requests a JSON object reply where the provider supports it.
+	// The Anthropic client ignores it; prompts still ask for JSON.
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// Effort sets Anthropic output_config.effort (low | medium | high). Not sent to
+	// OpenAI-compatible providers.
+	Effort string `json:"-"`
+	// CacheSystem marks the system prompt as a prompt-cache breakpoint on providers
+	// with prompt caching. Use it for stable prefixes (playbooks, personas).
+	CacheSystem bool `json:"-"`
 }
 
 // ChatResponse is the non-streaming response from the chat completions API.
@@ -121,11 +131,7 @@ type ChatResponse struct {
 		Message Message `json:"message"`
 		Finish  string  `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage Usage `json:"usage"`
 }
 
 // StreamDelta represents a single chunk in a streaming response.

@@ -299,3 +299,27 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// ResolveRaw returns a platform provider's decrypted settings map (for example
+// ai_routing/policy or decide/typesafe), cached in Redis for five minutes. A
+// provider with no saved row returns an empty map and no error, so callers fall
+// back to code defaults.
+func (r *Resolver) ResolveRaw(ctx context.Context, providerType, providerName string) (map[string]string, error) {
+	cacheKey := r.namespace + ":provider:platform:" + providerType + ":" + providerName
+	if cached, err := r.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+		var m map[string]string
+		if json.Unmarshal([]byte(cached), &m) == nil {
+			return m, nil
+		}
+	}
+	settings, err := r.fetchRawSettings(ctx, providerType, providerName)
+	if err != nil {
+		return nil, err
+	}
+	if settings == nil {
+		settings = map[string]string{}
+	}
+	data, _ := json.Marshal(settings)
+	_ = r.redis.Set(ctx, cacheKey, string(data), 5*time.Minute).Err()
+	return settings, nil
+}
