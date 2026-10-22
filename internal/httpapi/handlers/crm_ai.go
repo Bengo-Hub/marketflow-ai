@@ -41,9 +41,10 @@ func NewCRMAIHandler(groqClient ai.ChatClient, mainModel, marketflowURL, interna
 // @Security bearerAuth
 // @Router /ai/pipeline-summary [post]
 func (h *CRMAIHandler) PipelineSummary(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing or invalid X-Tenant-ID header")
+	// The tenant comes from the token, never from a header the caller chooses.
+	tenantID, status, msg := tenantFromAuth(r)
+	if status != 0 {
+		writeError(w, status, msg)
 		return
 	}
 
@@ -109,9 +110,9 @@ Respond ONLY with a JSON object:
 // @Security bearerAuth
 // @Router /ai/score-lead [post]
 func (h *CRMAIHandler) ScoreLead(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := extractTenantID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing or invalid X-Tenant-ID header")
+	tenantID, status, msg := tenantFromAuth(r)
+	if status != 0 {
+		writeError(w, status, msg)
 		return
 	}
 

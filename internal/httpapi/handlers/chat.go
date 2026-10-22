@@ -116,6 +116,14 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A signed-in user may only chat as their own tenant (the header used to be
+	// trusted on the authenticated route too). The public widget has no token and
+	// is unaffected; it only reaches the public tool allowlist.
+	if !strings.Contains(r.URL.Path, "/public/") && !headerTenantAllowed(r, tenantID) {
+		writeError(w, http.StatusForbidden, "X-Tenant-ID does not match your account")
+		return
+	}
+
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")

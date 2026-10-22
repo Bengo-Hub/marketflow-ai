@@ -57,32 +57,45 @@ func NewOSHandler(cfg OSConfig) *OSHandler {
 
 const maxAskChars = 2000
 
-// tenantFromAuth returns the caller's tenant from the token. X-Tenant-ID must
-// match it; only platform superusers (and platform API keys without a tenant)
-// may act for another tenant by naming it in the header.
+// privileged callers may act for a tenant they name: platform superusers and
+// service callers (platform API keys, whose claims carry the platform tenant).
+func privileged(c *authclient.Claims) bool { return c.IsSuperuser() || c.IsService }
+
+// tenantFromAuth returns the caller's tenant from the token. A user's
+// X-Tenant-ID must match their token; only privileged callers may name
+// another tenant in the header.
 func tenantFromAuth(r *http.Request) (uuid.UUID, int, string) {
 	header := strings.TrimSpace(r.Header.Get("X-Tenant-ID"))
 	claims, ok := authclient.ClaimsFromContext(r.Context())
 	if !ok {
 		return uuid.Nil, http.StatusUnauthorized, "authentication required"
 	}
+	if privileged(claims) && header != "" {
+		if h, err := uuid.Parse(header); err == nil {
+			return h, 0, ""
+		}
+		return uuid.Nil, http.StatusBadRequest, "X-Tenant-ID must be a tenant UUID"
+	}
 	tid, err := claims.TenantUUID()
-	if err == nil && tid != nil {
-		if header != "" && header != tid.String() && !claims.IsSuperuser() {
-			return uuid.Nil, http.StatusForbidden, "X-Tenant-ID does not match your account"
-		}
-		if header != "" && claims.IsSuperuser() {
-			if h, perr := uuid.Parse(header); perr == nil {
-				return h, 0, ""
-			}
-		}
-		return *tid, 0, ""
+	if err != nil || tid == nil {
+		return uuid.Nil, http.StatusBadRequest, "a tenant is required"
 	}
-	// No tenant in the credentials: only a platform caller may name one.
-	if h, perr := uuid.Parse(header); perr == nil && claims.IsSuperuser() {
-		return h, 0, ""
+	if header != "" && header != tid.String() {
+		return uuid.Nil, http.StatusForbidden, "X-Tenant-ID does not match your account"
 	}
-	return uuid.Nil, http.StatusBadRequest, "a tenant is required"
+	return *tid, 0, ""
+}
+
+// headerTenantAllowed reports whether a resolved header tenant may be used by the
+// caller: always for privileged callers, otherwise only when it is the token's
+// own tenant. Requests without claims (the public widget) are not checked here.
+func headerTenantAllowed(r *http.Request, resolved uuid.UUID) bool {
+	claims, ok := authclient.ClaimsFromContext(r.Context())
+	if !ok || privileged(claims) {
+		return true
+	}
+	tid, err := claims.TenantUUID()
+	return err == nil && tid != nil && *tid == resolved
 }
 
 type askRequest struct {
