@@ -79,8 +79,8 @@ func (s *Service) CreateSession(ctx context.Context, tenantID uuid.UUID, channel
 	now := time.Now()
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO chat_sessions (id, tenant_id, status, channel, messages, message_count, ai_responses, escalations, started_at)
-		 VALUES ($1, $2, 'active', $3, '[]'::jsonb, 0, 0, 0, $4)`,
+		`INSERT INTO chat_sessions (id, tenant_id, status, channel, messages, message_count, ai_responses, escalations, started_at, last_activity_at)
+		 VALUES ($1, $2, 'active', $3, '[]'::jsonb, 0, 0, 0, $4, $4)`,
 		sessionID, tenantID, channel, now)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create session: %w", err)
@@ -136,9 +136,10 @@ func (s *Service) AppendMessages(ctx context.Context, tenantID, sessionID uuid.U
 		`UPDATE chat_sessions
 		 SET messages = messages || $1::jsonb,
 		     message_count = message_count + 2,
-		     ai_responses = ai_responses + 1
+		     ai_responses = ai_responses + 1,
+		     last_activity_at = $4
 		 WHERE id = $2 AND tenant_id = $3`,
-		string(newJSON), sessionID, tenantID)
+		string(newJSON), sessionID, tenantID, now)
 	if err != nil {
 		return fmt.Errorf("append messages: %w", err)
 	}
