@@ -1,6 +1,6 @@
 # MarketFlow AI — Master Implementation Plan
 
-**Last updated:** 2026-05-12
+**Last updated:** 2026-10-22 (Marketing OS, Sprint 21, in progress; the sprint sections below are history)
 
 ## Overview
 
@@ -71,7 +71,7 @@ MarketFlow AI is the intelligence layer powering the Codevertex platform. It ser
 - Native Messages API (not OpenAI-compatible)
 - `AnthropicClient` implementing same `Chat()` / `ChatStream()` interface
 - Tool-use content blocks for agentic use
-- Configured via `MF_AI_PRIMARY_PROVIDER=anthropic`
+- Was meant to be configured via `MF_AI_PRIMARY_PROVIDER=anthropic`; that variable is never read (Claude was only ever the last fallback). Sprint 21 replaces it with the routing policy.
 
 ### 3.2 New Intents ✅
 
@@ -168,19 +168,26 @@ InternalServiceKey string
 ## Environment Variables
 
 ```env
-# Existing
-MF_GROQ_API_KEY=<REPLACE_ME>
-MF_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
-MF_REDIS_URL=redis://redis.redis.svc.cluster.local:6379
-
-# Sprint 3–4 additions
-MF_AI_PRIMARY_PROVIDER=groq          # groq | anthropic | ollama
-MF_AI_CLAUDE_BASE_URL=https://api.anthropic.com/v1
-MF_AI_CLAUDE_VERSION=2023-06-01
-MF_ANTHROPIC_API_KEY=<REPLACE_ME>
-MF_TICKETING_URL=http://ticketing-api.ticketing.svc.cluster.local:4000
-MF_INTERNAL_SERVICE_KEY=<REPLACE_ME>  # shared INTERNAL_SERVICE_KEY
+# Names as read by internal/config/config.go (prefix MF_AI_ unless noted).
+# Platform values saved on /platform/providers (ProviderSetting) win over these.
+MF_AI_GROQ_API_KEY=<REPLACE_ME>
+MF_AI_GROQ_MAIN_MODEL=llama-3.3-70b-versatile
+MF_AI_GROQ_FALLBACK_MODEL=llama-3.1-8b-instant
+MF_AI_GROQ_ROUTER_MODEL=llama-3.1-8b-instant
+MF_AI_OLLAMA_URL=http://ollama.shared-infra.svc.cluster.local:11434
+MF_AI_CLAUDE_API_KEY=<REPLACE_ME>
+MF_AI_CLAUDE_MODEL=claude-haiku-5-5        # premium class default from Sprint 21
+MF_AI_MARKETFLOW_API_URL=http://marketflow-api.marketflow.svc.cluster.local:4000
+MF_AI_MARKETFLOW_API_KEY=<REPLACE_ME>
+MF_AI_TICKETING_URL=http://ticketing-api.ticketing.svc.cluster.local:4009
+INTERNAL_SERVICE_KEY=<REPLACE_ME>          # no prefix; shared S2S key
+SUBSCRIPTION_BASE_URL=http://subscription-api.subscriptions.svc.cluster.local:4000
+MF_SECURITY_SUBSCRIPTIONS_API_KEY=<REPLACE_ME>
+REDIS_ADDR=redis.redis.svc.cluster.local:6379
+POSTGRES_URL=<REPLACE_ME>
 ```
+
+`MF_AI_PRIMARY_PROVIDER` is defined but never read; from Sprint 21 the routing policy decides providers per model class.
 
 ---
 
@@ -222,3 +229,21 @@ Design: `.claude/plans/marketflow-ads-autopilot-2026-10-22.md`. Sprint files: `d
 | 6 Autopilot (Sprint 20) | "Describe your agent" builder; proposal-style tools (`generate_ad_brief`, `generate_script`, `render_creative`, `schedule_publish`, `launch_campaign`, `pause_campaign`, `get_campaign_insights`); `content_planner` weekly calendar |
 
 Security rules for this work: the LLM never mutates spend or publishing directly. Third-party text (lead messages, comments, fetched pages) goes through a quarantined summariser with no tools. Outputs are schema-validated. URL fetches pass an SSRF guard. Lead PII never goes to generation providers.
+
+## Marketing OS (Sprint 21, in progress since 2026-10-22)
+
+Design: `.claude/plans/marketflow-marketing-os-2026-10-22.md`. Checklist: `marketflow/docs/sprint-plans/sprint-21-marketing-os-brain.md`. Modules that use it later: Sprints 22 (social inbox), 23 (sales follow-up) and 24 (competitor ad intelligence).
+
+| Package | Purpose | Status |
+|---|---|---|
+| `internal/ai` | `ChatClient` interface for every provider; Anthropic prompt caching, effort and cache usage; JSON response format | Written, not committed |
+| `internal/llm` | Model router: classes nano, standard, premium, premium_plus; platform policy `ai_routing/policy`; breaker per model; usage meter and Prometheus cost counters; class-bound clients for legacy callers | Written, not committed |
+| `internal/decide` | Jev decide port (TypeSafe, OpenRouter, Groq fallback) for Choice, Score and Noul decisions | Planned in this sprint |
+| `internal/library` | Embedded skill playbooks (from the marketingskills plugin, MIT) and a curated prompts.chat subset (CC0), with NOTICE | Planned in this sprint |
+| `internal/promptopt` | Prompt optimiser: deterministic parsing plus decide, nano only for wording | Planned in this sprint |
+| `internal/team` | Marketing Manager plus specialists, manager routing or planning, Reviewer | Planned in this sprint |
+| `internal/registry` | Model registry read side and the credit cost engine shared with Sprint 15; Creative Plan quote | Planned in this sprint |
+
+New routes: `POST /api/v1/os/ask`, `POST /api/v1/os/optimize`, `POST /api/v1/os/plan/quote`, `GET /api/v1/os/library/templates`, `POST /api/v1/agent/run` (S2S; the route the worker always called), `POST /api/v1/internal/os/daily-brief` (S2S).
+
+Fixes folded in: the public widget gets a read-only tool allowlist (it could reach `query_service_data`, `get_contact_360`, `analyze_deal`, `meeting_prep`, `score_lead` and `request_integration`); the duplicated fallback ladder in `rag/flow.go` and `rag/stream.go` moves into the router; CRM tool model calls are metered.
