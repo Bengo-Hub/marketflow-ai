@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"sync"
 	"time"
 
-	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/breaker"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
@@ -43,12 +42,11 @@ type Decider struct {
 	cfg    Config
 	logger *zap.Logger
 	nowFn  func() time.Time
-
-	mu        sync.Mutex
-	fails     int
-	openUntil time.Time
-	probing   bool
+	br     *breaker.Set // one breaker, for the primary adapter
 }
+
+// primaryKey is the primary adapter's breaker key.
+const primaryKey = "primary"
 
 const (
 	primaryFailures = 3
@@ -76,7 +74,10 @@ func New(cfg Config) *Decider {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Decider{cfg: cfg, logger: logger.Named("decide"), nowFn: time.Now}
+	d := &Decider{cfg: cfg, logger: logger.Named("decide"), nowFn: time.Now,
+		br: breaker.New(primaryFailures, primaryCooldown, authCooldown)}
+	d.br.Now = func() time.Time { return d.nowFn() } // one clock, replaceable in tests
+	return d
 }
 
 var metricDecisions = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -113,12 +114,14 @@ func (d *Decider) Decide(ctx context.Context, name, state string, questions map[
 		answers, usage, err := primary.Decide(pctx, state, questions)
 		pcancel()
 		if err == nil {
-			d.succeed()
+			d.br.Succeeded(primaryKey)
 			d.record(ctx, usage)
 			metricDecisions.WithLabelValues(name, usage.Adapter, "ok").Inc()
 			return answers, usage, nil
 		}
-		d.failed(ctx, err)
+		// A slow Jev (its own 3s budget) counts against it; the decision's
+		// whole budget running out is the caller giving up and does not.
+		d.br.Failed(primaryKey, err, ctx.Err() != nil)
 		metricDecisions.WithLabelValues(name, primary.Name(), "error").Inc()
 		d.logger.Warn("primary decide failed, using fallback", zap.String("decision", name), zap.Error(err))
 	}
@@ -144,7 +147,7 @@ func (d *Decider) primary(ctx context.Context) (Adapter, bool) {
 	if d.cfg.Primary == nil {
 		return nil, false
 	}
-	if !d.admit() {
+	if !d.br.Admit(primaryKey) {
 		return nil, false
 	}
 	if d.cfg.Ceiling != nil && d.cfg.Spend != nil {
@@ -161,25 +164,6 @@ func (d *Decider) primary(ctx context.Context) (Adapter, bool) {
 	return d.cfg.Primary(ctx)
 }
 
-// admit reports whether the primary may be called: the breaker is closed, or
-// its cooldown has passed and this caller takes the single half-open probe
-// (claiming it opens a fresh window, so an unreported probe simply expires).
-func (d *Decider) admit() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	now := d.nowFn()
-	switch {
-	case d.openUntil.IsZero():
-		return true
-	case now.Before(d.openUntil):
-		return false
-	default:
-		d.probing = true
-		d.openUntil = now.Add(primaryCooldown)
-		return true
-	}
-}
-
 func (d *Decider) record(ctx context.Context, u Usage) {
 	metricDecideCost.WithLabelValues(u.Adapter).Add(u.CostUSD)
 	if d.cfg.Spend != nil && u.CostUSD > 0 {
@@ -190,37 +174,6 @@ func (d *Decider) record(ctx context.Context, u Usage) {
 }
 
 func (d *Decider) month() string { return d.nowFn().UTC().Format("2006-01") }
-
-// failed records a primary failure. Our own invalid question (a 4xx other than
-// auth) says nothing about Jev's health and is not counted; a rejected or
-// unpaid key opens the breaker at once for longer; a failed probe re-opens it.
-func (d *Decider) failed(ctx context.Context, err error) {
-	if ai.StatusCode(err) != 0 && !ai.Retryable(err) {
-		d.succeed()
-		return
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	now := d.nowFn()
-	switch {
-	case ai.AuthFailure(err):
-		d.openUntil, d.fails = now.Add(authCooldown), 0
-	case d.probing:
-		d.openUntil, d.fails = now.Add(primaryCooldown), 0
-	default:
-		d.fails++
-		if d.fails >= primaryFailures {
-			d.openUntil, d.fails = now.Add(primaryCooldown), 0
-		}
-	}
-	d.probing = false
-}
-
-func (d *Decider) succeed() {
-	d.mu.Lock()
-	d.fails, d.probing, d.openUntil = 0, false, time.Time{}
-	d.mu.Unlock()
-}
 
 var (
 	emailRe = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)

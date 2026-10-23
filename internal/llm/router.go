@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/breaker"
 	"go.uber.org/zap"
 )
 
@@ -87,16 +88,8 @@ type Router struct {
 	mu       sync.Mutex
 	policy   Policy
 	loadedAt time.Time
-	breakers map[string]*breaker
+	br       *breaker.Set // one breaker per provider and model
 	nowFn    func() time.Time
-}
-
-// breaker is closed (no entry), open until openUntil, then half-open: exactly
-// one caller probes the target while the others keep skipping it.
-type breaker struct {
-	fails     int
-	openUntil time.Time
-	probing   bool
 }
 
 // Config configures a Router.
@@ -113,15 +106,17 @@ func NewRouter(cfg Config) *Router {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Router{
+	r := &Router{
 		providers: cfg.Providers,
 		policySrc: cfg.Policy,
 		base:      cfg.Defaults,
 		policy:    cfg.Defaults,
 		logger:    logger.Named("llm.router"),
-		breakers:  make(map[string]*breaker),
+		br:        breaker.New(breakerFailures, breakerCooldown, authCooldown),
 		nowFn:     time.Now,
 	}
+	r.br.Now = func() time.Time { return r.nowFn() } // one clock, replaceable in tests
+	return r
 }
 
 // Policy returns the current policy, reloading the stored one at most every five
@@ -385,78 +380,26 @@ func (r *Router) prepare(req ai.ChatRequest, t Target, model string) ai.ChatRequ
 // order puts targets with a closed breaker first, keeping policy order, and the
 // open ones last so a class is never left with nothing to try. When an open
 // breaker's cooldown has passed, one caller gets it in the healthy list as the
-// half-open probe; everyone else keeps treating it as open until that probe
-// reports back.
+// half-open probe (internal/breaker).
 func (r *Router) order(targets []Target) []Target {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	now := r.nowFn()
 	healthy := make([]Target, 0, len(targets))
 	var open []Target
 	for _, t := range targets {
-		b := r.breakers[key(t, t.Model)]
-		switch {
-		case b == nil || b.openUntil.IsZero():
+		if r.br.Admit(key(t, t.Model)) {
 			healthy = append(healthy, t)
-		case now.Before(b.openUntil):
+		} else {
 			open = append(open, t)
-		default:
-			// Claiming the probe opens a new window, so a probe that never runs
-			// (an earlier target answered) simply expires instead of blocking.
-			b.probing = true
-			b.openUntil = now.Add(breakerCooldown)
-			healthy = append(healthy, t)
 		}
 	}
 	return append(healthy, open...)
 }
 
-// failed records a failed attempt. A caller that gave up (its own deadline or
-// cancel) and our own bad requests (4xx) say nothing about the provider's
-// health, so they do not count; a rejected key opens the breaker at once and
-// for longer.
+// failed records a failed attempt; internal/breaker decides what counts.
 func (r *Router) failed(parent context.Context, k string, err error) {
-	if !ai.Retryable(err) && parent.Err() == nil {
-		// The provider answered, so it is up; the request itself was wrong.
-		r.succeed(k)
-		return
-	}
-	if parent.Err() != nil {
-		r.mu.Lock()
-		if b := r.breakers[k]; b != nil && b.probing {
-			b.probing, b.openUntil = false, r.nowFn() // the next caller probes
-		}
-		r.mu.Unlock()
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b := r.breakers[k]
-	if b == nil {
-		b = &breaker{}
-		r.breakers[k] = b
-	}
-	now := r.nowFn()
-	switch {
-	case ai.AuthFailure(err):
-		b.openUntil, b.fails = now.Add(authCooldown), 0
-	case b.probing || !b.openUntil.IsZero():
-		// The half-open probe failed: open again for a full cooldown.
-		b.openUntil, b.fails = now.Add(breakerCooldown), 0
-	default:
-		b.fails++
-		if b.fails >= breakerFailures {
-			b.openUntil, b.fails = now.Add(breakerCooldown), 0
-		}
-	}
-	b.probing = false
+	r.br.Failed(k, err, parent.Err() != nil)
 }
 
-func (r *Router) succeed(k string) {
-	r.mu.Lock()
-	delete(r.breakers, k)
-	r.mu.Unlock()
-}
+func (r *Router) succeed(k string) { r.br.Succeeded(k) }
 
 func modelFor(t Target, p Provider) string {
 	switch t.Model {

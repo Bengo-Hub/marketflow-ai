@@ -171,14 +171,14 @@ func TestUnreportedProbeExpires(t *testing.T) {
 	})
 	now := time.Unix(1_700_000_000, 0)
 	r.nowFn = func() time.Time { return now }
-	r.breakers[key(Target{Provider: "groq", Model: "b"}, "b")] = &breaker{openUntil: now.Add(-time.Second)}
+	r.br.OpenUntil(key(Target{Provider: "groq", Model: "b"}, "b"), now.Add(-time.Second))
 	_, _, _ = r.Complete(context.Background(), Standard, ai.ChatRequest{}) // claims the probe
 	now = now.Add(breakerCooldown + time.Second)
 	order := r.order(twoTargets("openai", "groq", 5).Classes[Standard])
 	if len(order) != 2 || order[1].Provider != "groq" {
 		t.Fatalf("order = %+v", order)
 	}
-	if b := r.breakers[key(Target{Provider: "groq", Model: "b"}, "b")]; b == nil || !b.probing {
+	if !r.br.Probing(key(Target{Provider: "groq", Model: "b"}, "b")) {
 		t.Fatal("a fresh probe should be claimed once the window passes")
 	}
 }
@@ -215,7 +215,7 @@ func TestCallerCancelDoesNotTripBreaker(t *testing.T) {
 		_, _, _ = r.Complete(ctx, Standard, ai.ChatRequest{})
 		cancel()
 	}
-	if b := r.breakers[key(Target{Provider: "groq", Model: "a"}, "a")]; b != nil && !b.openUntil.IsZero() {
+	if r.br.Tripped(key(Target{Provider: "groq", Model: "a"}, "a")) {
 		t.Fatal("callers giving up opened the provider's breaker")
 	}
 }
