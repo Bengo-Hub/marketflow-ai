@@ -15,6 +15,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -74,6 +75,10 @@ type Request struct {
 	Platforms []string
 	// CreditsAvailable is the spendable balance, or -1 when unknown.
 	CreditsAvailable int
+	// Playbook pins the route for a guided flow (for example brand-context from
+	// the brand interview). Media playbooks cannot be pinned: they always go
+	// through the Creative Plan quote and approval.
+	Playbook string
 }
 
 // Step is one executed specialist step.
@@ -196,6 +201,9 @@ func timeLeft(ctx context.Context) time.Duration {
 	return askBudget
 }
 
+// ErrBadPlaybook is a pinned playbook that does not exist or cannot be pinned.
+var ErrBadPlaybook = errors.New("team: playbook cannot be pinned")
+
 // Ask runs one request.
 func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, askBudget)
@@ -216,6 +224,17 @@ func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
 	spec, err := r.opt.Optimize(ctx, req.TenantID.String(), req.Text, promptopt.Context{Offerings: tc.Offerings})
 	if err != nil {
 		return nil, err
+	}
+	if req.Playbook != "" {
+		if _, media := mediaPlaybooks[req.Playbook]; media {
+			return nil, fmt.Errorf("%w: %s needs a Creative Plan approval", ErrBadPlaybook, req.Playbook)
+		}
+		// Pin a copy: the optimiser may share cached specs.
+		pinned := *spec
+		if err := promptopt.Pin(r.lib, &pinned, req.Playbook); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrBadPlaybook, err)
+		}
+		spec = &pinned
 	}
 	res := &Result{Spec: spec, CostUSD: spec.CostUSD}
 	defer func() {

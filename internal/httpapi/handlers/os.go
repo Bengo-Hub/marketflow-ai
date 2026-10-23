@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -103,6 +104,8 @@ type askRequest struct {
 	ApprovePlan bool     `json:"approve_plan"`
 	Tier        string   `json:"tier"`
 	Platforms   []string `json:"platforms"`
+	// Playbook pins a guided flow's route (for example "brand-context").
+	Playbook string `json:"playbook"`
 }
 
 type askResponse struct {
@@ -146,8 +149,13 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	ctx := llm.WithMeter(r.Context(), &llm.Meter{})
 	res, err := h.runtime.Ask(ctx, team.Request{
 		TenantID: tenantID, Text: req.Text, ApprovePlan: req.ApprovePlan,
-		Tier: req.Tier, Platforms: req.Platforms, CreditsAvailable: available,
+		Tier: req.Tier, Platforms: req.Platforms, CreditsAvailable: available, Playbook: req.Playbook,
 	})
+	if errors.Is(err, team.ErrBadPlaybook) {
+		h.refund(r, tenantID, turnKey)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		h.logger.Error("os ask failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		h.refund(r, tenantID, turnKey)

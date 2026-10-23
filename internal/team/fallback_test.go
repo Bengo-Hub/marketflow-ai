@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,31 @@ func TestManagerPlanOutageFallsBackToStrategist(t *testing.T) {
 	}
 	if res.Route != RouteDone || len(res.Steps) != 1 || res.Steps[0].Member != "strategist" || res.Steps[0].Text == "" {
 		t.Fatalf("want the strategist fallback, got %+v", res.Steps)
+	}
+}
+
+// A guided flow pins its playbook whatever the decision picked; media
+// playbooks cannot be pinned past the Creative Plan approval.
+func TestPinnedPlaybook(t *testing.T) {
+	spec := campaignSpec() // the decision picked a campaign plan
+	rt, f := newRuntime(spec, func(sys, _ string) string {
+		return `{"positioning":"Shea lotion from Kisumu","audience":["women 25-45"],"offers":["Lotion KES 850"],"proof":[],"voice":"warm","voice_examples":["Karibu"],"banned_claims":["cures eczema"],"learnings":[]}`
+	}, fitDecider{})
+	res, err := rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "We sell shea lotion", Playbook: "brand-context", CreditsAvailable: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Spec.Playbook != "brand-context" || res.Spec.Route != "pinned" || len(res.Steps) != 1 || res.Steps[0].Contract != "brand_context" || res.Steps[0].Output == nil {
+		t.Fatalf("pinned run = spec %+v steps %+v", res.Spec, res.Steps)
+	}
+	if strings.Contains(f.systems[0], "Break the owner's request") {
+		t.Fatal("a pinned flow must not call the manager planner")
+	}
+	if _, err := rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "x", Playbook: "ad-creative"}); !errors.Is(err, ErrBadPlaybook) {
+		t.Fatalf("pinning a media playbook = %v", err)
+	}
+	if _, err := rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "x", Playbook: "nope"}); !errors.Is(err, ErrBadPlaybook) {
+		t.Fatalf("pinning an unknown playbook = %v", err)
 	}
 }
 

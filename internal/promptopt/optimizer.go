@@ -364,6 +364,30 @@ var questionsByField = map[string][2]string{
 
 // brief renders the structured task for the specialist: the owner's words plus
 // everything resolved, so nothing is lost in rewording.
+// Pin routes spec to a playbook the caller chose (a guided flow such as the
+// brand interview), instead of the one the decision picked: specialist,
+// missing fields, the clarifying question and the brief follow the pinned
+// playbook. Entities parsed from the text are kept.
+func Pin(lib *library.Library, spec *TaskSpec, playbook string) error {
+	pb, ok := lib.Playbook(playbook)
+	if !ok {
+		return fmt.Errorf("promptopt: unknown playbook %q", playbook)
+	}
+	spec.Playbook, spec.Specialist, spec.Complexity, spec.Route = pb.Key, pb.Specialist, "single", "pinned"
+	spec.MissingFields, spec.ClarifyingQuestion = nil, ""
+	for _, in := range pb.RequiredInputs {
+		if !hasEntity(spec.Entities, in) {
+			spec.MissingFields = append(spec.MissingFields, in)
+		}
+	}
+	sort.Strings(spec.MissingFields)
+	if len(spec.MissingFields) > 0 {
+		spec.ClarifyingQuestion = clarifyingQuestion(spec.MissingFields[0], spec.Entities.Language)
+	}
+	spec.OptimisedBrief = brief(lib, spec)
+	return nil
+}
+
 func brief(lib *library.Library, s *TaskSpec) string {
 	var b strings.Builder
 	if pb, ok := lib.Playbook(s.Playbook); ok {
