@@ -102,6 +102,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── Agentic RAG Loop (platform-level tools: KB + Tavily web search) ───
 	var agentLoop *agent.Loop
+	var meetingPrep *agenttools.MeetingPrep
 	var agentTools []agent.Tool // shared with the Marketing OS team (read-only subset)
 	if cfg.AI.AgentEnabled {
 		tools := []agent.Tool{
@@ -200,6 +201,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 		// Tools that require marketflow-api service-to-service calls.
 		if cfg.AI.MarketFlowAPIKey != "" {
+			// Also served to the worker's meeting reminders (/internal/os/meeting-prep).
+			meetingPrep = agenttools.NewMeetingPrep(agenttools.MeetingPrepConfig{
+				APIBaseURL: cfg.AI.MarketFlowAPIURL,
+				ServiceKey: cfg.AI.MarketFlowAPIKey,
+				LLMClient:  standardLLM,
+				LLMModel:   string(llm.Standard),
+				Logger:     logger,
+			})
 			tools = append(tools,
 				agenttools.NewBookMeeting(agenttools.BookMeetingConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
@@ -266,13 +275,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 					ServiceKey: cfg.AI.MarketFlowAPIKey,
 					Logger:     logger,
 				}),
-				agenttools.NewMeetingPrep(agenttools.MeetingPrepConfig{
-					APIBaseURL: cfg.AI.MarketFlowAPIURL,
-					ServiceKey: cfg.AI.MarketFlowAPIKey,
-					LLMClient:  standardLLM,
-					LLMModel:   string(llm.Standard),
-					Logger:     logger,
-				}),
+				meetingPrep,
 			)
 			// Image search uses the same Google CSE key as web_search.
 			if googleCfg.APIKey != "" && googleCfg.CSEID != "" {
@@ -368,6 +371,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		Runtime: teamRuntime, Opt: optimizer, Library: lib, Source: osContext, Pipeline: pipeline,
 		Agent: agentLoop, Credits: creditSpender, Registry: registrySource.Get, Logger: logger,
 	})
+	if meetingPrep != nil {
+		osHandler.SetMeetingPrep(meetingPrep)
+	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
 	crmAIHandler := handlers.NewCRMAIHandler(standardLLM, string(llm.Standard), cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
@@ -441,6 +447,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Use(httpware.RequireServiceKey(internalKey))
 		r.Post("/triage", triageHandler.Triage)
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
+		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

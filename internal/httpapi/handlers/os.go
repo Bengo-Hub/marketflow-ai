@@ -35,6 +35,8 @@ type OSHandler struct {
 	credits  CreditSpender
 	registry func(ctx context.Context) registry.Registry
 	logger   *zap.Logger
+
+	meetingPrep meetingPrepper
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).
@@ -387,6 +389,65 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 		"total_tokens": res.TotalTokens, "tool_calls": res.ToolCallsN, "iterations": res.Iterations,
 		"stopped_early": res.StoppedEarly, "stop_reason": res.StopReason,
 	})
+}
+
+// meetingPrepper is the meeting_prep agent tool: it reads the contact's 360
+// view from marketflow-api and writes a briefing with talking points.
+type meetingPrepper interface {
+	Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string) (string, error)
+}
+
+// meetingPrepBudget sits under the worker's 30s client, so a slow model costs
+// the talking points, never the reminder.
+const meetingPrepBudget = 20 * time.Second
+
+// SetMeetingPrep wires the meeting_prep tool for the worker's reminders.
+func (h *OSHandler) SetMeetingPrep(t meetingPrepper) { h.meetingPrep = t }
+
+// MeetingPrep handles POST /api/v1/internal/os/meeting-prep (S2S): the worker
+// asks for a briefing and talking points before a meeting. Any failure is an
+// error status; the worker then sends its reminder without them.
+func (h *OSHandler) MeetingPrep(w http.ResponseWriter, r *http.Request) {
+	if h.meetingPrep == nil {
+		writeError(w, http.StatusServiceUnavailable, "meeting prep is not configured")
+		return
+	}
+	var req struct {
+		TenantID  string `json:"tenant_id"`
+		ContactID string `json:"contact_id"`
+		Purpose   string `json:"purpose"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tenantID, err := uuid.Parse(req.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tenant_id must be a UUID")
+		return
+	}
+	if _, err := uuid.Parse(req.ContactID); err != nil {
+		writeError(w, http.StatusBadRequest, "contact_id must be a UUID")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), meetingPrepBudget)
+	defer cancel()
+	args, _ := json.Marshal(map[string]string{"contact_id": req.ContactID, "meeting_purpose": trimRunes(req.Purpose, 300)})
+	out, err := h.meetingPrep.Invoke(ctx, tenantID, string(args))
+	if err != nil {
+		h.logger.Warn("meeting prep failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
+		writeError(w, http.StatusBadGateway, "meeting prep failed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(out))
+}
+
+func trimRunes(s string, n int) string {
+	if r := []rune(strings.TrimSpace(s)); len(r) > n {
+		return string(r[:n])
+	}
+	return strings.TrimSpace(s)
 }
 
 // DailyBrief handles POST /api/v1/internal/os/daily-brief (S2S): marketflow-api
