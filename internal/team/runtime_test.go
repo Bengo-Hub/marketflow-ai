@@ -115,7 +115,7 @@ func TestMediaJobWaitsForPlanApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Route != RouteQuote || res.Plan == nil || res.Plan.Recommended.Credits != 91 || res.Plan.Recommended.Shortlist != 2 {
+	if res.Route != RouteQuote || res.Plan == nil || res.Plan.Recommended.Credits != 113 || res.Plan.Recommended.Shortlist != 2 {
 		t.Fatalf("quote = %+v plan=%+v", res.Route, res.Plan)
 	}
 	if len(f.systems) != 0 {

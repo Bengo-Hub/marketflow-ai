@@ -98,13 +98,22 @@ func Defaults() Registry {
 			Script:    {Key: Script, Name: "Script and 3 hooks", Kind: "text", Credits: 1},
 			// Six keyframes at about USD 0.015 each on a Flux-class model (the plan's
 			// USD 0.02-0.15 range; its 3-credit price matches the middle of it).
-			Storyboard:        {Key: Storyboard, Name: "Storyboard (6 keyframes)", Kind: "media", CostUSD: 0.09},
-			Poster:            {Key: Poster, Name: "Poster or static image ad", Kind: "media", CostUSD: 0.05, Feature: "ai_static_ads"},
-			TemplateVideo:     {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
-			Presenter:         {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 1.34, Feature: "ai_video_presenter", NeedsStoryboard: true},
-			PresenterPremium:  {Key: PresenterPremium, Name: "Premium presenter ad, 30 s", Kind: "media", CostUSD: 2.35, Feature: "ai_video_presenter_premium", NeedsStoryboard: true},
-			CinematicLite:     {Key: CinematicLite, Name: "Cinematic ad 20 s (Lite)", Kind: "media", CostUSD: 1.40, Feature: "ai_video_cinematic", NeedsStoryboard: true},
-			CinematicFast:     {Key: CinematicFast, Name: "Cinematic ad 20 s (Fast)", Kind: "media", CostUSD: 2.40, Feature: "ai_video_cinematic", NeedsStoryboard: true},
+			Storyboard: {Key: Storyboard, Name: "Storyboard (6 keyframes)", Kind: "media", CostUSD: 0.09},
+			// Upper-bound provider costs per output, from the routes confirmed on
+			// 2026-10-24 (docs/integrations/video-generation-providers.md, "What an ad
+			// costs"). An estimate never sits below its confirmed route cost.
+			// Poster: Seedream v5 lite USD 0.035 plus our compositor (free).
+			Poster: {Key: Poster, Name: "Poster or static image ad", Kind: "media", CostUSD: 0.05, Feature: "ai_static_ads"},
+			// Template video: about USD 0.25 (frames, images-to-video, voice, music).
+			TemplateVideo: {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
+			// Presenter: 12 s VEED Fabric, two 4 s Kling 3.0 clips, voice: about USD 1.66.
+			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 1.70, Feature: "ai_video_presenter", NeedsStoryboard: true},
+			// Premium presenter: Aurora 720p, Seedance 2.0 clips, Eleven v4: about USD 2.85.
+			PresenterPremium: {Key: PresenterPremium, Name: "Premium presenter ad, 30 s", Kind: "media", CostUSD: 2.90, Feature: "ai_video_presenter_premium", NeedsStoryboard: true},
+			// Cinematic lite: Kling 3.0 std 20 s at the list price USD 1.68, plus voice and music.
+			CinematicLite: {Key: CinematicLite, Name: "Cinematic ad 20 s (Lite)", Kind: "media", CostUSD: 1.80, Feature: "ai_video_cinematic", NeedsStoryboard: true},
+			// Cinematic fast: Seedance 2.0 20 s at the list price USD 2.82, plus voice and music.
+			CinematicFast:     {Key: CinematicFast, Name: "Cinematic ad 20 s (Fast)", Kind: "media", CostUSD: 2.95, Feature: "ai_video_cinematic", NeedsStoryboard: true},
 			CinematicStandard: {Key: CinematicStandard, Name: "Cinematic ad 20 s (Standard)", Kind: "media", CostUSD: 8.40, Feature: "ai_video_cinematic_premium", NeedsStoryboard: true},
 			LaunchFee:         {Key: LaunchFee, Name: "Paid launch (clients without a plan)", Kind: "fee", Credits: 10},
 		},

@@ -4,11 +4,13 @@ import "testing"
 
 func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 	r := Defaults()
-	// Credits from the Ads Autopilot plan, section 4.4.1.
+	// Credits from the Ads Autopilot plan, section 4.4.1, re-based on 2026-10-24 on
+	// the provider routes confirmed in docs/integrations/video-generation-providers.md
+	// (presenter and cinematic lite/fast rose; the rest held).
 	want := map[string]int{
 		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 3, Poster: 2,
-		TemplateVideo: 12, Presenter: 42, PresenterPremium: 74,
-		CinematicLite: 44, CinematicFast: 75, CinematicStandard: 262, LaunchFee: 10,
+		TemplateVideo: 12, Presenter: 53, PresenterPremium: 91,
+		CinematicLite: 57, CinematicFast: 92, CinematicStandard: 262, LaunchFee: 10,
 	}
 	for k, w := range want {
 		got, err := r.Credits(k)
@@ -94,7 +96,7 @@ func TestPlanUGCWorkedExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.MaxLiveAds != 2 || p.Recommended.Shortlist != 2 || p.Recommended.Variants != 6 || p.Recommended.Credits != 91 {
+	if p.MaxLiveAds != 2 || p.Recommended.Shortlist != 2 || p.Recommended.Variants != 6 || p.Recommended.Credits != 113 {
 		t.Fatalf("recommended = %+v (max live %d)", p.Recommended, p.MaxLiveAds)
 	}
 	if p.Alternatives[0].Credits != 5 || p.Alternatives[1].Credits != 1 {
