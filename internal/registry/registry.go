@@ -68,6 +68,7 @@ const (
 	Script            = "script"
 	Storyboard        = "storyboard"
 	Poster            = "poster"
+	PosterPremium     = "poster_premium"
 	TemplateVideo     = "template_video_30s"
 	Presenter         = "presenter_30s"
 	PresenterPremium  = "presenter_premium_30s"
@@ -104,6 +105,8 @@ func Defaults() Registry {
 			// costs"). An estimate never sits below its confirmed route cost.
 			// Poster: Seedream v5 lite USD 0.035 plus our compositor (free).
 			Poster: {Key: Poster, Name: "Poster or static image ad", Kind: "media", CostUSD: 0.05, Feature: "ai_static_ads"},
+			// Premium poster: Nano Banana Pro USD 0.15 plus our compositor.
+			PosterPremium: {Key: PosterPremium, Name: "Premium poster", Kind: "media", CostUSD: 0.15, Feature: "ai_static_ads"},
 			// Template video: about USD 0.25 (frames, images-to-video, voice, music).
 			TemplateVideo: {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
 			// Presenter: 12 s VEED Fabric, two 4 s Kling 3.0 clips, voice: about USD 1.66.

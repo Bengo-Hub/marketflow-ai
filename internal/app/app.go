@@ -6,8 +6,10 @@ import (
 	"fmt"
 	sharedcache "github.com/Bengo-Hub/cache"
 	"github.com/Bengo-Hub/httpware"
+	"github.com/Bengo-Hub/httpware/objectstore"
 	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
 	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
+	"github.com/bengobox/marketflow-ai/internal/media"
 	mw "github.com/bengobox/marketflow-ai/internal/middleware"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/providers"
@@ -374,6 +377,20 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	if meetingPrep != nil {
 		osHandler.SetMeetingPrep(meetingPrep)
 	}
+	// Creative studio posters (Sprint 15). Finished posters go to the shared
+	// object storage (OBJECT_STORAGE_*, or MEDIA_ROOT locally); without it the
+	// endpoint answers 503 rather than paying for an image it cannot keep.
+	mediaStore, err := objectstore.New("marketflow", objectstore.FromEnv())
+	switch {
+	case err != nil:
+		logger.Warn("object storage unavailable; posters disabled", zap.Error(err))
+		mediaStore = nil
+	case !mediaStore.Enabled():
+		logger.Warn("object storage not configured (OBJECT_STORAGE_* or MEDIA_ROOT); posters disabled")
+	default:
+		media.SetBases(os.Getenv("MF_MEDIA_FAL_QUEUE_URL"), os.Getenv("MF_MEDIA_HIGGSFIELD_API_URL"))
+		osHandler.SetPosters(media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger))
+	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
 	crmAIHandler := handlers.NewCRMAIHandler(standardLLM, string(llm.Standard), cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
@@ -405,6 +422,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	r.Get("/healthz", handlers.Health)
 	r.Method("GET", "/metrics", promhttp.Handler())
+	// Local media (MEDIA_ROOT, MEDIA_URL_BASE=<this service>/media) in development;
+	// with object storage it redirects public keys to the bucket's public URL.
+	if h := mediaStore.MediaHandler(); h != nil {
+		r.Handle("/media/*", http.StripPrefix("/media", h))
+	}
 
 	// Swagger UI and OpenAPI spec
 	r.Get("/v1/docs/*", httpapi.SwaggerUI)
@@ -448,6 +470,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/triage", triageHandler.Triage)
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
+		r.Post("/creative/poster", osHandler.Poster)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

@@ -8,7 +8,7 @@ func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 	// the provider routes confirmed in docs/integrations/video-generation-providers.md
 	// (presenter and cinematic lite/fast rose; the rest held).
 	want := map[string]int{
-		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 3, Poster: 2,
+		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 3, Poster: 2, PosterPremium: 5,
 		TemplateVideo: 12, Presenter: 53, PresenterPremium: 91,
 		CinematicLite: 57, CinematicFast: 92, CinematicStandard: 262, LaunchFee: 10,
 	}

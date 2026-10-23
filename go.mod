@@ -7,7 +7,7 @@ replace github.com/Bengo-Hub/shared-auth-client => github.com/Bengo-Hub/auth-cli
 
 require (
 	github.com/Bengo-Hub/cache v0.5.7
-	github.com/Bengo-Hub/httpware v0.16.0
+	github.com/Bengo-Hub/httpware v0.18.0
 	github.com/Bengo-Hub/shared-auth-client v0.4.1
 	github.com/Bengo-Hub/shared-ratelimit v0.2.1
 	github.com/caarlos0/env/v11 v11.3.1
@@ -58,6 +58,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

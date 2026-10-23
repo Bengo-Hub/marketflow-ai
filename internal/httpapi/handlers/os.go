@@ -15,6 +15,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
+	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/registry"
@@ -38,6 +39,7 @@ type OSHandler struct {
 	logger   *zap.Logger
 
 	meetingPrep meetingPrepper
+	posters     *media.Posters
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).
