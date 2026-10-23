@@ -296,7 +296,14 @@ type agentRunRequest struct {
 	AllowedTools  []string       `json:"allowed_tools"`
 	MaxIterations int            `json:"max_iterations"`
 	Context       map[string]any `json:"context"`
+	// Billable is set by the worker for automatic (event and schedule) runs,
+	// which cost the tenant one AI credit; Run now is free.
+	Billable bool `json:"billable"`
 }
+
+// agentRunCredits is the price of one automatic custom-agent run, the same as
+// a Marketing team request.
+const agentRunCredits = 1
 
 const customAgentSystem = `You are a custom MarketFlow agent working for one business. Follow the owner's instructions below. Use only the tools you are given. Never invent data; if a tool fails, say what you could not do.`
 
@@ -326,6 +333,27 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 	if s := strings.TrimSpace(req.SystemPrompt); s != "" {
 		system += "\n\nOWNER INSTRUCTIONS:\n" + s
 	}
+	// Automatic runs are paid before they start (fail closed: no credit check,
+	// no run), keyed on the run so a retried delivery is charged once, and
+	// refunded when the run fails.
+	chargeKey := ""
+	if req.Billable && h.credits != nil {
+		dec, cerr := h.spend(r.Context(), tenantID, agentRunCredits, "agent:"+req.RunID, "Automatic agent run")
+		switch {
+		case cerr != nil:
+			h.logger.Warn("agent run credit check failed", zap.String("run_id", req.RunID), zap.Error(cerr))
+			writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID, "status": "failed",
+				"error": "Could not check AI credits, so this automatic run did not start. It will run on the next trigger."})
+			return
+		case !dec.Allowed:
+			writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID, "status": "failed",
+				"error": "Not enough AI credits for an automatic run. Top up credits; Run now still works."})
+			return
+		case !dec.Exempt:
+			chargeKey = "agent:" + req.RunID
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
 	allowed := req.AllowedTools
@@ -342,6 +370,7 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.Warn("custom agent run failed", zap.String("run_id", req.RunID), zap.Error(err))
+		h.refund(r, tenantID, chargeKey)
 		writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID, "status": "failed", "error": err.Error()})
 		return
 	}
