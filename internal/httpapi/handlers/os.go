@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Bengo-Hub/httpware"
 	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/library"
@@ -108,6 +109,65 @@ type askRequest struct {
 	Platforms   []string `json:"platforms"`
 	// Playbook pins a guided flow's route (for example "brand-context").
 	Playbook string `json:"playbook"`
+	// Stream answers as server-sent events: one progress event per stage, then
+	// the same response as the JSON reply in a final "result" event.
+	Stream bool `json:"stream"`
+}
+
+// askSink is where Ask writes its outcome: plain JSON, or a stream of events.
+type askSink interface {
+	progress(p team.Progress)
+	fail(status int, msg string)
+	done(out askResponse)
+}
+
+type jsonSink struct{ w http.ResponseWriter }
+
+func (jsonSink) progress(team.Progress)        {}
+func (s jsonSink) fail(status int, msg string) { writeError(s.w, status, msg) }
+func (s jsonSink) done(out askResponse)        { writeJSON(s.w, http.StatusOK, out) }
+
+// sseSink streams progress so the console can say who is working on what.
+// Headers go out when it is created, so errors after that are events, not
+// statuses. The client must send Accept: text/event-stream, which also keeps
+// the router's request timeout off the stream (httpware.BypassForStreaming);
+// the team's own 95s budget still bounds it.
+type sseSink struct {
+	w http.ResponseWriter
+	f http.Flusher
+}
+
+func newSSESink(w http.ResponseWriter) (*sseSink, bool) {
+	f, ok := w.(http.Flusher)
+	if !ok {
+		return nil, false
+	}
+	httpware.StreamHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	f.Flush()
+	return &sseSink{w: w, f: f}, true
+}
+
+func (s *sseSink) event(v any) {
+	b, _ := json.Marshal(v)
+	_, _ = fmt.Fprintf(s.w, "data: %s\n\n", b)
+	s.f.Flush()
+}
+
+func (s *sseSink) progress(p team.Progress) {
+	s.event(map[string]any{"type": "progress", "data": p})
+}
+
+func (s *sseSink) fail(status int, msg string) {
+	s.event(map[string]any{"type": "error", "status": status, "error": msg})
+	_, _ = fmt.Fprint(s.w, "data: [DONE]\n\n")
+	s.f.Flush()
+}
+
+func (s *sseSink) done(out askResponse) {
+	s.event(map[string]any{"type": "result", "data": out})
+	_, _ = fmt.Fprint(s.w, "data: [DONE]\n\n")
+	s.f.Flush()
 }
 
 type askResponse struct {
@@ -148,20 +208,27 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	}
 	available := h.balance(r.Context(), tenantID)
 
+	var sink askSink = jsonSink{w}
 	ctx := llm.WithMeter(r.Context(), &llm.Meter{})
+	if req.Stream {
+		if s, ok := newSSESink(w); ok {
+			sink = s
+			ctx = team.WithProgress(ctx, s.progress)
+		}
+	}
 	res, err := h.runtime.Ask(ctx, team.Request{
 		TenantID: tenantID, Text: req.Text, ApprovePlan: req.ApprovePlan,
 		Tier: req.Tier, Platforms: req.Platforms, CreditsAvailable: available, Playbook: req.Playbook,
 	})
 	if errors.Is(err, team.ErrBadPlaybook) {
 		h.refund(r, tenantID, turnKey)
-		writeError(w, http.StatusBadRequest, err.Error())
+		sink.fail(http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
 		h.logger.Error("os ask failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		h.refund(r, tenantID, turnKey)
-		writeError(w, http.StatusInternalServerError, "the marketing team could not finish this request")
+		sink.fail(http.StatusInternalServerError, "the marketing team could not finish this request")
 		return
 	}
 	if res.Route == team.RouteClarify {
@@ -175,10 +242,11 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		out.CreditsCharged = 1
 	}
 	if res.Route == team.RouteChat && h.pipeline != nil {
+		sink.progress(team.Progress{Stage: "answering", Member: "manager", Label: "Looking up the answer"})
 		chat, err := h.pipeline.Chat(r.Context(), rag.ChatInput{TenantID: tenantID, SessionID: uuid.New(), Question: req.Text, BusinessType: "generic"})
 		if err != nil {
 			h.refund(r, tenantID, turnKey)
-			writeError(w, http.StatusInternalServerError, "AI processing failed")
+			sink.fail(http.StatusInternalServerError, "AI processing failed")
 			return
 		}
 		out.Answer = chat.Response
@@ -191,7 +259,7 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	sink.done(out)
 }
 
 // Optimize handles POST /api/v1/os/optimize: the TaskSpec preview ("We

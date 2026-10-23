@@ -59,6 +59,35 @@ func TestPinnedPlaybook(t *testing.T) {
 	}
 }
 
+// A campaign request reports its stages in order, so the console can say who
+// is working on what.
+func TestAskReportsProgress(t *testing.T) {
+	rt, _ := newRuntime(campaignSpec(), func(sys, _ string) string {
+		if strings.Contains(sys, "Break the owner's request") {
+			return `{"steps":[{"specialist":"strategist","playbook":"marketing-plan","task":"plan"}]}`
+		}
+		return "## plan"
+	}, fitDecider{})
+	var stages []string
+	ctx := WithProgress(context.Background(), func(p Progress) {
+		if p.Label == "" {
+			t.Errorf("stage %s has no label", p.Stage)
+		}
+		stages = append(stages, p.Stage)
+	})
+	if _, err := rt.Ask(ctx, Request{TenantID: uuid.New(), Text: "plan", CreditsAvailable: -1}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"understanding", "routed", "planning", "step", "reviewing"}
+	if strings.Join(stages, ",") != strings.Join(want, ",") {
+		t.Fatalf("stages = %v, want %v", stages, want)
+	}
+	// Without a progress hook nothing is reported and nothing breaks.
+	if _, err := rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "plan", CreditsAvailable: -1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Steps that would start with too little time left are skipped with a note,
 // and the request returns in time with what was done.
 func TestStepsSkippedWhenOutOfTime(t *testing.T) {
