@@ -154,6 +154,12 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the marketing team could not finish this request")
 		return
 	}
+	if res.Route == team.RouteClarify {
+		// A clarifying question produced nothing; the owner pays when the answered
+		// request runs.
+		h.refund(r, tenantID, turnKey)
+		turnKey = ""
+	}
 	out := askResponse{RunID: runID, Result: res}
 	if turnKey != "" {
 		out.CreditsCharged = 1
