@@ -156,6 +156,24 @@ func TestLowConfidenceAndDecideFailure(t *testing.T) {
 	}
 }
 
+func TestDecideDownStillExtractsStatedFields(t *testing.T) {
+	// With no decision there are no "is it stated?" answers. The offering the
+	// owner wrote must be extracted, not asked for again.
+	failing := &scriptedDecider{err: errors.New("down")}
+	// whatsapp-sms requires goal and takes offering as optional.
+	opt := newOpt(failing, `{"offering":"sourdough bread","goal":"sale this weekend"}`)
+	spec, err := opt.Optimize(context.Background(), "t1", "write a whatsapp broadcast about our sourdough bread sale this weekend", Context{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Entities.Offering != "sourdough bread" || spec.Entities.Goal != "sale this weekend" {
+		t.Fatalf("fields not extracted on the fallback path: %+v", spec.Entities)
+	}
+	if len(spec.MissingFields) != 0 || spec.ClarifyingQuestion != "" {
+		t.Fatalf("asked for something the owner already gave: %+v", spec)
+	}
+}
+
 func TestInjectionAndCampaign(t *testing.T) {
 	d := &scriptedDecider{answers: decide.Answers{
 		"playbook":   {Type: decide.KindChoice, Choice: "marketing-plan", Confidence: 0.9},

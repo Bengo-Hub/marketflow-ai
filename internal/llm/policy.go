@@ -101,21 +101,26 @@ func DefaultPolicy(d Defaults) Policy {
 	haiku := firstNonEmpty(d.ClaudeModel, "claude-haiku-5-5")
 	sonnet := firstNonEmpty(d.ClaudePlus, "claude-sonnet-5-5")
 
-	groqMain := Target{Provider: "groq", Model: ModelMain, InputUSDPerM: 0.59, OutputUSDPerM: 0.79}
-	groqSmall := Target{Provider: "groq", Model: ModelFallback, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
-	groqRouter := Target{Provider: "groq", Model: ModelRouter, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
-	local := Target{Provider: "ollama", Model: ollama, TimeoutSeconds: 30}
+	// Timeouts are per attempt and sit inside the router's class budget (nano 20s,
+	// standard 45s, premium 70s, premium_plus 90s), so the worst chain still ends
+	// in time to answer. The local model is last: it is free but slow under load.
+	groqMain := Target{Provider: "groq", Model: ModelMain, TimeoutSeconds: 20, InputUSDPerM: 0.59, OutputUSDPerM: 0.79}
+	groqSmall := Target{Provider: "groq", Model: ModelFallback, TimeoutSeconds: 15, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
+	groqRouter := Target{Provider: "groq", Model: ModelRouter, TimeoutSeconds: 8, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
+	local := Target{Provider: "ollama", Model: ollama, TimeoutSeconds: 25}
 	gpt := Target{Provider: "openai", Model: openai, TimeoutSeconds: 15, InputUSDPerM: 0.15, OutputUSDPerM: 0.60}
-	claudeLow := Target{Provider: "anthropic", Model: haiku, Effort: "low", TimeoutSeconds: 60, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
-	claudeMed := Target{Provider: "anthropic", Model: haiku, Effort: "medium", TimeoutSeconds: 90, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
-	claudePlus := Target{Provider: "anthropic", Model: sonnet, Effort: "medium", TimeoutSeconds: 120, InputUSDPerM: 2.00, OutputUSDPerM: 10.00}
+	claudeLow := Target{Provider: "anthropic", Model: haiku, Effort: "low", TimeoutSeconds: 25, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
+	claudeMed := Target{Provider: "anthropic", Model: haiku, Effort: "medium", TimeoutSeconds: 45, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
+	claudePlus := Target{Provider: "anthropic", Model: sonnet, Effort: "medium", TimeoutSeconds: 60, InputUSDPerM: 2.00, OutputUSDPerM: 10.00}
 
 	nanoRouter := groqRouter
 	nanoRouter.Temperature = f(0.2)
+	nanoGPT, nanoClaude, nanoLocal := gpt, claudeLow, local
+	nanoGPT.TimeoutSeconds, nanoClaude.TimeoutSeconds, nanoLocal.TimeoutSeconds = 8, 10, 15
 	return Policy{
 		Classes: map[Class][]Target{
-			Nano:        {nanoRouter, local, gpt, claudeLow},
-			Standard:    {groqMain, groqSmall, local, gpt, claudeLow},
+			Nano:        {nanoRouter, nanoGPT, nanoClaude, nanoLocal},
+			Standard:    {groqMain, groqSmall, gpt, claudeLow, local},
 			Premium:     {claudeMed, groqMain, gpt},
 			PremiumPlus: {claudePlus, claudeMed, groqMain},
 		},

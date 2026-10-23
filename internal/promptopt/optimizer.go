@@ -157,13 +157,17 @@ func (o *Optimizer) Optimize(ctx context.Context, tenantID, text string, tc Cont
 	} else {
 		pb, _ := o.lib.Playbook(spec.Playbook)
 		spec.Specialist = pb.Specialist
-		o.fillMissing(ctx, spec, pb, answers)
+		o.fillMissing(ctx, spec, pb, answers, derr == nil)
 	}
 	if spec.Complexity == "campaign" && spec.Playbook != GeneralQuestion {
 		spec.Specialist = "manager" // the manager plans and delegates
 	}
 	spec.OptimisedBrief = brief(o.lib, spec)
-	o.store(ctx, key, spec)
+	if derr == nil {
+		// A spec built without the decision is a fallback; the next request
+		// should try the decision again instead of reusing it for a day.
+		o.store(ctx, key, spec)
+	}
 	return spec, nil
 }
 
@@ -223,13 +227,17 @@ func (o *Optimizer) choosePlaybook(answers decide.Answers, keyword []library.Mat
 
 // fillMissing resolves required inputs: parsed, then decide says present and a
 // nano call extracts them, else one clarifying question.
-func (o *Optimizer) fillMissing(ctx context.Context, spec *TaskSpec, pb library.Playbook, answers decide.Answers) {
+// fillMissing works out which required inputs the request lacks. decided is
+// false when the decision call failed: then there are no "is it stated?"
+// answers, so every absent field goes to extraction instead of being assumed
+// missing (which would ask the owner for things they already wrote).
+func (o *Optimizer) fillMissing(ctx context.Context, spec *TaskSpec, pb library.Playbook, answers decide.Answers, decided bool) {
 	var stated, missing []string
 	for _, in := range pb.RequiredInputs {
 		if hasEntity(spec.Entities, in) {
 			continue
 		}
-		if a, ok := answers["has_"+in]; ok && a.Yes(0.5) {
+		if a, ok := answers["has_"+in]; !decided || (ok && a.Yes(0.5)) {
 			stated = append(stated, in)
 			continue
 		}
@@ -238,7 +246,7 @@ func (o *Optimizer) fillMissing(ctx context.Context, spec *TaskSpec, pb library.
 	// Optional free-text fields that were mentioned are extracted in the same call.
 	for _, in := range pb.OptionalInputs {
 		if !hasEntity(spec.Entities, in) {
-			if a, ok := answers["has_"+in]; ok && a.Yes(0.6) {
+			if a, ok := answers["has_"+in]; !decided || (ok && a.Yes(0.6)) {
 				stated = append(stated, in)
 			}
 		}
@@ -485,7 +493,10 @@ func (o *Optimizer) cached(ctx context.Context, key string) (*TaskSpec, bool) {
 	if o.redis == nil {
 		return nil, false
 	}
-	raw, err := o.redis.Get(ctx, key).Result()
+	// A cache miss is cheap; a slow Redis must not hold up the request.
+	gctx, cancel := context.WithTimeout(ctx, cacheOpTimeout)
+	raw, err := o.redis.Get(gctx, key).Result()
+	cancel()
 	if err != nil {
 		return nil, false
 	}
@@ -502,9 +513,14 @@ func (o *Optimizer) store(ctx context.Context, key string, s *TaskSpec) {
 		return
 	}
 	if data, err := json.Marshal(s); err == nil {
-		_ = o.redis.Set(ctx, key, data, cacheTTL).Err()
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cacheOpTimeout)
+		_ = o.redis.Set(sctx, key, data, cacheTTL).Err()
+		cancel()
 	}
 }
+
+// cacheOpTimeout bounds each cache read and write.
+const cacheOpTimeout = 300 * time.Millisecond
 
 func trim(s string, n int) string {
 	if len(s) <= n {

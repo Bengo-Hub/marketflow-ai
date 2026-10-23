@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
@@ -46,12 +47,27 @@ type Decider struct {
 	mu        sync.Mutex
 	fails     int
 	openUntil time.Time
+	probing   bool
 }
 
 const (
 	primaryFailures = 3
 	primaryCooldown = 2 * time.Minute
-	maxStateBytes   = 48 << 10 // well under Jev's 64k-token limit
+	// authCooldown applies when the key is rejected or unpaid: retrying soon
+	// cannot help, so decisions go straight to the fallback for a while.
+	authCooldown  = 15 * time.Minute
+	maxStateBytes = 48 << 10 // well under Jev's 64k-token limit
+	// storeTimeout bounds the spend-counter reads and writes; Redis is a cost
+	// guard here and must never hold up a decision.
+	storeTimeout = 300 * time.Millisecond
+)
+
+// Budgets: Jev normally answers in well under a second, so a slow call is cut
+// early and the fallback still has time. The whole decision, fallback included,
+// ends within decideBudget; past it the caller takes its safe branch.
+var (
+	primaryBudget = 3 * time.Second
+	decideBudget  = 8 * time.Second
 )
 
 // New builds a Decider.
@@ -89,21 +105,28 @@ func (d *Decider) Decide(ctx context.Context, name, state string, questions map[
 	if len(state) > maxStateBytes {
 		state = state[:maxStateBytes]
 	}
+	ctx, cancel := context.WithTimeout(ctx, decideBudget)
+	defer cancel()
 
 	if primary, ok := d.primary(ctx); ok {
-		answers, usage, err := primary.Decide(ctx, state, questions)
+		pctx, pcancel := context.WithTimeout(ctx, primaryBudget)
+		answers, usage, err := primary.Decide(pctx, state, questions)
+		pcancel()
 		if err == nil {
 			d.succeed()
 			d.record(ctx, usage)
 			metricDecisions.WithLabelValues(name, usage.Adapter, "ok").Inc()
 			return answers, usage, nil
 		}
-		d.fail()
+		d.failed(ctx, err)
 		metricDecisions.WithLabelValues(name, primary.Name(), "error").Inc()
 		d.logger.Warn("primary decide failed, using fallback", zap.String("decision", name), zap.Error(err))
 	}
 	if d.cfg.Fallback == nil {
 		return nil, Usage{}, fmt.Errorf("decide: no adapter available for %s", name)
+	}
+	if ctx.Err() != nil {
+		return nil, Usage{}, fmt.Errorf("decide %s: out of time: %w", name, ctx.Err())
 	}
 	answers, usage, err := d.cfg.Fallback.Decide(ctx, state, questions)
 	if err != nil {
@@ -121,42 +144,81 @@ func (d *Decider) primary(ctx context.Context) (Adapter, bool) {
 	if d.cfg.Primary == nil {
 		return nil, false
 	}
-	d.mu.Lock()
-	open := d.nowFn().Before(d.openUntil)
-	d.mu.Unlock()
-	if open {
+	if !d.admit() {
 		return nil, false
 	}
 	if d.cfg.Ceiling != nil && d.cfg.Spend != nil {
-		if ceiling := d.cfg.Ceiling(ctx); ceiling > 0 && d.cfg.Spend.Spent(ctx, d.month()) >= ceiling {
+		sctx, cancel := context.WithTimeout(ctx, storeTimeout)
+		over := false
+		if ceiling := d.cfg.Ceiling(sctx); ceiling > 0 && d.cfg.Spend.Spent(sctx, d.month()) >= ceiling {
+			over = true
+		}
+		cancel()
+		if over {
 			return nil, false
 		}
 	}
 	return d.cfg.Primary(ctx)
 }
 
+// admit reports whether the primary may be called: the breaker is closed, or
+// its cooldown has passed and this caller takes the single half-open probe
+// (claiming it opens a fresh window, so an unreported probe simply expires).
+func (d *Decider) admit() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := d.nowFn()
+	switch {
+	case d.openUntil.IsZero():
+		return true
+	case now.Before(d.openUntil):
+		return false
+	default:
+		d.probing = true
+		d.openUntil = now.Add(primaryCooldown)
+		return true
+	}
+}
+
 func (d *Decider) record(ctx context.Context, u Usage) {
 	metricDecideCost.WithLabelValues(u.Adapter).Add(u.CostUSD)
 	if d.cfg.Spend != nil && u.CostUSD > 0 {
-		d.cfg.Spend.Add(ctx, d.month(), u.CostUSD)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeTimeout)
+		d.cfg.Spend.Add(sctx, d.month(), u.CostUSD)
+		cancel()
 	}
 }
 
 func (d *Decider) month() string { return d.nowFn().UTC().Format("2006-01") }
 
-func (d *Decider) fail() {
+// failed records a primary failure. Our own invalid question (a 4xx other than
+// auth) says nothing about Jev's health and is not counted; a rejected or
+// unpaid key opens the breaker at once for longer; a failed probe re-opens it.
+func (d *Decider) failed(ctx context.Context, err error) {
+	if ai.StatusCode(err) != 0 && !ai.Retryable(err) {
+		d.succeed()
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.fails++
-	if d.fails >= primaryFailures {
-		d.openUntil = d.nowFn().Add(primaryCooldown)
-		d.fails = 0
+	now := d.nowFn()
+	switch {
+	case ai.AuthFailure(err):
+		d.openUntil, d.fails = now.Add(authCooldown), 0
+	case d.probing:
+		d.openUntil, d.fails = now.Add(primaryCooldown), 0
+	default:
+		d.fails++
+		if d.fails >= primaryFailures {
+			d.openUntil, d.fails = now.Add(primaryCooldown), 0
+		}
 	}
+	d.probing = false
 }
 
 func (d *Decider) succeed() {
 	d.mu.Lock()
-	d.fails = 0
+	d.fails, d.probing, d.openUntil = 0, false, time.Time{}
 	d.mu.Unlock()
 }
 

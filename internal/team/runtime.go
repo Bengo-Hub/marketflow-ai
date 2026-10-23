@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/ai"
@@ -175,8 +176,30 @@ var mediaPlaybooks = map[string]string{
 	"poster-brief": registry.Poster,
 }
 
+// Time budgets. The whole request ends inside askBudget, under the UI's and the
+// server's 120-second limits, so the owner always gets an answer (partial if a
+// provider was slow) instead of a frozen screen. A step starts only with at
+// least minStepTime left, and the repair retry only with minRepairTime left.
+var (
+	askBudget     = 95 * time.Second
+	minStepTime   = 15 * time.Second
+	minRepairTime = 20 * time.Second
+)
+
+// skippedForTime is the note shown on a step the team had no time left for.
+const skippedForTime = "Skipped: the team ran out of time on this request. Ask again for this part."
+
+func timeLeft(ctx context.Context) time.Duration {
+	if dl, ok := ctx.Deadline(); ok {
+		return time.Until(dl)
+	}
+	return askBudget
+}
+
 // Ask runs one request.
 func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, askBudget)
+	defer cancel()
 	meter := llm.MeterFrom(ctx)
 	if meter == nil {
 		meter = &llm.Meter{}
@@ -238,6 +261,11 @@ func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
 	}
 	var prior strings.Builder
 	for _, st := range steps {
+		if timeLeft(ctx) < minStepTime {
+			res.Steps = append(res.Steps, Step{Member: st.member.Key, Playbook: st.playbook.Key, Task: st.task,
+				Contract: st.playbook.OutputContract, Error: skippedForTime})
+			continue
+		}
 		out := r.runStep(ctx, req.TenantID, st, spec, tc, prior.String(), n)
 		res.Steps = append(res.Steps, out)
 		if out.Contract == "ad_copy_batch" && out.Output != nil {
@@ -318,7 +346,11 @@ func (r *Runtime) managerPlan(ctx context.Context, spec *promptopt.TaskSpec, tc 
 			fmt.Fprintf(&roster, "- %s (%s): playbooks %s\n", mm.Key, mm.Role, strings.Join(mm.Playbooks, ", "))
 		}
 	}
-	resp, _, err := r.router.Complete(ctx, llm.Premium, ai.ChatRequest{
+	// The plan is a short call: give it at most a third of the time left, so the
+	// steps still have room when it is slow.
+	pctx, cancel := context.WithTimeout(ctx, timeLeft(ctx)/3)
+	defer cancel()
+	resp, _, err := r.router.Complete(pctx, llm.Premium, ai.ChatRequest{
 		Messages: []ai.Message{
 			{Role: "system", Content: managerSystem + "\n\nTEAM:\n" + roster.String()},
 			{Role: "user", Content: spec.OptimisedBrief},
@@ -327,9 +359,6 @@ func (r *Runtime) managerPlan(ctx context.Context, spec *promptopt.TaskSpec, tc 
 		ResponseFormat: ai.JSONObject,
 		CacheSystem:    true,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("manager plan: %w", err)
-	}
 	var plan struct {
 		Steps []struct {
 			Specialist string `json:"specialist"`
@@ -337,8 +366,12 @@ func (r *Runtime) managerPlan(ctx context.Context, spec *promptopt.TaskSpec, tc 
 			Task       string `json:"task"`
 		} `json:"steps"`
 	}
-	if err := json.Unmarshal([]byte(extractJSON(resp.Choices[0].Message.Content)), &plan); err != nil {
-		return nil, fmt.Errorf("manager plan: %w", err)
+	if err != nil {
+		// No plan (every planning model failed or ran out of time): the fallback
+		// below hands the request to the strategist instead of failing it.
+		r.logger.Warn("manager plan failed, using the strategist fallback", zap.Error(err))
+	} else if uerr := json.Unmarshal([]byte(extractJSON(resp.Choices[0].Message.Content)), &plan); uerr != nil {
+		r.logger.Warn("manager plan unreadable, using the strategist fallback", zap.Error(uerr))
 	}
 	var out []plannedStep
 	for _, s := range plan.Steps {
@@ -462,6 +495,11 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 			return out
 		}
 		out.Error = perr.Error()
+		if timeLeft(ctx) < minRepairTime {
+			// No time for a repair: show the raw draft rather than nothing.
+			out.Text = strings.TrimSpace(reply)
+			return out
+		}
 		// One repair attempt with the validation error.
 		req.Messages = append(req.Messages,
 			ai.Message{Role: "assistant", Content: trimTo(reply, 4000)},

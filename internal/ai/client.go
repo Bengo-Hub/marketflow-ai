@@ -191,6 +191,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
+			if FailFast(ctx) {
+				// The router has another target; moving on beats waiting here.
+				return nil, &StatusError{Provider: "openai-compatible", Code: 429, Body: "rate limited"}
+			}
 			wait := time.Duration(5*(attempt+1)) * time.Second
 			c.logger.Warn("rate limited, retrying",
 				zap.Int("attempt", attempt+1), zap.Duration("wait", wait))
@@ -219,7 +223,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 					return recovered, nil
 				}
 			}
-			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+			return nil, &StatusError{Provider: "openai-compatible", Code: resp.StatusCode, Body: truncate(string(respBody), 500)}
 		}
 
 		var chatResp ChatResponse
@@ -228,7 +232,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		}
 		return &chatResp, nil
 	}
-	return nil, fmt.Errorf("rate limit exceeded after 3 retries")
+	return nil, &StatusError{Provider: "openai-compatible", Code: 429, Body: "rate limit exceeded after 3 retries"}
 }
 
 // ChatStream sends a streaming chat completion request and returns a channel of deltas.
@@ -257,7 +261,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (<-chan Stream
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &StatusError{Provider: "openai-compatible", Code: resp.StatusCode, Body: truncate(string(respBody), 500)}
 	}
 
 	ch := make(chan StreamDelta, 100)

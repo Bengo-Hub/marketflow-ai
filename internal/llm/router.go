@@ -39,8 +39,43 @@ var ErrNoTarget = errors.New("llm: no configured model for this class")
 const (
 	breakerFailures = 3
 	breakerCooldown = 60 * time.Second
-	policyTTL       = 5 * time.Minute
+	// authCooldown keeps a provider whose key was rejected out of the way longer:
+	// retrying it within a minute cannot succeed.
+	authCooldown = 10 * time.Minute
+	policyTTL    = 5 * time.Minute
 )
+
+// firstTokenTimeout is how long a stream may stay silent after connecting
+// before the router gives up on it and opens the next target.
+var firstTokenTimeout = 15 * time.Second
+
+// classBudget bounds one Complete call across all of a class's targets, so a
+// chain of slow providers never adds up to a stuck request. Callers with a
+// shorter deadline keep theirs.
+var classBudget = map[Class]time.Duration{
+	Nano:        20 * time.Second,
+	Standard:    45 * time.Second,
+	Premium:     70 * time.Second,
+	PremiumPlus: 90 * time.Second,
+}
+
+// defaultTargetTimeout applies to targets saved without timeout_seconds.
+var defaultTargetTimeout = map[Class]time.Duration{
+	Nano:        10 * time.Second,
+	Standard:    25 * time.Second,
+	Premium:     45 * time.Second,
+	PremiumPlus: 75 * time.Second,
+}
+
+func targetTimeout(class Class, t Target) time.Duration {
+	if t.TimeoutSeconds > 0 {
+		return time.Duration(t.TimeoutSeconds) * time.Second
+	}
+	if d, ok := defaultTargetTimeout[class]; ok {
+		return d
+	}
+	return 30 * time.Second
+}
 
 // Router routes calls by class. It is safe for concurrent use.
 type Router struct {
@@ -56,9 +91,12 @@ type Router struct {
 	nowFn    func() time.Time
 }
 
+// breaker is closed (no entry), open until openUntil, then half-open: exactly
+// one caller probes the target while the others keep skipping it.
 type breaker struct {
 	fails     int
 	openUntil time.Time
+	probing   bool
 }
 
 // Config configures a Router.
@@ -112,37 +150,62 @@ func (r *Router) Policy(ctx context.Context) Policy {
 	return next
 }
 
-// Complete runs a non-streaming call on the first healthy target of class.
-func (r *Router) Complete(ctx context.Context, class Class, req ai.ChatRequest) (*ai.ChatResponse, Call, error) {
-	targets := r.Policy(ctx).Classes[class]
-	var lastErr error
-	tried := 0
-	for _, t := range r.order(targets) {
-		if ctx.Err() != nil {
-			return nil, Call{}, ctx.Err()
-		}
+// usable lists the targets that can serve req, healthy ones first.
+func (r *Router) usable(ctx context.Context, class Class, req ai.ChatRequest) []resolvedTarget {
+	var out []resolvedTarget
+	for _, t := range r.order(r.Policy(ctx).Classes[class]) {
 		p, ok := r.resolve(ctx, t)
 		if !ok || (t.Provider == "anthropic" && len(req.Tools) > 0) {
 			// Tool loops stay on OpenAI-compatible providers: a Claude tool turn would
 			// need its thinking blocks replayed, which this message format drops.
 			continue
 		}
-		tried++
-		call := Call{Class: class, Provider: t.Provider, Model: modelFor(t, p)}
+		out = append(out, resolvedTarget{t: t, p: p, model: modelFor(t, p)})
+	}
+	return out
+}
+
+type resolvedTarget struct {
+	t     Target
+	p     Provider
+	model string
+}
+
+// Complete runs a non-streaming call on the first healthy target of class. The
+// whole call, fallbacks included, stays inside the class budget; each target
+// gets its own timeout, and every target but the last fails fast instead of
+// waiting out a rate limit.
+func (r *Router) Complete(ctx context.Context, class Class, req ai.ChatRequest) (*ai.ChatResponse, Call, error) {
+	if budget, ok := classBudget[class]; ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+	targets := r.usable(ctx, class, req)
+	if len(targets) == 0 {
+		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
+	}
+	var lastErr error
+	for i, rt := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		t := rt.t
+		call := Call{Class: class, Provider: t.Provider, Model: rt.model}
 		creq := r.prepare(req, t, call.Model)
-		cctx, cancel := ctx, context.CancelFunc(func() {})
-		if t.TimeoutSeconds > 0 {
-			cctx, cancel = context.WithTimeout(ctx, time.Duration(t.TimeoutSeconds)*time.Second)
+		cctx, cancel := context.WithTimeout(ctx, targetTimeout(class, t))
+		if i < len(targets)-1 {
+			cctx = ai.WithFailFast(cctx)
 		}
 		started := r.nowFn()
-		resp, err := p.Client.Chat(cctx, creq)
+		resp, err := rt.p.Client.Chat(cctx, creq)
 		cancel()
 		if err == nil && (resp == nil || len(resp.Choices) == 0) {
 			err = fmt.Errorf("empty response")
 		}
 		if err != nil {
 			lastErr = fmt.Errorf("%s/%s: %w", t.Provider, call.Model, err)
-			r.fail(key(t, call.Model))
+			r.failed(ctx, key(t, call.Model), err)
 			metricCalls.WithLabelValues(string(class), t.Provider, call.Model, "error").Inc()
 			r.logger.Warn("model call failed, trying next target",
 				zap.String("class", string(class)), zap.String("provider", t.Provider),
@@ -158,31 +221,42 @@ func (r *Router) Complete(ctx context.Context, class Class, req ai.ChatRequest) 
 		MeterFrom(ctx).Add(call)
 		return resp, call, nil
 	}
-	if tried == 0 {
-		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
+	if lastErr == nil {
+		lastErr = ctx.Err()
 	}
 	return nil, Call{}, fmt.Errorf("llm: all %s targets failed: %w", class, lastErr)
 }
 
-// Stream opens a streaming call on the first healthy target that accepts it.
+// Stream opens a streaming call on the first healthy target that starts
+// answering. A target that connects but sends nothing within firstTokenTimeout
+// is abandoned for the next one, so a stalled provider never freezes a chat.
 // Streams carry no usage, so only the call count is recorded.
 func (r *Router) Stream(ctx context.Context, class Class, req ai.ChatRequest) (<-chan ai.StreamDelta, Call, error) {
-	targets := r.Policy(ctx).Classes[class]
+	targets := r.usable(ctx, class, req)
+	if len(targets) == 0 {
+		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
+	}
 	var lastErr error
-	tried := 0
-	for _, t := range r.order(targets) {
-		p, ok := r.resolve(ctx, t)
-		if !ok || (t.Provider == "anthropic" && len(req.Tools) > 0) {
-			continue
+	for i, rt := range targets {
+		if ctx.Err() != nil {
+			break
 		}
-		tried++
-		model := modelFor(t, p)
-		// No per-target timeout here: the stream outlives this call and a deferred
-		// cancel would cut it off mid-answer.
-		ch, err := p.Client.ChatStream(ctx, r.prepare(req, t, model))
+		t, model := rt.t, rt.model
+		// The attempt context lives as long as the stream; it is cancelled when
+		// the stream ends, or right away when the target is abandoned.
+		actx, cancel := context.WithCancel(ctx)
+		if i < len(targets)-1 {
+			actx = ai.WithFailFast(actx)
+		}
+		wait := firstTokenTimeout
+		if d := targetTimeout(class, t); d < wait {
+			wait = d
+		}
+		ch, first, err := r.openStream(actx, rt, req, wait)
 		if err != nil {
+			cancel()
 			lastErr = fmt.Errorf("%s/%s: %w", t.Provider, model, err)
-			r.fail(key(t, model))
+			r.failed(ctx, key(t, model), err)
 			metricCalls.WithLabelValues(string(class), t.Provider, model, "error").Inc()
 			r.logger.Warn("model stream failed, trying next target",
 				zap.String("class", string(class)), zap.String("provider", t.Provider),
@@ -193,12 +267,71 @@ func (r *Router) Stream(ctx context.Context, class Class, req ai.ChatRequest) (<
 		metricCalls.WithLabelValues(string(class), t.Provider, model, "ok").Inc()
 		call := Call{Class: class, Provider: t.Provider, Model: model}
 		MeterFrom(ctx).Add(call)
-		return ch, call, nil
+		return relay(first, ch, cancel), call, nil
 	}
-	if tried == 0 {
-		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
+	if lastErr == nil {
+		lastErr = ctx.Err()
 	}
 	return nil, Call{}, fmt.Errorf("llm: all %s stream targets failed: %w", class, lastErr)
+}
+
+var errNoFirstToken = errors.New("no output before the first-token deadline")
+
+// openStream connects and waits for the first delta, both within wait.
+func (r *Router) openStream(ctx context.Context, rt resolvedTarget, req ai.ChatRequest, wait time.Duration) (<-chan ai.StreamDelta, ai.StreamDelta, error) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	type opened struct {
+		ch  <-chan ai.StreamDelta
+		err error
+	}
+	got := make(chan opened, 1)
+	go func() {
+		ch, err := rt.p.Client.ChatStream(ctx, r.prepare(req, rt.t, rt.model))
+		got <- opened{ch, err}
+	}()
+	var ch <-chan ai.StreamDelta
+	select {
+	case o := <-got:
+		if o.err != nil {
+			return nil, ai.StreamDelta{}, o.err
+		}
+		ch = o.ch
+	case <-timer.C:
+		return nil, ai.StreamDelta{}, errNoFirstToken
+	case <-ctx.Done():
+		return nil, ai.StreamDelta{}, ctx.Err()
+	}
+	select {
+	case d, ok := <-ch:
+		if !ok {
+			return nil, ai.StreamDelta{}, fmt.Errorf("stream closed before any output")
+		}
+		return ch, d, nil
+	case <-timer.C:
+		return nil, ai.StreamDelta{}, errNoFirstToken
+	case <-ctx.Done():
+		return nil, ai.StreamDelta{}, ctx.Err()
+	}
+}
+
+// relay hands the caller the first delta and the rest of the stream, and
+// releases the attempt context when the stream ends.
+func relay(first ai.StreamDelta, src <-chan ai.StreamDelta, done context.CancelFunc) <-chan ai.StreamDelta {
+	out := make(chan ai.StreamDelta, 100)
+	go func() {
+		defer done()
+		defer close(out)
+		out <- first
+		if first.Done {
+			return
+		}
+		for d := range src {
+			out <- d
+		}
+	}()
+	return out
 }
 
 // Client returns an ai.ChatClient bound to class, for code written against a
@@ -250,7 +383,10 @@ func (r *Router) prepare(req ai.ChatRequest, t Target, model string) ai.ChatRequ
 }
 
 // order puts targets with a closed breaker first, keeping policy order, and the
-// open ones last so a class is never left with nothing to try.
+// open ones last so a class is never left with nothing to try. When an open
+// breaker's cooldown has passed, one caller gets it in the healthy list as the
+// half-open probe; everyone else keeps treating it as open until that probe
+// reports back.
 func (r *Router) order(targets []Target) []Target {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -258,16 +394,41 @@ func (r *Router) order(targets []Target) []Target {
 	healthy := make([]Target, 0, len(targets))
 	var open []Target
 	for _, t := range targets {
-		if b := r.breakers[key(t, t.Model)]; b != nil && now.Before(b.openUntil) {
+		b := r.breakers[key(t, t.Model)]
+		switch {
+		case b == nil || b.openUntil.IsZero():
+			healthy = append(healthy, t)
+		case now.Before(b.openUntil):
 			open = append(open, t)
-			continue
+		default:
+			// Claiming the probe opens a new window, so a probe that never runs
+			// (an earlier target answered) simply expires instead of blocking.
+			b.probing = true
+			b.openUntil = now.Add(breakerCooldown)
+			healthy = append(healthy, t)
 		}
-		healthy = append(healthy, t)
 	}
 	return append(healthy, open...)
 }
 
-func (r *Router) fail(k string) {
+// failed records a failed attempt. A caller that gave up (its own deadline or
+// cancel) and our own bad requests (4xx) say nothing about the provider's
+// health, so they do not count; a rejected key opens the breaker at once and
+// for longer.
+func (r *Router) failed(parent context.Context, k string, err error) {
+	if !ai.Retryable(err) && parent.Err() == nil {
+		// The provider answered, so it is up; the request itself was wrong.
+		r.succeed(k)
+		return
+	}
+	if parent.Err() != nil {
+		r.mu.Lock()
+		if b := r.breakers[k]; b != nil && b.probing {
+			b.probing, b.openUntil = false, r.nowFn() // the next caller probes
+		}
+		r.mu.Unlock()
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b := r.breakers[k]
@@ -275,11 +436,20 @@ func (r *Router) fail(k string) {
 		b = &breaker{}
 		r.breakers[k] = b
 	}
-	b.fails++
-	if b.fails >= breakerFailures {
-		b.openUntil = r.nowFn().Add(breakerCooldown)
-		b.fails = 0
+	now := r.nowFn()
+	switch {
+	case ai.AuthFailure(err):
+		b.openUntil, b.fails = now.Add(authCooldown), 0
+	case b.probing || !b.openUntil.IsZero():
+		// The half-open probe failed: open again for a full cooldown.
+		b.openUntil, b.fails = now.Add(breakerCooldown), 0
+	default:
+		b.fails++
+		if b.fails >= breakerFailures {
+			b.openUntil, b.fails = now.Add(breakerCooldown), 0
+		}
 	}
+	b.probing = false
 }
 
 func (r *Router) succeed(k string) {

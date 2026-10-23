@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/decide"
@@ -51,6 +52,10 @@ func (r *Runtime) Brief(ctx context.Context, in BriefInput) (*BriefOutput, error
 	if len(in.Metrics) > 40 {
 		in.Metrics = in.Metrics[:40]
 	}
+	// marketflow-api waits 25 seconds; finishing well inside that means a slow
+	// provider costs the wording, never the brief.
+	ctx, cancel := context.WithTimeout(ctx, briefBudget)
+	defer cancel()
 	meter := llm.MeterFrom(ctx)
 	if meter == nil {
 		meter = &llm.Meter{}
@@ -123,6 +128,10 @@ func (r *Runtime) Brief(ctx context.Context, in BriefInput) (*BriefOutput, error
 	out.CostUSD += usd
 	return out, nil // highlights alone still make a useful brief if wording failed
 }
+
+// briefBudget bounds one brief: the ranking decision (at most 8 seconds) plus
+// the wording call in the time left.
+var briefBudget = 20 * time.Second
 
 func pctChange(v, base float64) float64 {
 	if base == 0 {

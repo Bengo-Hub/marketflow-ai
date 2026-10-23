@@ -155,12 +155,10 @@ func (c *AnthropicClient) Chat(ctx context.Context, req ChatRequest) (*ChatRespo
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 529 || resp.StatusCode == 429 {
-		return nil, fmt.Errorf("anthropic: rate limited (%d)", resp.StatusCode)
-	}
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(respBody))
+		// 429 and 529 (overloaded) come back as status errors so the router moves on.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, &StatusError{Provider: "anthropic", Code: resp.StatusCode, Body: truncate(string(respBody), 500)}
 	}
 
 	var antResp anthropicResponse
@@ -196,7 +194,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req ChatRequest) (<-ch
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &StatusError{Provider: "anthropic", Code: resp.StatusCode, Body: truncate(string(respBody), 500)}
 	}
 
 	ch := make(chan StreamDelta, 128)

@@ -306,7 +306,11 @@ func firstNonEmpty(values ...string) string {
 // back to code defaults.
 func (r *Resolver) ResolveRaw(ctx context.Context, providerType, providerName string) (map[string]string, error) {
 	cacheKey := r.namespace + ":provider:platform:" + providerType + ":" + providerName
-	if cached, err := r.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+	// The cache is an optimisation: a slow Redis must not hold up the lookup.
+	gctx, gcancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	cached, gerr := r.redis.Get(gctx, cacheKey).Result()
+	gcancel()
+	if gerr == nil && cached != "" {
 		var m map[string]string
 		if json.Unmarshal([]byte(cached), &m) == nil {
 			return m, nil
@@ -320,6 +324,8 @@ func (r *Resolver) ResolveRaw(ctx context.Context, providerType, providerName st
 		settings = map[string]string{}
 	}
 	data, _ := json.Marshal(settings)
-	_ = r.redis.Set(ctx, cacheKey, string(data), 5*time.Minute).Err()
+	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 300*time.Millisecond)
+	_ = r.redis.Set(sctx, cacheKey, string(data), 5*time.Minute).Err()
+	scancel()
 	return settings, nil
 }

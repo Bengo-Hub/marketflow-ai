@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/bengobox/marketflow-ai/internal/ai"
 )
 
 // TypeSafeInputUSDPerM is Jev's list price for input tokens (output is free),
@@ -105,7 +107,7 @@ func (t *TypeSafe) Decide(ctx context.Context, state string, questions map[strin
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, Usage{}, fmt.Errorf("typesafe: status %d: %s", resp.StatusCode, msg)
+		return nil, Usage{}, &ai.StatusError{Provider: "typesafe", Code: resp.StatusCode, Body: string(msg)}
 	}
 	var out tsResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {

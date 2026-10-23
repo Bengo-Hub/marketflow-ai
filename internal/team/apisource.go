@@ -36,7 +36,10 @@ func (s *APISource) Load(ctx context.Context, tenantID uuid.UUID) (TenantContext
 	}
 	cacheKey := s.Namespace + ":os:ctx:" + tenantID.String()
 	if s.Redis != nil {
-		if raw, err := s.Redis.Get(ctx, cacheKey).Bytes(); err == nil && json.Unmarshal(raw, &tc) == nil {
+		gctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		raw, err := s.Redis.Get(gctx, cacheKey).Bytes()
+		cancel()
+		if err == nil && json.Unmarshal(raw, &tc) == nil {
 			return tc, nil
 		}
 	}
@@ -66,7 +69,9 @@ func (s *APISource) Load(ctx context.Context, tenantID uuid.UUID) (TenantContext
 		return tc, fmt.Errorf("os context: %w", err)
 	}
 	if s.Redis != nil {
-		_ = s.Redis.Set(ctx, cacheKey, raw, contextTTL).Err()
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 300*time.Millisecond)
+		_ = s.Redis.Set(sctx, cacheKey, raw, contextTTL).Err()
+		cancel()
 	}
 	return tc, nil
 }

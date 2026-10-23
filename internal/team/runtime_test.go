@@ -16,6 +16,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// failReply makes fakeLLM answer with a provider outage instead of text.
+const failReply = "\x00fail"
+
 // fakeLLM answers by inspecting the system prompt.
 type fakeLLM struct {
 	mu      sync.Mutex
@@ -36,12 +39,16 @@ func (f *fakeLLM) Chat(_ context.Context, req ai.ChatRequest) (*ai.ChatResponse,
 	f.mu.Lock()
 	f.systems = append(f.systems, sys)
 	f.mu.Unlock()
+	content := f.reply(sys, user)
+	if content == failReply {
+		return nil, &ai.StatusError{Provider: "fake", Code: 503, Body: "down"}
+	}
 	r := &ai.ChatResponse{}
 	r.Choices = append(r.Choices, struct {
 		Index   int        `json:"index"`
 		Message ai.Message `json:"message"`
 		Finish  string     `json:"finish_reason"`
-	}{Message: ai.Message{Content: f.reply(sys, user)}})
+	}{Message: ai.Message{Content: content}})
 	return r, nil
 }
 
