@@ -51,7 +51,7 @@ Marketing Workflows:
 - book_meeting: schedule a meeting on the tenant's Google Calendar.
 - create_campaign: create a campaign on marketflow-api (name, platform, budget, audience, duration).
 - create_funnel: create a landing page funnel at /f/{slug} with form fields, WhatsApp block, product block.
-- calculate_ad_cost: compute the total cost (ads budget + service fee) before the user pays.
+- calculate_ad_cost: quote the ad budget (paid to the platform from the user's own ad account, no MarketFlow fee) and the AI credits for making the ads.
 
 RULES:
 - Call tools iteratively; reason step by step.
@@ -60,10 +60,10 @@ RULES:
   1. check_integrations — verify the target platform is connected
   2. get_fbo_profile — get distribID for product links in the funnel
   3. Ask for: target audience, daily budget, duration, campaign focus
-  4. calculate_ad_cost — show the total cost (ads + service fee, single wallet payment)
+  4. calculate_ad_cost: show the quote (ad budget and AI credits, as two separate parts)
   5. Confirm with the user before proceeding
-  6. create_funnel (if needed) → create_campaign
-- The tenant pays ONCE from their wallet — MarketFlow handles paying the ad platform. Never tell the user they need to pay Meta/Google separately.
+  6. create_funnel (if needed), then create_campaign
+- The ad budget is billed by the ad platform to the user's own ad account at the platform's price; MarketFlow adds no fee and holds no money. MarketFlow charges only AI credits for making the ads. Never mention a wallet or a service fee.
 - When generating product recommendations, ALWAYS include distribID-embedded product links.
 - NEVER make medical claims (cures, treats, heals, prevents disease). Use supports/promotes/helps maintain.
 - NEVER guarantee income. Results vary. Include income disclaimer when relevant.
@@ -84,12 +84,12 @@ When the user asks to create an ad, campaign, or marketing content, follow this 
 1. FIRST call check_integrations to verify which ad platforms are connected.
 2. Call kb_search to get product details (name, benefits, product code) for the product mentioned.
 3. Call search_images to find relevant product images to include in the ad.
-4. Call calculate_ad_cost to show the budget breakdown (ads spend + service fee = single wallet payment).
-5. Present the ad copy, images, and cost breakdown to the user in a clear summary.
+4. Call calculate_ad_cost to show the quote (ad budget paid on their own ad account, plus AI credits for the ads).
+5. Present the ad copy, images, and the quote to the user in a clear summary.
 6. Ask if they want to proceed with creating the campaign via create_campaign.
 
 If an ad platform is not connected, guide the user to /settings/integrations to connect it before proceeding.
-If wallet balance is insufficient, guide the user to /settings/billing to top up their wallet.
+If AI credits are used up, guide the user to /settings/billing to buy a credit bundle. If the ad account cannot pay, guide them to the ad platform's billing settings.
 Do NOT skip straight to text generation — always gather context and verify integrations first.
 `)
 	}
@@ -120,7 +120,7 @@ Marketing Workflows:
 - book_meeting: schedule a meeting on the tenant's Google Calendar.
 - create_campaign: create a lead-generation campaign on marketflow-api.
 - create_funnel: create a landing page funnel for service enquiries or course signups.
-- calculate_ad_cost: compute ad budget + service fee before the client commits.
+- calculate_ad_cost: quote the ad budget (paid on the client's own ad account, no fee) and the AI credits before the client commits.
 
 RULES:
 - Call tools iteratively; reason step by step.
@@ -201,7 +201,7 @@ Marketing Workflows:
 - book_meeting: schedule a meeting on the business owner's calendar.
 - create_campaign: create a marketing campaign (platform, budget, audience, duration).
 - create_funnel: create a landing page funnel for lead generation.
-- calculate_ad_cost: compute total campaign cost (ad spend + service fee) before the business owner commits.
+- calculate_ad_cost: quote the ad budget (paid on the business's own ad account, no fee) and the AI credits before the business owner commits.
 
 RULES:
 - Call tools iteratively; reason step by step.
@@ -221,11 +221,11 @@ RULES:
 TOOL CHAINING FOR CAMPAIGN/CONTENT CREATION:
 1. FIRST call check_integrations to verify which ad platforms are connected.
 2. Call kb_search to get product or service details for the campaign.
-3. Call calculate_ad_cost to show the budget breakdown (ad spend + service fee = single wallet payment).
-4. Present the campaign plan and cost; confirm with the business owner before proceeding.
-5. create_funnel (if needed) → create_campaign.
+3. Call calculate_ad_cost to show the quote (ad budget paid on their own ad account, plus AI credits).
+4. Present the campaign plan and the quote; confirm with the business owner before proceeding.
+5. create_funnel (if needed), then create_campaign.
 If an ad platform is not connected, guide the user to /settings/integrations.
-If wallet balance is insufficient, guide to /settings/billing.
+If AI credits are used up, guide to /settings/billing to buy a credit bundle.
 `)
 	}
 	return b.String()

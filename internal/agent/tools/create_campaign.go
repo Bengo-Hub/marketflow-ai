@@ -35,7 +35,7 @@ func NewCreateCampaign(apiBaseURL, apiKey string, logger *zap.Logger) *CreateCam
 
 func (*CreateCampaign) Name() string { return "create_campaign" }
 func (*CreateCampaign) Description() string {
-	return "Creates a new marketing campaign. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. IMPORTANT: Before calling this, use calculate_ad_cost to show the tenant the total cost (ads budget + service charge). The total is debited from their wallet in a single payment — MarketFlow pays Meta/Google on their behalf. Use check_integrations first to verify the ad platform is connected."
+	return "Creates a new marketing campaign. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. IMPORTANT: Before calling this, use calculate_ad_cost to show the quote: the ad budget, which the platform bills to the tenant's own ad account at its own price with no MarketFlow fee, and the AI credits for making the ads. Use check_integrations first to verify the ad platform is connected."
 }
 func (*CreateCampaign) Schema() map[string]any {
 	return map[string]any{
@@ -147,12 +147,18 @@ func classifyCampaignError(platform string, status int, body string) string {
 		message = "The connected ad account has been suspended or flagged for a policy violation."
 		action = "Review the account status in the ad platform's dashboard and resolve any policy issues before running campaigns."
 
-	// Insufficient funds / wallet balance
+	// MarketFlow AI credits used up (402 from marketflow-api's plan checks).
+	case status == http.StatusPaymentRequired || strings.Contains(lower, "ai credit"):
+		code = "ai_credits_exhausted"
+		message = "Your MarketFlow AI credits are used up, so the campaign could not be prepared."
+		action = "Buy a credit bundle or upgrade your plan at /settings/billing, then try again."
+
+	// The ad account cannot pay (the platform bills the tenant's own account).
 	case strings.Contains(lower, "insufficient") || strings.Contains(lower, "balance") ||
-		strings.Contains(lower, "funds") || strings.Contains(lower, "credit"):
-		code = "insufficient_funds"
-		message = "The MarketFlow wallet does not have enough balance to cover the campaign cost."
-		action = "Top up your wallet at /settings/billing, then retry campaign creation."
+		strings.Contains(lower, "funds"):
+		code = "ad_account_funds"
+		message = "The connected ad account cannot pay for this campaign (no funds or no valid payment method)."
+		action = "Add a payment method or funds in the ad platform's billing settings for your own ad account, then try again."
 
 	// Permission / scope error
 	case status == 403 || strings.Contains(lower, "permission") || strings.Contains(lower, "unauthorized"):

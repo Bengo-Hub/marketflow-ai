@@ -5,125 +5,139 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/registry"
 )
 
-// CalculateCost computes the total cost for an ad campaign including the
-// MarketFlow service charge. Uses the same formula that the billing system
-// will enforce at payment time:
+// CalculateCost quotes an ad campaign the way MarketFlow bills it (decision of
+// 2026-10-22, .claude/plans/marketflow-ads-autopilot-2026-10-22.md):
 //
-//	service_charge = clamp(ads_budget × charge_pct, min_charge, max_charge)
-//	total = ads_budget + service_charge
-//
-// The percentage, min, and max are configurable from /platform/billing
-// (defaults: 5%, KES 50 min, KES 5000 max).
+//   - the ad budget is paid to the ad platform at its own price, from the
+//     client's own ad account; Codevertex adds no fee and holds no wallet;
+//   - Codevertex charges only AI credits for making the ads (posters, copy),
+//     priced by the output registry, from the plan allowance or a bundle.
 type CalculateCost struct {
-	logger *zap.Logger
+	registry func(context.Context) registry.Registry
+	logger   *zap.Logger
 }
 
-func NewCalculateCost(logger *zap.Logger) *CalculateCost {
-	return &CalculateCost{logger: logger.Named("tool.calculate_cost")}
+// NewCalculateCost builds the tool; reg serves the live output registry.
+func NewCalculateCost(reg func(context.Context) registry.Registry, logger *zap.Logger) *CalculateCost {
+	return &CalculateCost{registry: reg, logger: logger.Named("tool.calculate_ad_cost")}
 }
 
 func (*CalculateCost) Name() string { return "calculate_ad_cost" }
 func (*CalculateCost) Description() string {
-	return "Calculates the total cost for an ad campaign: (daily_budget × days) + MarketFlow service charge. Returns a breakdown in both USD and KES so the user can decide whether to proceed. Call this before asking the user to pay."
+	return "Quotes an ad campaign before the user commits. Returns two separate parts: the ad budget (daily budget x days), which the user pays to the ad platform from their own ad account at the platform's price with no MarketFlow fee, and the AI credits for making the ads (posters and ad copy). Never describe a MarketFlow fee or wallet: there is none."
 }
 func (*CalculateCost) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"daily_budget":  map[string]any{"type": "number", "description": "Daily ad spend in the given currency"},
-			"days":          map[string]any{"type": "integer", "description": "Number of days to run the campaign"},
-			"currency":      map[string]any{"type": "string", "description": "USD or KES", "default": "USD"},
+			"daily_budget": map[string]any{"type": "number", "description": "Daily ad spend in the given currency"},
+			"days":         map[string]any{"type": "integer", "description": "Number of days to run the campaign"},
+			"currency":     map[string]any{"type": "string", "description": "KES or USD", "default": "KES"},
+			"platform":     map[string]any{"type": "string", "description": "meta | google | tiktok | linkedin (optional, for the minimum daily spend check)"},
+			"posters":      map[string]any{"type": "integer", "description": "How many poster ads to make (optional)"},
+			"poster_tier":  map[string]any{"type": "string", "description": "standard | premium", "default": "standard"},
+			"copy_batch":   map[string]any{"type": "boolean", "description": "Whether the team writes a batch of ad copy variants"},
 		},
 		"required": []string{"daily_budget", "days"},
 	}
 }
 
-func (t *CalculateCost) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) (string, error) {
+func (t *CalculateCost) Invoke(ctx context.Context, _ uuid.UUID, argsJSON string) (string, error) {
 	var args struct {
 		DailyBudget float64 `json:"daily_budget"`
 		Days        int     `json:"days"`
 		Currency    string  `json:"currency"`
+		Platform    string  `json:"platform"`
+		Posters     int     `json:"posters"`
+		PosterTier  string  `json:"poster_tier"`
+		CopyBatch   bool    `json:"copy_batch"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
+	if args.DailyBudget < 0 || args.Posters < 0 || args.Posters > 20 {
+		return "", fmt.Errorf("daily_budget must be positive and posters 0 to 20")
+	}
 	if args.Days <= 0 {
 		args.Days = 1
 	}
-	if args.Currency == "" {
-		args.Currency = "USD"
+	args.Currency = strings.ToUpper(strings.TrimSpace(args.Currency))
+	if args.Currency != "USD" {
+		args.Currency = "KES"
+	}
+	reg := registry.Defaults()
+	if t.registry != nil {
+		reg = t.registry(ctx)
+	}
+	fx := reg.Settings.FXRate
+	if fx <= 0 {
+		fx = registry.Defaults().Settings.FXRate
 	}
 
-	// Defaults — these should be loaded from subscriptions-api
-	// ServiceChargePlan SC_MARKETFLOW_ADS in production.
-	const (
-		chargePct   = 5.0   // 5% of ads budget
-		minKES      = 5.0   // KES 5 minimum
-		maxKES      = 500.0 // KES 500 max per campaign
-		usdToKES    = 130.0 // approximate exchange rate
-		gatewayCard = 1.5   // Paystack card fee %
-		gatewayMpesa = 0.0  // M-Pesa Paybill: KES 0 (STK Push)
-	)
-
-	adsBudget := args.DailyBudget * float64(args.Days)
-
-	// Convert to KES for charge calculation if input is USD.
-	adsBudgetKES := adsBudget
+	total := args.DailyBudget * float64(args.Days)
+	dailyKES, totalKES := args.DailyBudget, total
 	if args.Currency == "USD" {
-		adsBudgetKES = adsBudget * usdToKES
+		dailyKES, totalKES = args.DailyBudget*fx, total*fx
+	}
+	budget := map[string]any{
+		"daily":     round2(args.DailyBudget),
+		"days":      args.Days,
+		"total":     round2(total),
+		"currency":  args.Currency,
+		"total_kes": math.Round(totalKES),
+		"paid_to":   "the ad platform, from your own ad account, at the platform's price",
+		"fee":       0,
+	}
+	var warnings []string
+	if p := strings.ToLower(strings.TrimSpace(args.Platform)); p != "" {
+		if min := reg.Settings.MinDailyTestKES[p]; min > 0 && dailyKES < min {
+			warnings = append(warnings, fmt.Sprintf("%s needs about KES %.0f a day per live ad to learn; this budget is below that, so results will be slow and noisy.", p, min))
+		}
 	}
 
-	rawCharge := adsBudgetKES * chargePct / 100
-	serviceChargeKES := math.Max(minKES, math.Min(maxKES, rawCharge))
-	serviceChargeUSD := serviceChargeKES / usdToKES
-
-	// Gateway fees are accrued by the paying party (tenant).
-	subtotal := adsBudgetKES + serviceChargeKES
-	gatewayFeeCard := subtotal * gatewayCard / 100
-	gatewayFeeMpesa := gatewayMpesa // flat for paybill
-
-	totalCardKES := subtotal + gatewayFeeCard
-	totalMpesaKES := subtotal + gatewayFeeMpesa
-
-	result := map[string]any{
-		"ads_budget": map[string]any{
-			"daily":    args.DailyBudget,
-			"days":     args.Days,
-			"total":    adsBudget,
-			"currency": args.Currency,
-		},
-		"service_charge": map[string]any{
-			"percentage": chargePct,
-			"amount_kes": round2(serviceChargeKES),
-			"amount_usd": round2(serviceChargeUSD),
-			"min_kes":    minKES,
-			"max_kes":    maxKES,
-		},
-		"gateway_fee": map[string]any{
-			"card_kes":  round2(gatewayFeeCard),
-			"mpesa_kes": round2(gatewayFeeMpesa),
-			"note":      "Gateway fee varies by payment channel. M-Pesa Paybill is free; card is ~1.5%.",
-		},
-		"total": map[string]any{
-			"via_card_kes":  round2(totalCardKES),
-			"via_mpesa_kes": round2(totalMpesaKES),
-			"via_card_usd":  round2(totalCardKES / usdToKES),
-		},
-		"note":         "You pay once — MarketFlow handles ad platform payment on your behalf. Gateway fee is accrued by the paying party.",
-		"wallet_debit": round2(totalCardKES),
-		"breakdown":    fmt.Sprintf("KES %.0f ads + KES %.0f service fee + KES %.0f gateway fee (card) = KES %.0f total", adsBudgetKES, serviceChargeKES, gatewayFeeCard, totalCardKES),
+	credits := 0
+	lines := []map[string]any{}
+	if args.Posters > 0 {
+		key := registry.Poster
+		if args.PosterTier == "premium" {
+			key = registry.PosterPremium
+		}
+		each, err := reg.Credits(key)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, map[string]any{"item": reg.Outputs[key].Name, "qty": args.Posters, "credits": each * args.Posters})
+		credits += each * args.Posters
 	}
-	out, _ := json.Marshal(result)
-	t.logger.Debug("calculate_cost",
-		zap.Float64("ads_budget", adsBudget),
-		zap.Float64("charge_kes", serviceChargeKES),
-		zap.Float64("total_card_kes", totalCardKES),
-	)
+	if args.CopyBatch {
+		each, err := reg.Credits(registry.CopyBatch)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, map[string]any{"item": reg.Outputs[registry.CopyBatch].Name, "qty": 1, "credits": each})
+		credits += each
+	}
+
+	summary := fmt.Sprintf("Ad budget: %s %.0f over %d days, paid to the platform from your own ad account (no MarketFlow fee).", args.Currency, total, args.Days)
+	if credits > 0 {
+		summary += fmt.Sprintf(" Making the ads: %d AI credits from your plan or a credit bundle.", credits)
+	}
+	out, _ := json.Marshal(map[string]any{
+		"ad_budget":   budget,
+		"ai_credits":  map[string]any{"lines": lines, "total": credits},
+		"warnings":    warnings,
+		"summary":     summary,
+		"how_you_pay": "Ads are billed by the platform to the payment method on your own ad account. AI credits come from your MarketFlow plan or a credit bundle.",
+	})
+	t.logger.Debug("calculate_ad_cost", zap.Float64("budget_kes", totalKES), zap.Int("credits", credits))
 	return string(out), nil
 }
 

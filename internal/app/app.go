@@ -74,6 +74,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── Provider Resolver (platform-level AI config from DB, cached in Redis) ─
 	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
+	// Output registry (credit prices, FX): the OS, the creative endpoints and the
+	// agent's ad-cost tool all price from it.
+	registrySource := newRegistrySource(resolver, logger)
 
 	// ── Model router ──────────────────────────────────────────────────────
 	// Every generative call names a class (nano, standard, premium, premium_plus);
@@ -227,7 +230,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				agenttools.NewGenerateLinks(logger),
 				agenttools.NewCreateCampaign(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCreateFunnel(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
-				agenttools.NewCalculateCost(logger),
+				agenttools.NewCalculateCost(registrySource.Get, logger),
 				// Sprint 10: CRM agent tools
 				agenttools.NewCreateDeal(agenttools.CreateDealConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
@@ -361,7 +364,6 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		Library: lib, Decider: decider, Router: modelRouter,
 		Redis: redisClient, Namespace: cfg.Redis.Namespace, Logger: logger,
 	})
-	registrySource := newRegistrySource(resolver, logger)
 	osContext := &team.APISource{
 		BaseURL: cfg.AI.MarketFlowAPIURL, Key: cfg.App.InternalServiceKey,
 		Redis: redisClient, Namespace: cfg.Redis.Namespace,
