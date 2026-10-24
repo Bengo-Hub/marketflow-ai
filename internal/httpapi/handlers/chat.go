@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/google/uuid"
@@ -67,6 +68,16 @@ func (h *ChatHandler) chargeMessage(w http.ResponseWriter, r *http.Request, tena
 		return "", true
 	}
 	return key, true
+}
+
+// refundable reports a message whose credit goes back (owner rule,
+// 2026-10-24): only a reply flagged as made without a model (cache, template,
+// knowledge base, the fallback after an empty model reply), and only when no
+// paid model was used on the way (the classifier or a model that answered
+// nothing may have run on a paid provider). A free model's answer is charged:
+// it still uses our compute.
+func refundable(res *rag.ChatResult, m *llm.Meter) bool {
+	return rag.FreeAnswer(res) && !m.Paid()
 }
 
 // refund returns the credit when a message produced no answer.
@@ -176,6 +187,10 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Every model call of this message is metered, so a refund is only given when
+	// no paid model was used (see refundable).
+	meter := &llm.Meter{}
+	r = r.WithContext(llm.WithMeter(r.Context(), meter))
 
 	if req.Stream {
 		h.handleStream(w, r, input, persist, tenantID, chargeKey)
@@ -186,11 +201,13 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	result, err := h.pipeline.Chat(r.Context(), input)
 	if err != nil {
 		h.logger.Error("chat failed", zap.Error(err))
-		h.refund(r, tenantID, chargeKey)
+		if !meter.Paid() {
+			h.refund(r, tenantID, chargeKey)
+		}
 		writeError(w, http.StatusInternalServerError, "AI processing failed")
 		return
 	}
-	if rag.FreeAnswer(result) {
+	if refundable(result, meter) {
 		h.refund(r, tenantID, chargeKey)
 	}
 
@@ -351,17 +368,24 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 
 	ch, meta, err := h.pipeline.ChatStream(r.Context(), input)
 	if err != nil {
-		h.refund(r, tenantID, chargeKey)
+		if !llm.MeterFrom(r.Context()).Paid() {
+			h.refund(r, tenantID, chargeKey)
+		}
 		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
 		flusher.Flush()
 		return
 	}
 
-	// An answer no model produced (cache, template, knowledge base) costs no credit.
-	refunded := rag.FreeAnswer(meta)
-	if refunded {
-		h.refund(r, tenantID, chargeKey)
+	// Settled once, when the reply is complete: by then the meter holds every
+	// model call and the guard has marked a knowledge-base fallback.
+	settled := false
+	settle := func() {
+		if !settled && refundable(meta, llm.MeterFrom(r.Context())) {
+			h.refund(r, tenantID, chargeKey)
+		}
+		settled = true
 	}
+	defer settle()
 
 	// Send metadata first
 	if meta != nil {
@@ -380,10 +404,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 	var assembled strings.Builder
 	for delta := range ch {
 		if delta.Done {
-			// A model that streamed nothing was replaced by the knowledge base.
-			if !refunded && rag.FreeAnswer(meta) {
-				h.refund(r, tenantID, chargeKey)
-			}
+			settle()
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			h.persistStreamTurn(r.Context(), input, assembled.String(), persist)

@@ -211,7 +211,8 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	available := h.balance(r.Context(), tenantID)
 
 	var sink askSink = jsonSink{w}
-	ctx := llm.WithMeter(r.Context(), &llm.Meter{})
+	meter := &llm.Meter{}
+	ctx := llm.WithMeter(r.Context(), meter)
 	if req.Stream {
 		if s, ok := newSSESink(w); ok {
 			sink = s
@@ -223,35 +224,36 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		Tier: req.Tier, Platforms: req.Platforms, CreditsAvailable: available, Playbook: req.Playbook,
 	})
 	if errors.Is(err, team.ErrBadPlaybook) {
-		h.refund(r, tenantID, turnKey)
+		h.refundUnlessPaid(r, tenantID, turnKey, meter)
 		sink.fail(http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
 		h.logger.Error("os ask failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
-		h.refund(r, tenantID, turnKey)
+		h.refundUnlessPaid(r, tenantID, turnKey, meter)
 		sink.fail(http.StatusInternalServerError, "the marketing team could not finish this request")
 		return
 	}
 	if res.Route == team.RouteClarify {
 		// A clarifying question produced nothing; the owner pays when the answered
-		// request runs.
-		h.refund(r, tenantID, turnKey)
-		turnKey = ""
+		// request runs (unless a paid model already worked on it).
+		if h.refundUnlessPaid(r, tenantID, turnKey, meter) {
+			turnKey = ""
+		}
 	}
 	out := askResponse{RunID: runID, Result: res}
-	if turnKey != "" {
-		out.CreditsCharged = 1
-	}
 	if res.Route == team.RouteChat && h.pipeline != nil {
 		sink.progress(team.Progress{Stage: "answering", Member: "manager", Label: "Looking up the answer"})
-		chat, err := h.pipeline.Chat(r.Context(), rag.ChatInput{TenantID: tenantID, SessionID: uuid.New(), Question: req.Text, BusinessType: "generic"})
+		chat, err := h.pipeline.Chat(ctx, rag.ChatInput{TenantID: tenantID, SessionID: uuid.New(), Question: req.Text, BusinessType: "generic"})
 		if err != nil {
-			h.refund(r, tenantID, turnKey)
+			h.refundUnlessPaid(r, tenantID, turnKey, meter)
 			sink.fail(http.StatusInternalServerError, "AI processing failed")
 			return
 		}
 		out.Answer = chat.Response
+	}
+	if turnKey != "" {
+		out.CreditsCharged = 1
 	}
 	if res.CopyBatchRun {
 		price, _ := h.registry(r.Context()).Credits(registry.CopyBatch)
@@ -434,7 +436,8 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
+	meter := &llm.Meter{}
+	ctx, cancel := context.WithTimeout(llm.WithMeter(r.Context(), meter), 100*time.Second)
 	defer cancel()
 	allowed := req.AllowedTools
 	if len(allowed) == 0 {
@@ -450,7 +453,7 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.logger.Warn("custom agent run failed", zap.String("run_id", req.RunID), zap.Error(err))
-		h.refund(r, tenantID, chargeKey)
+		h.refundUnlessPaid(r, tenantID, chargeKey, meter)
 		writeJSON(w, http.StatusOK, map[string]any{"run_id": req.RunID, "status": "failed", "error": err.Error()})
 		return
 	}
@@ -584,6 +587,17 @@ func (h *OSHandler) spend(ctx context.Context, tenantID uuid.UUID, units int64, 
 		return s.SpendFor(ctx, tenantID, units, key, desc)
 	}
 	return h.credits.Spend(ctx, tenantID, units, key)
+}
+
+// refundUnlessPaid gives a credit flagged for refund back only when no paid
+// model was used for it (owner rule, 2026-10-24): paid tokens already spent are
+// not returned. It reports whether the refund was made.
+func (h *OSHandler) refundUnlessPaid(r *http.Request, tenantID uuid.UUID, key string, m *llm.Meter) bool {
+	if key == "" || m.Paid() {
+		return false
+	}
+	h.refund(r, tenantID, key)
+	return true
 }
 
 func (h *OSHandler) refund(r *http.Request, tenantID uuid.UUID, key string) {

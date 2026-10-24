@@ -17,7 +17,25 @@ type Call struct {
 	Usage     ai.Usage `json:"usage"`
 	CostUSD   float64  `json:"cost_usd"`
 	LatencyMs int64    `json:"latency_ms"`
+	// Paid is true when the target has a price in the routing policy. Free
+	// targets (the local model, or Groq when its prices are set to 0 for the
+	// free tier) are never charged to the tenant (owner rule, 2026-10-24).
+	Paid bool `json:"paid"`
 }
+
+// Paid reports whether any recorded call used a paid model. Nothing recorded
+// (caches, templates, the knowledge base) is not paid.
+func (m *Meter) Paid() bool {
+	for _, c := range m.Calls() {
+		if c.Paid {
+			return true
+		}
+	}
+	return false
+}
+
+// paidTarget reports a target with a price set.
+func paidTarget(t Target) bool { return t.InputUSDPerM > 0 || t.OutputUSDPerM > 0 }
 
 // Meter accumulates the calls made while serving one request or run. Attach it
 // with WithMeter; the router appends to it, so a run's total spend is known

@@ -260,6 +260,37 @@ func TestReasoningEffortForReasoningModels(t *testing.T) {
 	}
 }
 
+// A call on a priced target is paid; a target without prices (the local model,
+// or Groq set to 0 for its free tier) is not. Only successful calls are metered.
+func TestMeterPaid(t *testing.T) {
+	free := &fakeClient{reply: "ok"}
+	r := NewRouter(Config{
+		Providers: fakeSource{"ollama": {Client: free}, "groq": {Client: &fakeClient{reply: "ok"}, Models: Models{Main: "m"}}},
+		Defaults: Policy{Classes: map[Class][]Target{
+			Nano:     {{Provider: "ollama", Model: "llama3.1:8b"}},
+			Standard: {{Provider: "groq", Model: ModelMain, InputUSDPerM: 0.15}},
+		}},
+	})
+	m := &Meter{}
+	ctx := WithMeter(context.Background(), m)
+	if _, call, err := r.Complete(ctx, Nano, ai.ChatRequest{}); err != nil || call.Paid {
+		t.Fatalf("free call: %v %+v", err, call)
+	}
+	if m.Paid() {
+		t.Fatal("only free calls so far")
+	}
+	if _, call, err := r.Complete(ctx, Standard, ai.ChatRequest{}); err != nil || !call.Paid {
+		t.Fatalf("paid call: %v %+v", err, call)
+	}
+	if !m.Paid() {
+		t.Fatal("a paid call was recorded")
+	}
+	var none *Meter
+	if none.Paid() {
+		t.Fatal("a nil meter is not paid")
+	}
+}
+
 // The light class tries the free models (Groq, then local) before paid ones.
 func TestLightClassIsFreeFirst(t *testing.T) {
 	nano := DefaultPolicy(Defaults{}).Classes[Nano]

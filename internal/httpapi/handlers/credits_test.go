@@ -9,6 +9,9 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/llm"
+	"github.com/bengobox/marketflow-ai/internal/rag"
 )
 
 type fakeSpender struct {
@@ -82,5 +85,25 @@ func TestExemptAndUnidentifiedTenantsAreNotCharged(t *testing.T) {
 	}
 	if key, ok := newChat(nil).chargeMessage(rec, req, uuid.New(), true); !ok || key != "" {
 		t.Fatal("no billing configured means unmetered")
+	}
+}
+
+// Owner rule (2026-10-24): a free model's answer is charged; only a reply flagged
+// as made without a model is refunded, and only when no paid model was used.
+func TestRefundableOnlyFlaggedAndUnpaid(t *testing.T) {
+	kb := &rag.ChatResult{Model: rag.ModelKnowledgeBase}
+	free := &llm.Meter{}
+	free.Add(llm.Call{Provider: "ollama", Paid: false})
+	paid := &llm.Meter{}
+	paid.Add(llm.Call{Provider: "openai", Paid: true})
+
+	if !refundable(kb, nil) || !refundable(kb, free) {
+		t.Fatal("a knowledge-base answer with no paid call is refunded")
+	}
+	if refundable(kb, paid) {
+		t.Fatal("paid tokens were spent (e.g. the classifier): no refund")
+	}
+	if refundable(&rag.ChatResult{Model: "llama3.1:8b"}, free) {
+		t.Fatal("a free model's answer is charged")
 	}
 }

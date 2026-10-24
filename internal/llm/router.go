@@ -187,7 +187,7 @@ func (r *Router) Complete(ctx context.Context, class Class, req ai.ChatRequest) 
 			break
 		}
 		t := rt.t
-		call := Call{Class: class, Provider: t.Provider, Model: rt.model}
+		call := Call{Class: class, Provider: t.Provider, Model: rt.model, Paid: paidTarget(t)}
 		creq := r.prepare(req, t, call.Model)
 		cctx, cancel := context.WithTimeout(ctx, targetTimeout(class, t))
 		if i < len(targets)-1 {
@@ -261,7 +261,7 @@ func (r *Router) Stream(ctx context.Context, class Class, req ai.ChatRequest) (<
 		}
 		r.succeed(key(t, model))
 		metricCalls.WithLabelValues(string(class), t.Provider, model, "ok").Inc()
-		call := Call{Class: class, Provider: t.Provider, Model: model}
+		call := Call{Class: class, Provider: t.Provider, Model: model, Paid: paidTarget(t)}
 		MeterFrom(ctx).Add(call)
 		return relay(first, ch, cancel), call, nil
 	}
