@@ -65,6 +65,15 @@ func TestPosterEndpointGuardsAndRefunds(t *testing.T) {
 	if paid.spent != 5 || len(paid.refunded) != 1 || !strings.HasPrefix(paid.refunded[0], "render:") {
 		t.Fatalf("premium charged %d and refunded %v; want 5 then one render refund", paid.spent, paid.refunded)
 	}
+
+	// A text-only revision (scene_url) never charges, even with charge:true, and a
+	// scene that is gone answers 410.
+	free := &fakeSpender{decision: CreditDecision{Allowed: true}}
+	h.credits = free
+	rec = posterCall(h, posterBody(`,"scene_url":"http://127.0.0.1:1/scene.jpg"`))
+	if rec.Code != http.StatusGone || free.spent != 0 {
+		t.Fatalf("recompose with a missing scene = %d, charged %d", rec.Code, free.spent)
+	}
 }
 
 func TestParseHexColor(t *testing.T) {

@@ -54,9 +54,17 @@ type PosterResult struct {
 	SHA256    string  `json:"sha256"`
 	Route     string  `json:"route"`
 	CostUSD   float64 `json:"cost_usd"`
-	SourceURL string  `json:"source_url"` // the provider's scene, kept for re-composing text edits
-	Attempts  int     `json:"attempts"`
+	SourceURL string  `json:"source_url"` // the provider's scene link (may expire)
+	// SceneKey and SceneURL are our stored copy of the scene without text, so a
+	// text-only revision re-composes from it with no new generation. Empty when
+	// the copy could not be stored (the poster itself is still fine).
+	SceneKey string `json:"scene_key,omitempty"`
+	SceneURL string `json:"scene_url,omitempty"`
+	Attempts int    `json:"attempts"`
 }
+
+// RouteRecompose names a text-only revision: our compositor over a stored scene.
+const RouteRecompose = "recompose"
 
 // Store is where finished posters go: httpware/objectstore's Store satisfies it.
 type Store interface {
@@ -136,27 +144,75 @@ func (p *Posters) Make(ctx context.Context, req PosterRequest) (*PosterResult, e
 		}
 		p.router.Succeeded(rt.Key)
 
-		img, err := ComposePoster(scene, req.Format, req.Overlay)
+		res, err := p.finish(ctx, scene, req)
 		if err != nil {
 			return nil, err
 		}
-		data, err := EncodeJPEG(img)
-		if err != nil {
-			return nil, err
+		res.Route, res.CostUSD, res.SourceURL, res.Attempts = rt.Key, rt.PriceUSD, sceneURL, i+1
+		// Keep the clean scene so text edits never pay for a new image.
+		if data, err := EncodeJPEG(scene); err == nil {
+			if key, url, err := p.store.PutPoster(ctx, req.TenantID, req.VersionID+"-scene", data); err == nil {
+				res.SceneKey, res.SceneURL = key, url
+			} else {
+				p.logger.Info("scene not kept; text edits will need a new render", zap.Error(err))
+			}
 		}
-		key, url, err := p.store.PutPoster(ctx, req.TenantID, req.VersionID, data)
-		if err != nil {
-			return nil, fmt.Errorf("media: store poster: %w", err)
-		}
-		sum := sha256.Sum256(data)
-		b := img.Bounds()
-		return &PosterResult{URL: url, Key: key, Width: b.Dx(), Height: b.Dy(), Bytes: len(data),
-			SHA256: hex.EncodeToString(sum[:]), Route: rt.Key, CostUSD: rt.PriceUSD, SourceURL: sceneURL, Attempts: i + 1}, nil
+		return res, nil
 	}
 	if lastErr == nil {
 		return nil, ErrNoRoute
 	}
 	return nil, fmt.Errorf("%w: %v", ErrNoRoute, lastErr)
+}
+
+// Recompose makes a text-only revision: the same scene (our stored copy) with
+// new headline, subline, price, CTA or brand colour. No provider is called.
+func (p *Posters) Recompose(ctx context.Context, req PosterRequest, sceneURL string) (*PosterResult, error) {
+	if _, ok := Formats[req.Format]; !ok {
+		return nil, fmt.Errorf("media: unknown poster format %q", req.Format)
+	}
+	if !strings.HasPrefix(sceneURL, "https://") && !strings.HasPrefix(sceneURL, "http://") {
+		return nil, fmt.Errorf("media: scene_url must be an http(s) link")
+	}
+	ctx, cancel := context.WithTimeout(ctx, p.budget)
+	defer cancel()
+	if req.LogoURL != "" && req.Overlay.Logo == nil {
+		if logo, err := p.download(ctx, req.LogoURL); err == nil {
+			req.Overlay.Logo = logo
+		}
+	}
+	scene, err := p.download(ctx, sceneURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSceneGone, err)
+	}
+	res, err := p.finish(ctx, scene, req)
+	if err != nil {
+		return nil, err
+	}
+	res.Route, res.SceneURL, res.Attempts = RouteRecompose, sceneURL, 1
+	return res, nil
+}
+
+// ErrSceneGone means the stored scene could not be read (purged with its draft).
+var ErrSceneGone = errors.New("media: the original scene is no longer available")
+
+// finish composes the text over the scene and stores the poster.
+func (p *Posters) finish(ctx context.Context, scene image.Image, req PosterRequest) (*PosterResult, error) {
+	img, err := ComposePoster(scene, req.Format, req.Overlay)
+	if err != nil {
+		return nil, err
+	}
+	data, err := EncodeJPEG(img)
+	if err != nil {
+		return nil, err
+	}
+	key, url, err := p.store.PutPoster(ctx, req.TenantID, req.VersionID, data)
+	if err != nil {
+		return nil, fmt.Errorf("media: store poster: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	b := img.Bounds()
+	return &PosterResult{URL: url, Key: key, Width: b.Dx(), Height: b.Dy(), Bytes: len(data), SHA256: hex.EncodeToString(sum[:])}, nil
 }
 
 // scenePrompt keeps text out of the generated image: our overlay draws it.

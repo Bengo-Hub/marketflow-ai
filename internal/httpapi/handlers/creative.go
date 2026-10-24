@@ -37,6 +37,9 @@ type posterRequest struct {
 	CTA       string   `json:"cta"`
 	// Charge is false only when the caller already paid for this version.
 	Charge bool `json:"charge"`
+	// SceneURL asks for a text-only revision over this stored scene (the
+	// scene_url of an earlier poster): no generation and never a charge.
+	SceneURL string `json:"scene_url"`
 }
 
 // posterBudget sits under the internal route's 120 s request timeout.
@@ -67,6 +70,10 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := media.Formats[req.Format]; !ok {
 		writeError(w, http.StatusBadRequest, "format must be 1080x1080, 1080x1350 or 1080x1920")
+		return
+	}
+	if req.SceneURL != "" {
+		h.recompose(w, r, tenantID, req)
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" || len([]rune(req.Prompt)) > 2000 {
@@ -125,6 +132,32 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"poster": res, "credits_charged": credits})
+}
+
+// recompose is the text-only revision: the stored scene with new words, free.
+// 410 when the scene was purged with its draft (the caller then asks for a new render).
+func (h *OSHandler) recompose(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, req posterRequest) {
+	accent, err := parseHexColor(req.Accent)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "accent must be a #rrggbb colour")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), posterBudget)
+	defer cancel()
+	res, err := h.posters.Recompose(ctx, media.PosterRequest{
+		TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, LogoURL: req.LogoURL,
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
+	}, req.SceneURL)
+	if err != nil {
+		h.logger.Warn("recompose failed", zap.String("version_id", req.VersionID), zap.Error(err))
+		if errors.Is(err, media.ErrSceneGone) {
+			writeError(w, http.StatusGone, "the original image is no longer stored; make a new poster")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "the poster could not be updated right now")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"poster": res, "credits_charged": 0})
 }
 
 // parseHexColor reads #rrggbb; empty means the default accent.

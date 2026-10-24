@@ -143,8 +143,12 @@ func TestPosterDefaultRouteSendsTheDocumentedShape(t *testing.T) {
 	if res.Route != "fal/seedream-v5-lite" || res.Attempts != 1 || res.CostUSD != 0.035 {
 		t.Fatalf("result = %+v", res)
 	}
-	if res.Width != 1080 || res.Height != 1350 || res.Bytes == 0 || len(store.puts) != 1 {
+	// The poster and its clean scene (for free text edits) are both stored.
+	if res.Width != 1080 || res.Height != 1350 || res.Bytes == 0 || len(store.puts) != 2 {
 		t.Fatalf("stored poster = %+v", res)
+	}
+	if !strings.HasSuffix(res.SceneKey, "-scene.jpg") || res.SceneURL == "" {
+		t.Fatalf("scene copy = %q %q", res.SceneKey, res.SceneURL)
 	}
 	in := f.inputs["fal-ai/bytedance/seedream/v5/lite/edit"]
 	if in == nil {
@@ -159,6 +163,28 @@ func TestPosterDefaultRouteSendsTheDocumentedShape(t *testing.T) {
 	}
 	if f.auth["fal-ai/bytedance/seedream/v5/lite/edit"] != "Key fal-id:secret" {
 		t.Fatalf("fal auth header = %q", f.auth["fal-ai/bytedance/seedream/v5/lite/edit"])
+	}
+}
+
+// A text-only revision reads the stored scene and calls no provider.
+func TestRecomposeUsesTheSceneOnly(t *testing.T) {
+	f := newFakeProviders(t)
+	store := &memStore{}
+	p := NewPosters(keysFor("fal", "higgsfield"), store, nil)
+	req := posterReq()
+	req.Overlay.Headline = "New price this week"
+	res, err := p.Recompose(context.Background(), req, f.srv.URL+"/scene.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Route != RouteRecompose || res.CostUSD != 0 || res.Width != 1080 || len(store.puts) != 1 {
+		t.Fatalf("recompose = %+v (%d stored)", res, len(store.puts))
+	}
+	if len(f.inputs) != 0 {
+		t.Fatalf("a provider was called: %v", f.inputs)
+	}
+	if _, err := p.Recompose(context.Background(), req, f.srv.URL+"/gone.png"); !errors.Is(err, ErrSceneGone) {
+		t.Fatalf("missing scene: %v", err)
 	}
 }
 
