@@ -231,3 +231,44 @@ func TestEstimateUSDWithCache(t *testing.T) {
 		t.Fatalf("cost = %v", got)
 	}
 }
+
+// Reasoning models get reasoning_effort (low unless the target says otherwise),
+// others never do: their reasoning tokens count against max_tokens.
+func TestReasoningEffortForReasoningModels(t *testing.T) {
+	groq := &fakeClient{reply: "ok"}
+	r := NewRouter(Config{
+		Providers: fakeSource{"groq": {Client: groq, Models: Models{Main: "openai/gpt-oss-120b", Router: "openai/gpt-oss-20b"}}},
+		Defaults: Policy{Classes: map[Class][]Target{
+			Nano:     {{Provider: "groq", Model: ModelRouter}},
+			Standard: {{Provider: "groq", Model: ModelMain, Effort: "medium"}},
+			Premium:  {{Provider: "groq", Model: "llama-3.3-70b-versatile"}},
+		}},
+	})
+	for _, c := range []Class{Nano, Standard, Premium} {
+		if _, _, err := r.Complete(context.Background(), c, ai.ChatRequest{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := groq.reqs[0].ReasoningEffort; got != "low" {
+		t.Errorf("gpt-oss-20b effort = %q, want low", got)
+	}
+	if got := groq.reqs[1].ReasoningEffort; got != "medium" {
+		t.Errorf("target effort = %q, want medium", got)
+	}
+	if got := groq.reqs[2].ReasoningEffort; got != "" {
+		t.Errorf("non-reasoning model got effort %q", got)
+	}
+}
+
+// The light class tries the free models (Groq, then local) before paid ones.
+func TestLightClassIsFreeFirst(t *testing.T) {
+	nano := DefaultPolicy(Defaults{}).Classes[Nano]
+	if len(nano) < 3 || nano[0].Provider != "groq" || nano[1].Provider != "groq" || nano[2].Provider != "ollama" {
+		t.Fatalf("nano order: %+v", nano)
+	}
+	for _, tg := range nano[3:] {
+		if tg.Provider == "groq" || tg.Provider == "ollama" {
+			t.Fatalf("free target after a paid one: %+v", nano)
+		}
+	}
+}

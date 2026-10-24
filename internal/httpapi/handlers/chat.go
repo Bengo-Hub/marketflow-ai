@@ -186,6 +186,9 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "AI processing failed")
 		return
 	}
+	if rag.FreeAnswer(result) {
+		h.refund(r, tenantID, chargeKey)
+	}
 
 	// Persist user + assistant turns using the raw (pre-filter) response so
 	// subsequent turns in the same session don't see FLP disclaimer boilerplate.
@@ -258,6 +261,11 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
 		flusher.Flush()
 		return
+	}
+
+	// An answer no model produced (cache, template, knowledge base) costs no credit.
+	if rag.FreeAnswer(meta) {
+		h.refund(r, tenantID, chargeKey)
 	}
 
 	// Send metadata first

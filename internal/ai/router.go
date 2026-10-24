@@ -30,7 +30,7 @@ const (
 // Router classifies user questions and routes them to the appropriate model.
 // Uses a fast 8B model for classification, then routes to 70B for complex responses.
 type Router struct {
-	routerClient ChatClient // fast 8B model (Groq llama-3.1-8b-instant)
+	routerClient ChatClient // the light (nano) class: Groq's small model first
 	routerModel  string
 	logger       *zap.Logger
 }
@@ -211,7 +211,8 @@ func (r *Router) Classify(ctx context.Context, question string) (Classification,
 			{Role: "user", Content: question},
 		},
 		Temperature: 0.1,
-		MaxTokens:   80,
+		// Room for a reasoning model's (low effort) thinking before the JSON.
+		MaxTokens: 300,
 	})
 	if err != nil {
 		return Classification{Intent: IntentProductQA, Confidence: 0.5}, fmt.Errorf("classify: %w", err)

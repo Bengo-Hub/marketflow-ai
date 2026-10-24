@@ -21,6 +21,11 @@ type SearchResult struct {
 	Similarity float64
 	Category   string
 	Title      string
+	// ChunkIndex is the chunk's place in its entry; 0 is the opening chunk.
+	ChunkIndex int
+	// Content is the whole entry when it is short enough to answer with as is
+	// (FAQ-sized), else empty.
+	Content string
 }
 
 // Pipeline orchestrates the full RAG flow: embed, search, prompt, LLM, filter.

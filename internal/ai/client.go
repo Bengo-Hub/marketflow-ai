@@ -118,6 +118,10 @@ type ChatRequest struct {
 	// Effort sets Anthropic output_config.effort (low | medium | high). Not sent to
 	// OpenAI-compatible providers.
 	Effort string `json:"-"`
+	// ReasoningEffort is the OpenAI-compatible reasoning_effort (low | medium | high)
+	// for reasoning models such as Groq's openai/gpt-oss. The router sets it; their
+	// reasoning tokens count against max_tokens, so short calls need it low.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// CacheSystem marks the system prompt as a prompt-cache breakpoint on providers
 	// with prompt caching. Use it for stable prefixes (playbooks, personas).
 	CacheSystem bool `json:"-"`

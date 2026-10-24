@@ -51,8 +51,11 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 	// Include tenant-private KB rows AND platform-shared KB rows (scope='platform').
 	// Platform rows power the base FLP catalog / compliance corpus that every
 	// tenant's agent should be able to cite. Tenant rows remain isolated.
+	// The entry's own text comes back only when it is short enough to be a direct
+	// answer (see kbanswer.go), so long documents never ride along.
 	query := `
-		SELECT e.id, e.chunk_text, e.category, e.title,
+		SELECT e.entry_id, e.chunk_text, e.category, e.title, e.chunk_index,
+		       CASE WHEN length(kb.content) <= $4 THEN kb.content ELSE '' END,
 		       1 - (e.embedding <=> $1::vector) AS similarity
 		FROM knowledge_base_embeddings e
 		JOIN knowledge_base_entries kb ON kb.id = e.entry_id
@@ -60,7 +63,7 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 		ORDER BY e.embedding <=> $1::vector
 		LIMIT $3`
 
-	rows, err := p.db.QueryContext(ctx, query, vectorStr, tenantID, topK)
+	rows, err := p.db.QueryContext(ctx, query, vectorStr, tenantID, topK, maxDirectAnswerLen)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector search: %w", err)
 	}
@@ -69,7 +72,7 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.EntryID, &r.ChunkText, &r.Category, &r.Title, &r.Similarity); err != nil {
+		if err := rows.Scan(&r.EntryID, &r.ChunkText, &r.Category, &r.Title, &r.ChunkIndex, &r.Content, &r.Similarity); err != nil {
 			continue
 		}
 		results = append(results, r)

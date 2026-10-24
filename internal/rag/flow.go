@@ -68,31 +68,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		}
 	}
 
-	// ── Classify: heuristic first, then cached, then LLM ─────────────────
-	var intent ai.Intent
-	var confidence float64
-	var needsLiveInfo bool
-
-	if hcls, ok := ai.HeuristicClassify(input.Question); ok {
-		intent, confidence, needsLiveInfo = hcls.Intent, hcls.Confidence, hcls.NeedsLiveInfo
-		p.logger.Debug("heuristic classified", zap.String("intent", string(intent)))
-	} else if cc, ok := p.cache.getClassification(ctx, input.Question); ok {
-		intent = ai.Intent(cc.Intent)
-		confidence = cc.Confidence
-		needsLiveInfo = cc.NeedsLiveInfo
-		p.logger.Debug("L3 classification cache hit", zap.String("intent", string(intent)))
-	} else {
-		cls, err := p.router.Classify(ctx, input.Question)
-		if err != nil {
-			p.logger.Warn("classification failed, defaulting to product_qa", zap.Error(err))
-			intent, confidence = ai.IntentProductQA, 0.5
-		} else {
-			intent, confidence, needsLiveInfo = cls.Intent, cls.Confidence, cls.NeedsLiveInfo
-		}
-		p.cache.setClassification(ctx, input.Question, clsCache{
-			Intent: string(intent), Confidence: confidence, NeedsLiveInfo: needsLiveInfo,
-		})
-	}
+	// ── Classify: heuristic first, then cached, then the classifier model ─
+	intent, confidence, needsLiveInfo := p.classify(ctx, input.Question)
 
 	// ── Template intents (0ms, no LLM) ───────────────────────────────────
 	switch intent {
@@ -110,18 +87,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		}
 		return &ChatResult{Response: offTopicMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentEscalate:
-		var escalateMsg string
-		switch input.BusinessType {
-		case "flp":
-			escalateMsg = "I'd be happy to connect you with your FBO directly. You can reach them via WhatsApp for a personal conversation, or book a virtual meeting."
-		case "codevertex":
-			escalateMsg = "I'd be happy to connect you with the Codevertex Africa Limited team. You can reach us at info@codevertexafrica.com, call +254 743 793 901, or visit our office at Pioneer House, Oginga-Odinga Road, Kisumu."
-		case "cafe":
-			escalateMsg = "I'd be happy to help you get in touch with our team. Please use the contact details on our website, give us a call, or visit us in person — we'd love to see you!"
-		default:
-			escalateMsg = "I'd be happy to connect you with the team. Please use the contact options below or send them a message directly."
-		}
-		return &ChatResult{Response: escalateMsg, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
+		return &ChatResult{Response: escalateMessage(input.BusinessType), Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 	case ai.IntentSimpleFAQ:
 		// Greetings and very simple FAQs get a warm template without burning
 		// an LLM call + embedding. The agent is overkill for "hi".
@@ -184,6 +150,18 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		}
 		if len(contextChunks) > 0 {
 			topSim = contextChunks[0].Similarity
+		}
+	}
+
+	// ── Knowledge base already answers it: no model ─────────────────────
+	// Action and live-data intents still go to the agent: a stored text cannot
+	// book a meeting or read today's orders.
+	if intent != ai.IntentTaskExecute && intent != ai.IntentDataQuery && intent != ai.IntentRecruitment {
+		if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok {
+			return &ChatResult{
+				Response: p.applyFilter(answer, input.BusinessType), RawResponse: answer,
+				Intent: string(intent), Confidence: confidence, Sources: 1, Model: ModelKnowledgeBase,
+			}, nil
 		}
 	}
 
@@ -283,12 +261,21 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	messages = append(messages, input.History[historyStart:]...)
 	messages = append(messages, ai.Message{Role: "user", Content: input.Question})
 
-	// Provider fallback, breakers and metering live in the model router.
-	resp, call, err := p.llm.Complete(ctx, llm.Standard, ai.ChatRequest{
+	// Provider fallback, breakers and metering live in the model router. When
+	// every model fails (or answers with nothing) the knowledge base answers.
+	resp, call, err := p.llm.Complete(ctx, answerClass(input), ai.ChatRequest{
 		Messages: messages, Temperature: 0.7, MaxTokens: 2048,
 	})
+	if err == nil && (len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "") {
+		err = fmt.Errorf("%s answered without text", call.Model)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("all LLM providers exhausted: %w", err)
+		p.logger.Warn("all models failed; answering from the knowledge base", zap.Error(err))
+		fb := kbFallback(input, contextChunks)
+		return &ChatResult{
+			Response: p.applyFilter(fb, input.BusinessType), RawResponse: fb,
+			Intent: string(intent), Confidence: confidence, Sources: len(contextChunks), Model: ModelKBFallback,
+		}, nil
 	}
 	model := call.Model
 

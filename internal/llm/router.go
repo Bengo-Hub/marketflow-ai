@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -374,7 +375,18 @@ func (r *Router) prepare(req ai.ChatRequest, t Target, model string) ai.ChatRequ
 	if t.Effort != "" && out.Effort == "" {
 		out.Effort = t.Effort
 	}
+	if t.Provider != "anthropic" && reasoningModel(model) && out.ReasoningEffort == "" {
+		out.ReasoningEffort = firstNonEmpty(t.Effort, "low")
+	}
 	return out
+}
+
+// reasoningModel reports OpenAI-compatible models that think before answering
+// and accept reasoning_effort (Groq's openai/gpt-oss, OpenAI's o-series and gpt-5).
+func reasoningModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "gpt-oss") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") ||
+		strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "gpt-5")
 }
 
 // order puts targets with a closed breaker first, keeping policy order, and the

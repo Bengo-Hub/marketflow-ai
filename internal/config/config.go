@@ -74,9 +74,9 @@ type AIConfig struct {
 	// Groq (primary LLM)
 	GroqAPIKey      string  `env:"GROQ_API_KEY"`
 	GroqBaseURL     string  `env:"GROQ_BASE_URL" envDefault:"https://api.groq.com/openai/v1"`
-	GroqRouterModel string  `env:"GROQ_ROUTER_MODEL" envDefault:"llama-3.1-8b-instant"`
-	GroqMainModel   string  `env:"GROQ_MAIN_MODEL" envDefault:"llama-3.3-70b-versatile"`
-	GroqFallback    string  `env:"GROQ_FALLBACK_MODEL" envDefault:"llama-3.1-8b-instant"`
+	GroqRouterModel string  `env:"GROQ_ROUTER_MODEL" envDefault:"openai/gpt-oss-20b"`
+	GroqMainModel   string  `env:"GROQ_MAIN_MODEL" envDefault:"openai/gpt-oss-120b"`
+	GroqFallback    string  `env:"GROQ_FALLBACK_MODEL" envDefault:"openai/gpt-oss-20b"`
 	Temperature     float64 `env:"TEMPERATURE" envDefault:"0.7"`
 	MaxTokens       int     `env:"MAX_TOKENS" envDefault:"2048"`
 

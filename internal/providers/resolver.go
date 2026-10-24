@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
@@ -31,6 +32,8 @@ type Resolver struct {
 	httpClient *http.Client
 	namespace  string
 	logger     *zap.Logger
+
+	retiredOnce sync.Once // one warning per process about retired Groq models
 }
 
 // NewResolver creates a new platform-level provider config resolver.
@@ -57,8 +60,41 @@ type AISettings struct {
 	MaxTokens     string `json:"max_tokens"`
 }
 
+// retiredGroqModels maps model ids Groq no longer serves on pay-as-you-go to their
+// replacements (console.groq.com/docs/deprecations, checked 2026-10-24). The Llama
+// ids became enterprise-only on 2026-08-16 and answer 404 model_not_found, which
+// silently emptied every chat that still named them.
+var retiredGroqModels = map[string]string{
+	"llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+	"llama-3.1-8b-instant":    "openai/gpt-oss-20b",
+	"gemma2-9b-it":            "openai/gpt-oss-20b",
+}
+
+// upgradeRetired swaps retired Groq model ids for their replacements, so a value
+// saved on /platform/providers before a retirement keeps working.
+func (r *Resolver) upgradeRetired(s *AISettings) *AISettings {
+	for _, m := range []*string{&s.MainModel, &s.RouterModel, &s.FallbackModel} {
+		if next, ok := retiredGroqModels[*m]; ok {
+			r.retiredOnce.Do(func() {
+				r.logger.Warn("groq settings name retired models; using replacements, update /platform/providers",
+					zap.String("example", *m), zap.String("replacement", next))
+			})
+			*m = next
+		}
+	}
+	return s
+}
+
 // ResolveGroqSettings gets the platform-level Groq AI config, with caching and env fallback.
 func (r *Resolver) ResolveGroqSettings(ctx context.Context) (*AISettings, error) {
+	s, err := r.resolveGroqSettings(ctx)
+	if s != nil {
+		s = r.upgradeRetired(s)
+	}
+	return s, err
+}
+
+func (r *Resolver) resolveGroqSettings(ctx context.Context) (*AISettings, error) {
 	cacheKey := r.namespace + ":provider:platform:ai_llm:groq"
 
 	// 1. Check Redis cache

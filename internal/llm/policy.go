@@ -17,7 +17,8 @@ import (
 type Class string
 
 const (
-	// Nano words short texts: optimised briefs, one-line summaries, the decide fallback.
+	// Nano is the light class, free and lightweight models first: public widget
+	// answers, optimised briefs, one-line summaries, triage, the decide fallback.
 	Nano Class = "nano"
 	// Standard answers chat, writes simple drafts and drives tool use.
 	Standard Class = "standard"
@@ -94,7 +95,9 @@ type Defaults struct {
 func f(v float64) *float64 { return &v }
 
 // DefaultPolicy is the routing used when the platform has not saved one. Prices are
-// list prices researched 2026-10-22 and only feed the cost estimate.
+// list prices (Groq's gpt-oss checked 2026-10-24, the rest 2026-10-22) and only feed
+// the cost estimate. Groq's free tier and the local model cost nothing, so the light
+// class tries them before any paid provider.
 func DefaultPolicy(d Defaults) Policy {
 	ollama := firstNonEmpty(d.OllamaModel, "llama3.1:8b")
 	openai := firstNonEmpty(d.OpenAIModel, "gpt-4o-mini")
@@ -104,22 +107,24 @@ func DefaultPolicy(d Defaults) Policy {
 	// Timeouts are per attempt and sit inside the router's class budget (nano 20s,
 	// standard 45s, premium 70s, premium_plus 90s), so the worst chain still ends
 	// in time to answer. The local model is last: it is free but slow under load.
-	groqMain := Target{Provider: "groq", Model: ModelMain, TimeoutSeconds: 20, InputUSDPerM: 0.59, OutputUSDPerM: 0.79}
-	groqSmall := Target{Provider: "groq", Model: ModelFallback, TimeoutSeconds: 15, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
-	groqRouter := Target{Provider: "groq", Model: ModelRouter, TimeoutSeconds: 8, InputUSDPerM: 0.05, OutputUSDPerM: 0.08}
+	groqMain := Target{Provider: "groq", Model: ModelMain, TimeoutSeconds: 20, InputUSDPerM: 0.15, OutputUSDPerM: 0.60}
+	groqSmall := Target{Provider: "groq", Model: ModelFallback, TimeoutSeconds: 15, InputUSDPerM: 0.075, OutputUSDPerM: 0.30}
+	groqRouter := Target{Provider: "groq", Model: ModelRouter, TimeoutSeconds: 8, InputUSDPerM: 0.075, OutputUSDPerM: 0.30}
 	local := Target{Provider: "ollama", Model: ollama, TimeoutSeconds: 25}
 	gpt := Target{Provider: "openai", Model: openai, TimeoutSeconds: 15, InputUSDPerM: 0.15, OutputUSDPerM: 0.60}
 	claudeLow := Target{Provider: "anthropic", Model: haiku, Effort: "low", TimeoutSeconds: 25, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
 	claudeMed := Target{Provider: "anthropic", Model: haiku, Effort: "medium", TimeoutSeconds: 45, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
 	claudePlus := Target{Provider: "anthropic", Model: sonnet, Effort: "medium", TimeoutSeconds: 60, InputUSDPerM: 2.00, OutputUSDPerM: 10.00}
 
+	// Light class: Groq's small model, then its main one (both on the free tier),
+	// then the local model, and only then the paid providers.
 	nanoRouter := groqRouter
-	nanoRouter.Temperature = f(0.2)
-	nanoGPT, nanoClaude, nanoLocal := gpt, claudeLow, local
-	nanoGPT.TimeoutSeconds, nanoClaude.TimeoutSeconds, nanoLocal.TimeoutSeconds = 8, 10, 15
+	nanoRouter.Temperature = f(0.3)
+	nanoMain, nanoGPT, nanoClaude, nanoLocal := groqMain, gpt, claudeLow, local
+	nanoMain.TimeoutSeconds, nanoGPT.TimeoutSeconds, nanoClaude.TimeoutSeconds, nanoLocal.TimeoutSeconds = 8, 8, 10, 12
 	return Policy{
 		Classes: map[Class][]Target{
-			Nano:        {nanoRouter, nanoGPT, nanoClaude, nanoLocal},
+			Nano:        {nanoRouter, nanoMain, nanoLocal, nanoGPT, nanoClaude},
 			Standard:    {groqMain, groqSmall, gpt, claudeLow, local},
 			Premium:     {claudeMed, groqMain, gpt},
 			PremiumPlus: {claudePlus, claudeMed, groqMain},
