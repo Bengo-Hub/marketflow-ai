@@ -104,6 +104,8 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	return guardStream(rawCh, func(text string) string {
 		if strings.TrimSpace(text) == "" {
 			p.logger.Warn("model stream ended without text; answering from the knowledge base", zap.String("model", call.Model))
+			// Seen by the handler at Done (the channel orders it): no model answered, no credit.
+			meta.Model = ModelKBFallback
 			return p.applyFilter(kbFallback(input, contextChunks), input.BusinessType)
 		}
 		// Same output rules as the non-streaming path: jailbreak and schema-leak screen,

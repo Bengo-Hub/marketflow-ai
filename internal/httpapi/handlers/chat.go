@@ -268,7 +268,8 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 	}
 
 	// An answer no model produced (cache, template, knowledge base) costs no credit.
-	if rag.FreeAnswer(meta) {
+	refunded := rag.FreeAnswer(meta)
+	if refunded {
 		h.refund(r, tenantID, chargeKey)
 	}
 
@@ -289,6 +290,10 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 	var assembled strings.Builder
 	for delta := range ch {
 		if delta.Done {
+			// A model that streamed nothing was replaced by the knowledge base.
+			if !refunded && rag.FreeAnswer(meta) {
+				h.refund(r, tenantID, chargeKey)
+			}
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			h.persistStreamTurn(r.Context(), input, assembled.String(), persist)

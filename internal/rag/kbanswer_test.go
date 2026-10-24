@@ -167,12 +167,19 @@ func TestPublicStreamNeverEmpty(t *testing.T) {
 
 	// A model that streams nothing: the bubble is replaced with the fallback.
 	silent := &fakeModel{text: ""}
-	ch, _, err = testPipeline(silent).ChatStream(ctx, in)
+	ch, meta, err = testPipeline(silent).ChatStream(ctx, in)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if FreeAnswer(meta) {
+		t.Fatal("a model was streaming: not free until it turns out empty")
+	}
 	if text := drain(t, ch); strings.TrimSpace(text) == "" {
 		t.Fatal("an empty model reply reached the visitor")
+	}
+	// After Done the handler sees the fallback and refunds the credit.
+	if !FreeAnswer(meta) || meta.Model != ModelKBFallback {
+		t.Fatalf("after an empty stream the answer is the fallback: %q", meta.Model)
 	}
 
 	// A working model: the public widget uses the light class, so Groq's small model first.
