@@ -76,17 +76,28 @@ func (s *Service) ResolveTenantID(ctx context.Context, raw string) (uuid.UUID, b
 // CreateSession creates a new chat session.
 func (s *Service) CreateSession(ctx context.Context, tenantID uuid.UUID, channel string) (uuid.UUID, error) {
 	sessionID := uuid.New()
-	now := time.Now()
+	if _, err := s.CreateSessionWithID(ctx, tenantID, sessionID, channel); err != nil {
+		return uuid.Nil, err
+	}
+	return sessionID, nil
+}
 
-	_, err := s.db.ExecContext(ctx,
+// CreateSessionWithID starts a session under an id the client chose, so a client
+// that generates its own id keeps one conversation from the first turn. It
+// reports false when the id is already taken (by another tenant: the caller then
+// starts a fresh session instead, so no history crosses tenants).
+func (s *Service) CreateSessionWithID(ctx context.Context, tenantID, sessionID uuid.UUID, channel string) (bool, error) {
+	now := time.Now()
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO chat_sessions (id, tenant_id, status, channel, messages, message_count, ai_responses, escalations, started_at, last_activity_at)
-		 VALUES ($1, $2, 'active', $3, '[]'::jsonb, 0, 0, 0, $4, $4)`,
+		 VALUES ($1, $2, 'active', $3, '[]'::jsonb, 0, 0, 0, $4, $4)
+		 ON CONFLICT (id) DO NOTHING`,
 		sessionID, tenantID, channel, now)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("create session: %w", err)
+		return false, fmt.Errorf("create session: %w", err)
 	}
-
-	return sessionID, nil
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // LoadHistory loads message history from a chat session.

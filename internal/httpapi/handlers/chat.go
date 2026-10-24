@@ -221,12 +221,16 @@ func (h *ChatHandler) resolveSession(ctx context.Context, tenantID uuid.UUID, ra
 		return uuid.New(), nil, nil
 	}
 	if raw != "" {
-		if parsed, err := uuid.Parse(raw); err == nil {
+		if parsed, err := uuid.Parse(raw); err == nil && parsed != uuid.Nil {
 			history, err := h.sessions.LoadHistory(ctx, tenantID, parsed)
 			if err == nil {
 				return parsed, history, nil
 			}
-			// Session ID provided but not found — fall through and create one with that ID.
+			// Not found for this tenant: start the session under the client's id, unless
+			// another tenant already owns it, then fall through to a fresh one.
+			if created, cerr := h.sessions.CreateSessionWithID(ctx, tenantID, parsed, "web_widget"); cerr == nil && created {
+				return parsed, nil, nil
+			}
 		}
 	}
 	sid, err := h.sessions.CreateSession(ctx, tenantID, "web_widget")
@@ -271,6 +275,8 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 	// Send metadata first
 	if meta != nil {
 		metaJSON, _ := json.Marshal(map[string]any{
+			// The client sends it back as session_id to keep the conversation.
+			"session_id": input.SessionID.String(),
 			"intent":     meta.Intent,
 			"confidence": meta.Confidence,
 			"sources":    meta.Sources,
