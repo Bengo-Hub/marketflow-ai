@@ -40,6 +40,7 @@ type OSHandler struct {
 
 	meetingPrep meetingPrepper
 	posters     *media.Posters
+	clips       *media.ClipJobs
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).

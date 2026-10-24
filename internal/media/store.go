@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/Bengo-Hub/httpware/objectstore"
 	"github.com/google/uuid"
@@ -38,4 +39,29 @@ func (o ObjectStore) PutPoster(ctx context.Context, tenantID uuid.UUID, versionI
 		return "", "", err
 	}
 	return key, o.S.URL(key), nil
+}
+
+// PutClip implements VideoStore: marketflow/<tenant>/video-drafts/clips/<version>.mp4
+// (httpware's video-drafts type: public, short cache, mp4 only), streamed from disk.
+func (o ObjectStore) PutClip(ctx context.Context, tenantID uuid.UUID, versionID, path string) (string, string, int64, error) {
+	if o.S == nil || !o.S.Enabled() {
+		return "", "", 0, fmt.Errorf("media: object storage is not configured")
+	}
+	key, err := o.S.Key(objectstore.Owner{TenantID: tenantID.String()}, objectstore.TypeVideoDrafts, "clips", versionID+".mp4")
+	if err != nil {
+		return "", "", 0, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", "", 0, err
+	}
+	if err := o.S.PutStream(ctx, key, f, st.Size(), "video/mp4"); err != nil {
+		return "", "", 0, err
+	}
+	return key, o.S.URL(key), st.Size(), nil
 }

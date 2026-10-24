@@ -70,6 +70,10 @@ const (
 	Poster            = "poster"
 	PosterPremium     = "poster_premium"
 	TemplateVideo     = "template_video_30s"
+	// Motion poster: a poster's clean scene animated, its exact words laid over
+	// it. Priced per 5 s clip; other lengths scale (see CreditsFor).
+	MotionPoster        = "motion_poster_5s"
+	MotionPosterPremium = "motion_poster_premium_5s"
 	Presenter         = "presenter_30s"
 	PresenterPremium  = "presenter_premium_30s"
 	CinematicLite     = "cinematic_lite_20s"
@@ -109,6 +113,10 @@ func Defaults() Registry {
 			PosterPremium: {Key: PosterPremium, Name: "Premium poster", Kind: "media", CostUSD: 0.15, Feature: "ai_static_ads"},
 			// Template video: about USD 0.25 (frames, images-to-video, voice, music).
 			TemplateVideo: {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
+			// Motion poster 5 s: Kling 3.0 std at the list USD 0.084/s (0.42) plus our
+			// ffmpeg text overlay (free); premium is Seedance 2.0 at USD 0.141/s (0.71).
+			MotionPoster:        {Key: MotionPoster, Name: "Motion poster, 5 s", Kind: "media", CostUSD: 0.42, Feature: "ai_video_template"},
+			MotionPosterPremium: {Key: MotionPosterPremium, Name: "Premium motion poster, 5 s", Kind: "media", CostUSD: 0.71, Feature: "ai_video_template"},
 			// Presenter: 12 s VEED Fabric, two 4 s Kling 3.0 clips, voice: about USD 1.66.
 			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 1.70, Feature: "ai_video_presenter", NeedsStoryboard: true},
 			// Premium presenter: Aurora 720p, Seedance 2.0 clips, Eleven v4: about USD 2.85.
@@ -178,6 +186,15 @@ func Merge(base Registry, raw string) (Registry, error) {
 }
 
 // Credits prices one unit of an output.
+// CreditsFor prices n seconds of an output priced per 5 s clip, rounding up.
+func (r Registry) CreditsFor(key string, seconds int) (int, error) {
+	per5, err := r.Credits(key)
+	if err != nil || seconds <= 0 {
+		return per5, err
+	}
+	return (per5*seconds + 4) / 5, nil
+}
+
 func (r Registry) Credits(key string) (int, error) {
 	o, ok := r.Outputs[key]
 	if !ok {

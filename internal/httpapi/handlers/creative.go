@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image/color"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -132,6 +134,166 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"poster": res, "credits_charged": credits})
+}
+
+// SetClips wires the motion-poster jobs (Sprint 15, video).
+func (h *OSHandler) SetClips(j *media.ClipJobs) { h.clips = j }
+
+// clipRequest is marketflow-api's creative module asking for a motion poster.
+type clipRequest struct {
+	TenantID  string `json:"tenant_id"`
+	VersionID string `json:"version_id"` // CreativeVersion id: names the file and the charge
+	SceneURL  string `json:"scene_url"`  // the source poster's stored scene without text
+	Prompt    string `json:"prompt"`     // the motion, optional
+	Format    string `json:"format"`
+	Seconds   int    `json:"seconds"`
+	Tier      string `json:"tier"`
+	Accent    string `json:"accent"`
+	LogoURL   string `json:"logo_url"`
+	Headline  string `json:"headline"`
+	Subline   string `json:"subline"`
+	Price     string `json:"price"`
+	CTA       string `json:"cta"`
+	Charge    bool   `json:"charge"`
+}
+
+// Clip handles POST /api/v1/internal/creative/clip (service key): starts a
+// motion poster job, or reports the one already running or done for this
+// version without charging again. 202 while running, 200 when done; poll
+// GET /internal/creative/clip/{version_id}.
+func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
+	if !h.clips.Ready() {
+		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
+		return
+	}
+	var req clipRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tenantID, err := uuid.Parse(req.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tenant_id must be a UUID")
+		return
+	}
+	if _, err := uuid.Parse(req.VersionID); err != nil {
+		writeError(w, http.StatusBadRequest, "version_id must be a UUID")
+		return
+	}
+	if _, ok := media.Formats[req.Format]; !ok {
+		writeError(w, http.StatusBadRequest, "format must be 1080x1080, 1080x1350 or 1080x1920")
+		return
+	}
+	if req.Seconds == 0 {
+		req.Seconds = 5
+	}
+	if req.Seconds < media.MinClipSeconds || req.Seconds > media.MaxClipSeconds {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("seconds must be %d to %d", media.MinClipSeconds, media.MaxClipSeconds))
+		return
+	}
+	if !strings.HasPrefix(req.SceneURL, "https://") && !strings.HasPrefix(req.SceneURL, "http://") {
+		writeError(w, http.StatusBadRequest, "scene_url must be an http(s) link")
+		return
+	}
+	if len([]rune(req.Prompt)) > 1000 {
+		writeError(w, http.StatusBadRequest, "prompt is limited to 1000 characters")
+		return
+	}
+	accent, err := parseHexColor(req.Accent)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "accent must be a #rrggbb colour")
+		return
+	}
+	output := registry.MotionPoster
+	if req.Tier == media.TierPremium {
+		output = registry.MotionPosterPremium
+	} else {
+		req.Tier = media.TierStandard
+	}
+
+	prev, ok, err := h.clips.Get(r.Context(), req.VersionID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "video jobs are unavailable right now")
+		return
+	}
+	if ok && prev.Status == media.ClipRunning {
+		writeJSON(w, http.StatusAccepted, prev)
+		return
+	}
+	if ok && prev.Status == media.ClipDone {
+		writeJSON(w, http.StatusOK, prev)
+		return
+	}
+	release, err := h.clips.Reserve()
+	if err != nil {
+		writeError(w, http.StatusTooManyRequests, err.Error())
+		return
+	}
+	attempt, key := media.NextCharge(req.VersionID, prev, ok)
+	chargeKey, credits := "", 0
+	if req.Charge && h.credits != nil {
+		price, err := h.registry(r.Context()).CreditsFor(output, req.Seconds)
+		if err != nil {
+			release()
+			writeError(w, http.StatusInternalServerError, "video price is not configured")
+			return
+		}
+		dec, err := h.spend(r.Context(), tenantID, int64(price), key, "Motion poster")
+		switch {
+		case err != nil:
+			release()
+			writeError(w, http.StatusServiceUnavailable, "could not check AI credits; nothing was made or charged")
+			return
+		case !dec.Allowed:
+			release()
+			writeError(w, http.StatusPaymentRequired, "not enough AI credits for this video")
+			return
+		case !dec.Exempt:
+			chargeKey, credits = key, price
+		}
+	}
+	creq := media.ClipRequest{
+		TenantID: tenantID, VersionID: req.VersionID, SceneURL: req.SceneURL, Prompt: strings.TrimSpace(req.Prompt),
+		Format: req.Format, Seconds: req.Seconds, Tier: req.Tier, LogoURL: req.LogoURL,
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
+	}
+	// The job outlives this request, so its refund uses a detached context.
+	refund := func(key string) { h.refundKey(tenantID, key) }
+	if err := h.clips.Start(req.VersionID, creq, credits, attempt, chargeKey, release, refund); err != nil {
+		h.refundKey(tenantID, chargeKey)
+		writeError(w, http.StatusServiceUnavailable, "video jobs are unavailable right now; nothing was charged")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, media.ClipJob{Status: media.ClipRunning, CreditsCharged: credits, Attempt: attempt})
+}
+
+// ClipStatus handles GET /api/v1/internal/creative/clip/{version_id} (service key).
+func (h *OSHandler) ClipStatus(w http.ResponseWriter, r *http.Request) {
+	if h.clips == nil {
+		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
+		return
+	}
+	job, ok, err := h.clips.Get(r.Context(), chi.URLParam(r, "version_id"))
+	switch {
+	case err != nil:
+		writeError(w, http.StatusServiceUnavailable, "video jobs are unavailable right now")
+	case !ok:
+		writeError(w, http.StatusNotFound, "no video job for this version")
+	default:
+		writeJSON(w, http.StatusOK, job)
+	}
+}
+
+// refundKey returns a charge outside any request (a background job's failure).
+func (h *OSHandler) refundKey(tenantID uuid.UUID, key string) {
+	if key == "" || h.credits == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.credits.Refund(ctx, tenantID, key); err != nil {
+		h.logger.Error("ai credit refund did not go through", zap.String("key", key), zap.Error(err))
+	}
 }
 
 // creativeQuote is what a set of posters costs against the tenant's credits.

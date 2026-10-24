@@ -391,7 +391,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		logger.Warn("object storage not configured (OBJECT_STORAGE_* or MEDIA_ROOT); posters disabled")
 	default:
 		media.SetBases(os.Getenv("MF_MEDIA_FAL_QUEUE_URL"), os.Getenv("MF_MEDIA_HIGGSFIELD_API_URL"))
-		osHandler.SetPosters(media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger))
+		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger)
+		osHandler.SetPosters(posters)
+		// Motion posters: background jobs in Redis; ffmpeg draws the exact words.
+		clips := media.NewClips(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, posters, logger)
+		if !clips.Ready() {
+			logger.Warn("ffmpeg not found; motion posters disabled")
+		}
+		osHandler.SetClips(media.NewClipJobs(clips, redisClient, cfg.Redis.Namespace, logger))
 	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
@@ -479,6 +486,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 		r.Post("/creative/poster", osHandler.Poster)
+		r.Post("/creative/clip", osHandler.Clip)
+		r.Get("/creative/clip/{version_id}", osHandler.ClipStatus)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

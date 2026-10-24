@@ -11,6 +11,7 @@ func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 3, Poster: 2, PosterPremium: 5,
 		TemplateVideo: 12, Presenter: 53, PresenterPremium: 91,
 		CinematicLite: 57, CinematicFast: 92, CinematicStandard: 262, LaunchFee: 10,
+		MotionPoster: 14, MotionPosterPremium: 23,
 	}
 	for k, w := range want {
 		got, err := r.Credits(k)
@@ -20,6 +21,13 @@ func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 	}
 	if _, err := r.Credits("nope"); err == nil {
 		t.Fatal("unknown output must error")
+	}
+	// Per-5 s outputs scale with length, rounding up.
+	if c, _ := r.CreditsFor(MotionPoster, 5); c != 14 {
+		t.Errorf("5 s = %d", c)
+	}
+	if c, _ := r.CreditsFor(MotionPoster, 8); c != 23 { // 14*8/5 = 22.4
+		t.Errorf("8 s = %d", c)
 	}
 }
 

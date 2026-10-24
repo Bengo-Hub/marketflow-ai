@@ -45,6 +45,7 @@ type fakeProviders struct {
 	auth    map[string]string
 	failFal bool
 	scene   []byte
+	clip    []byte // served at /clip.mp4 (made with ffmpeg by the clip test)
 }
 
 func newFakeProviders(t *testing.T) *fakeProviders {
@@ -77,9 +78,14 @@ func (f *fakeProviders) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "IN_QUEUE", "request_id": "r1",
 			"status_url": f.srv.URL + "/fal/requests/r1/status", "response_url": f.srv.URL + "/fal/requests/r1"})
+	case p == "/clip.mp4":
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(f.clip)
 	case strings.HasPrefix(p, "/hf/requests/"):
+		// A completed Higgsfield job carries images or a video, by model.
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "completed", "request_id": "h1",
-			"images": []map[string]any{{"url": f.srv.URL + "/scene.png"}}})
+			"images": []map[string]any{{"url": f.srv.URL + "/scene.png"}},
+			"video":  map[string]any{"url": f.srv.URL + "/clip.mp4"}})
 	case strings.HasPrefix(p, "/hf/"):
 		f.record(r, strings.TrimPrefix(p, "/hf/"))
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "queued", "request_id": "h1",

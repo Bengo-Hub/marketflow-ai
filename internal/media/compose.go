@@ -43,7 +43,7 @@ var (
 	boldTT, regTT *opentype.Font
 	errFonts      error
 	defaultAccent = color.RGBA{0x6d, 0x28, 0xd9, 0xff} // Codevertex purple
-	bandAlpha     = uint8(0xd8)                       // darkest point of the text band
+	bandAlpha     = uint8(0xd8)                        // darkest point of the text band
 )
 
 // The Go fonts (BSD licence) are compiled into x/image, so posters need no font
@@ -69,16 +69,40 @@ func ComposePoster(scene image.Image, format string, o Overlay) (image.Image, er
 	if !ok {
 		return nil, fmt.Errorf("media: unknown poster format %q", format)
 	}
+	canvas := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
+	cover(canvas, scene)
+	if err := drawOverlay(canvas, o); err != nil {
+		return nil, err
+	}
+	return canvas, nil
+}
+
+// ComposeOverlay draws the same band, logo and text on a transparent canvas: the
+// layer laid over a video so its words are exact (models redraw any text they are
+// shown, so a clip is made from the clean scene and this goes on top).
+func ComposeOverlay(format string, o Overlay) (*image.RGBA, error) {
+	size, ok := Formats[format]
+	if !ok {
+		return nil, fmt.Errorf("media: unknown poster format %q", format)
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
+	if err := drawOverlay(canvas, o); err != nil {
+		return nil, err
+	}
+	return canvas, nil
+}
+
+// drawOverlay draws the legibility band, logo, headline, subline, price and
+// button over whatever canvas already holds.
+func drawOverlay(canvas *image.RGBA, o Overlay) error {
 	bold, reg, err := fonts()
 	if err != nil {
-		return nil, fmt.Errorf("media: fonts: %w", err)
+		return fmt.Errorf("media: fonts: %w", err)
 	}
 	if o.Accent.A == 0 {
 		o.Accent = defaultAccent
 	}
-	W, H := size.X, size.Y
-	canvas := image.NewRGBA(image.Rect(0, 0, W, H))
-	cover(canvas, scene)
+	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
 
 	// A dark band over the lower 45%, fading in, so white text reads on any scene.
 	bandStart := H * 55 / 100
@@ -118,7 +142,7 @@ func ComposePoster(scene image.Image, format string, o Overlay) (image.Image, er
 	if head := strings.TrimSpace(o.Headline); head != "" {
 		drawBlock(canvas, bold, head, margin, y, textW, float64(W)/13, 3, color.White)
 	}
-	return canvas, nil
+	return nil
 }
 
 // EncodeJPEG encodes a poster for the feed (quality 88 keeps text sharp).

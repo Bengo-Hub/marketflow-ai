@@ -9,7 +9,8 @@ COPY . .
 RUN GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/marketflow-ai ./cmd/server
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S app -G app
+# ffmpeg lays the exact poster text over motion-poster clips (internal/media/clip.go).
+RUN apk add --no-cache ca-certificates tzdata ffmpeg && addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=builder /bin/marketflow-ai /usr/local/bin/marketflow-ai
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
