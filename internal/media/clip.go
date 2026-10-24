@@ -2,6 +2,8 @@ package media
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
@@ -65,6 +67,7 @@ type ClipResult struct {
 	Seconds   int     `json:"seconds"`
 	Width     int     `json:"width"`
 	Height    int     `json:"height"`
+	SHA256    string  `json:"sha256"` // of the stored file: the approval evidence names it
 	Route     string  `json:"route"`
 	CostUSD   float64 `json:"cost_usd"`
 	SourceURL string  `json:"source_url"` // the provider's clip link (expires)
@@ -162,11 +165,15 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*ClipResult, error) 
 		if err := c.overlay(ctx, raw, overlayPath, out, size.X, size.Y, req.Seconds); err != nil {
 			return nil, fmt.Errorf("media: text overlay: %w", err)
 		}
+		sum, err := fileSHA256(out)
+		if err != nil {
+			return nil, fmt.Errorf("media: hash clip: %w", err)
+		}
 		key, url, n, err := c.store.PutClip(ctx, req.TenantID, req.VersionID, out)
 		if err != nil {
 			return nil, fmt.Errorf("media: store clip: %w", err)
 		}
-		return &ClipResult{URL: url, Key: key, Bytes: n, Seconds: req.Seconds, Width: size.X, Height: size.Y,
+		return &ClipResult{URL: url, Key: key, Bytes: n, Seconds: req.Seconds, Width: size.X, Height: size.Y, SHA256: sum,
 			Route: rt.Key, CostUSD: rt.PriceUSD * float64(req.Seconds), SourceURL: src, Attempts: i + 1}, nil
 	}
 	if lastErr == nil {
@@ -279,4 +286,18 @@ func writePNG(path string, img image.Image) error {
 		return err
 	}
 	return f.Close()
+}
+
+// fileSHA256 hashes a file without loading it whole.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

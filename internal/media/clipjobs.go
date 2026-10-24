@@ -13,10 +13,11 @@ import (
 
 // A clip takes minutes, longer than an HTTP request may stay open here (the
 // server's write timeout is 120 s). So a clip runs as a job: Start records it
-// in Redis and works in the background; the caller (marketflow-api's renderer)
-// polls Get. The state outlives this pod; a job lost with its pod stays
-// "running" until staleness, and the caller starts it again under the same
-// version id, whose charge key stops a second charge.
+// in Redis and works in the background, and when it settles the notifier tells
+// the caller (marketflow-api's clip callback). Get is the caller's fallback for
+// a callback that never arrived. The state outlives this pod; a job lost with
+// its pod stays "running" until staleness, and the caller starts it again under
+// the same version id, whose charge key stops a second charge.
 
 // Clip job states.
 const (
@@ -74,8 +75,16 @@ type ClipJobs struct {
 	redis  *redis.Client
 	ns     string
 	slots  chan struct{}
+	notify func(versionID string, job ClipJob)
 	logger *zap.Logger
 	nowFn  func() time.Time
+}
+
+// WithNotify sets who is told when a job is done or failed; nil leaves callers
+// to poll Get.
+func (j *ClipJobs) WithNotify(fn func(versionID string, job ClipJob)) *ClipJobs {
+	j.notify = fn
+	return j
 }
 
 // NewClipJobs builds the job runner.
@@ -152,6 +161,12 @@ func (j *ClipJobs) Start(versionID string, req ClipRequest, credits, attempt int
 		}
 		if perr := j.put(context.Background(), versionID, state); perr != nil {
 			j.logger.Error("clip state not saved", zap.String("version_id", versionID), zap.Error(perr))
+		}
+		if j.notify != nil {
+			// Its own goroutine: the retries must not hold this job's slot.
+			job := state.ClipJob
+			job.ChargeKey = ""
+			go j.notify(versionID, job)
 		}
 	}()
 	return nil

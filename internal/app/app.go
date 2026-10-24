@@ -398,7 +398,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		if !clips.Ready() {
 			logger.Warn("ffmpeg not found; motion posters disabled")
 		}
-		osHandler.SetClips(media.NewClipJobs(clips, redisClient, cfg.Redis.Namespace, logger))
+		// A settled job is pushed to marketflow-api's clip callback; its renderer
+		// polls only when a callback is overdue.
+		osHandler.SetClips(media.NewClipJobs(clips, redisClient, cfg.Redis.Namespace, logger).
+			WithNotify(media.NewClipCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)))
 	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
