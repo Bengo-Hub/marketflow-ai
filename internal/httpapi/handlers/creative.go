@@ -134,6 +134,64 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"poster": res, "credits_charged": credits})
 }
 
+// creativeQuote is what a set of posters costs against the tenant's credits.
+type creativeQuote struct {
+	Tier            string           `json:"tier"`
+	Count           int              `json:"count"`
+	CreditsEach     int              `json:"credits_each"`
+	CreditsNeeded   int              `json:"credits_needed"`
+	Balance         int              `json:"balance"` // -1: unlimited or unknown
+	Enough          bool             `json:"enough"`
+	Shortfall       int              `json:"shortfall"`
+	SuggestedBundle *registry.Bundle `json:"suggested_bundle,omitempty"`
+}
+
+// CreativeQuote handles GET /api/v1/os/creative/quote?tier=standard|premium&count=N:
+// credits for N posters, the balance and, when short, the smallest bundle that
+// covers the gap (the pre-buy rule: clients without a plan buy a bundle first).
+// Text-only revisions are free and never need a quote.
+func (h *OSHandler) CreativeQuote(w http.ResponseWriter, r *http.Request) {
+	tenantID, status, msg := tenantFromAuth(r)
+	if status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+	q := creativeQuote{Tier: media.TierStandard, Count: 1}
+	if r.URL.Query().Get("tier") == media.TierPremium {
+		q.Tier = media.TierPremium
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("count")); err == nil {
+		q.Count = n
+	}
+	if q.Count < 1 || q.Count > 20 {
+		writeError(w, http.StatusBadRequest, "count must be 1 to 20")
+		return
+	}
+	output := registry.Poster
+	if q.Tier == media.TierPremium {
+		output = registry.PosterPremium
+	}
+	reg := h.registry(r.Context())
+	each, err := reg.Credits(output)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "poster price is not configured")
+		return
+	}
+	q.CreditsEach, q.CreditsNeeded = each, each*q.Count
+	q.Balance = -1
+	if h.credits != nil {
+		q.Balance = h.balance(r.Context(), tenantID)
+	}
+	q.Enough = q.Balance < 0 || q.Balance >= q.CreditsNeeded
+	if !q.Enough {
+		q.Shortfall = q.CreditsNeeded - q.Balance
+		if b, ok := reg.SmallestBundle(q.Shortfall); ok {
+			q.SuggestedBundle = &b
+		}
+	}
+	writeJSON(w, http.StatusOK, q)
+}
+
 // recompose is the text-only revision: the stored scene with new words, free.
 // 410 when the scene was purged with its draft (the caller then asks for a new render).
 func (h *OSHandler) recompose(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, req posterRequest) {

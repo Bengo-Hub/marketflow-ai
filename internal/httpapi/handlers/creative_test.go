@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -86,5 +88,41 @@ func TestParseHexColor(t *testing.T) {
 	}
 	if _, err := parseHexColor("#fff"); err == nil {
 		t.Fatal("short colours must be refused")
+	}
+}
+
+// balanceSpender is a CreditSpender that also reports a balance.
+type balanceSpender struct {
+	fakeSpender
+	balance int64
+}
+
+func (b *balanceSpender) Balance(context.Context, uuid.UUID) (int64, bool, error) {
+	return b.balance, false, nil
+}
+
+func TestCreativeQuote(t *testing.T) {
+	quote := func(h *OSHandler, query string) (int, map[string]any) {
+		r := reqWith(&authclient.Claims{TenantID: uuid.NewString()}, "")
+		r.URL.RawQuery = query
+		rec := httptest.NewRecorder()
+		h.CreativeQuote(rec, r)
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	h := &OSHandler{logger: zap.NewNop(), registry: func(context.Context) registry.Registry { return registry.Defaults() },
+		credits: &balanceSpender{balance: 3}}
+
+	code, q := quote(h, "tier=standard&count=1")
+	if code != http.StatusOK || q["credits_needed"].(float64) != 2 || q["enough"] != true {
+		t.Fatalf("one standard poster: %d %v", code, q)
+	}
+	code, q = quote(h, "tier=premium&count=2")
+	if code != http.StatusOK || q["credits_needed"].(float64) != 10 || q["enough"] != false || q["shortfall"].(float64) != 7 || q["suggested_bundle"] == nil {
+		t.Fatalf("two premium posters on 3 credits: %d %v", code, q)
+	}
+	if code, _ = quote(h, "count=50"); code != http.StatusBadRequest {
+		t.Fatalf("count 50 = %d", code)
 	}
 }

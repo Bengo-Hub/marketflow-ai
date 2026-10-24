@@ -455,6 +455,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			r.Post("/ask", osHandler.Ask)
 			r.Post("/optimize", osHandler.Optimize)
 			r.Post("/plan/quote", osHandler.Quote)
+			r.Get("/creative/quote", osHandler.CreativeQuote)
 			r.Get("/library/templates", osHandler.Templates)
 			r.Get("/team", osHandler.Team)
 		})
