@@ -3,10 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/rag"
@@ -210,6 +214,92 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		"result":     result,
 	}
 	json.NewEncoder(w).Encode(respEnvelope)
+}
+
+// sessionTarget resolves the tenant and session a delete applies to, the same
+// way Chat does: the real tenant from X-Tenant-ID (slug or UUID), and on the
+// signed-in route only the caller's own tenant. ok=false means the response is
+// written. persisted=false means nothing was ever stored (an unknown tenant's
+// ephemeral session), so there is nothing to delete.
+func (h *ChatHandler) sessionTarget(w http.ResponseWriter, r *http.Request) (tenantID, sessionID uuid.UUID, persisted, ok bool) {
+	sessionID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "session id must be a UUID")
+		return
+	}
+	if h.sessions == nil {
+		return uuid.Nil, sessionID, false, true
+	}
+	tenantID, persisted = h.sessions.ResolveTenantID(r.Context(), r.Header.Get("X-Tenant-ID"))
+	if !persisted {
+		return uuid.Nil, sessionID, false, true
+	}
+	if !strings.Contains(r.URL.Path, "/public/") && !headerTenantAllowed(r, tenantID) {
+		writeError(w, http.StatusForbidden, "X-Tenant-ID does not match your account")
+		return uuid.Nil, uuid.Nil, false, false
+	}
+	return tenantID, sessionID, true, true
+}
+
+// ClearSession handles DELETE /api/v1/chat/sessions/{id} and its public twin:
+// "Clear chat" erases the stored conversation. 204 also for an unknown session.
+// On the public route the session id is the credential, as it is for history.
+// @Summary Clear a chat conversation
+// @Tags Chat
+// @Param X-Tenant-ID header string true "Tenant slug or UUID"
+// @Param id path string true "Session UUID"
+// @Success 204
+// @Router /chat/sessions/{id} [delete]
+func (h *ChatHandler) ClearSession(w http.ResponseWriter, r *http.Request) {
+	tenantID, sessionID, persisted, ok := h.sessionTarget(w, r)
+	if !ok {
+		return
+	}
+	if persisted {
+		if err := h.sessions.ClearSession(r.Context(), tenantID, sessionID); err != nil {
+			h.logger.Error("clear chat failed", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, "the conversation could not be cleared, try again")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteTurn handles DELETE /api/v1/chat/sessions/{id}/turns/{n} and its public
+// twin: removes the n-th question and answer (0-based). 404 when there is no
+// such turn.
+// @Summary Delete one question and answer from a conversation
+// @Tags Chat
+// @Param X-Tenant-ID header string true "Tenant slug or UUID"
+// @Param id path string true "Session UUID"
+// @Param n path int true "Turn index, 0-based"
+// @Success 204
+// @Failure 404 {object} map[string]string
+// @Router /chat/sessions/{id}/turns/{n} [delete]
+func (h *ChatHandler) DeleteTurn(w http.ResponseWriter, r *http.Request) {
+	n, err := strconv.Atoi(chi.URLParam(r, "n"))
+	if err != nil || n < 0 {
+		writeError(w, http.StatusBadRequest, "turn must be a number from 0")
+		return
+	}
+	tenantID, sessionID, persisted, ok := h.sessionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !persisted {
+		writeError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	if err := h.sessions.DeleteTurn(r.Context(), tenantID, sessionID, n); err != nil {
+		if errors.Is(err, sessions.ErrNoTurn) {
+			writeError(w, http.StatusNotFound, "no such turn")
+			return
+		}
+		h.logger.Error("delete turn failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "the message could not be deleted, try again")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // resolveSession loads an existing session's history or creates a new one.

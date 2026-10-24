@@ -438,6 +438,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Route("/api/v1/public", func(r chi.Router) {
 		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100))
 		r.Post("/chat", chatHandler.Chat)
+		// Clear chat and delete a message; the session id is the credential, as for history.
+		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
+		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
 	})
 
 	// Authenticated chat + CRM AI — JWT or platform X-API-Key.
@@ -446,6 +449,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			r.Use(authMiddleware.RequireAuth)
 		}
 		r.Post("/chat", chatHandler.Chat)
+		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
+		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
 		r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
 		r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
 

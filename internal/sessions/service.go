@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	sharedcache "github.com/Bengo-Hub/cache"
 	"time"
@@ -159,6 +160,47 @@ func (s *Service) AppendMessages(ctx context.Context, tenantID, sessionID uuid.U
 }
 
 // CloseSession marks a session as closed.
+// ClearSession erases a conversation's messages and closes it ("Clear chat").
+// The row stays for the counts the analytics read (ai_responses, escalations);
+// the words are gone. An unknown session is not an error.
+func (s *Service) ClearSession(ctx context.Context, tenantID, sessionID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_sessions
+		 SET messages = '[]'::jsonb, message_count = 0, status = 'closed', ended_at = $1, last_activity_at = $1
+		 WHERE id = $2 AND tenant_id = $3`,
+		time.Now(), sessionID, tenantID)
+	if err != nil {
+		return fmt.Errorf("clear session: %w", err)
+	}
+	return nil
+}
+
+// ErrNoTurn means the session (for this tenant) has no turn at that position.
+var ErrNoTurn = errors.New("no such turn")
+
+// DeleteTurn removes the n-th question and answer (0-based) of a conversation.
+// AppendMessages always stores a turn as two consecutive messages, so turn n is
+// elements 2n and 2n+1; the length check and the removal are one statement.
+func (s *Service) DeleteTurn(ctx context.Context, tenantID, sessionID uuid.UUID, n int) error {
+	if n < 0 {
+		return ErrNoTurn
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_sessions
+		 SET messages = (messages - $1::int) - $1::int,
+		     message_count = GREATEST(message_count - 2, 0),
+		     last_activity_at = $4
+		 WHERE id = $2 AND tenant_id = $3 AND jsonb_array_length(messages) >= $1::int + 2`,
+		2*n, sessionID, tenantID, time.Now())
+	if err != nil {
+		return fmt.Errorf("delete turn: %w", err)
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return ErrNoTurn
+	}
+	return nil
+}
+
 func (s *Service) CloseSession(ctx context.Context, tenantID, sessionID uuid.UUID) error {
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx,

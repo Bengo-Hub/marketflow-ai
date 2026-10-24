@@ -3,9 +3,11 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 
+	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
@@ -66,5 +68,55 @@ func TestClientChosenSessionID(t *testing.T) {
 	}
 	if _, err := s.LoadHistory(ctx, b, sid); err == nil {
 		t.Fatal("another tenant read the session")
+	}
+}
+
+func TestDeleteTurnAndClear(t *testing.T) {
+	db := openDB(t)
+	a, b := twoTenants(t, db)
+	s := NewService(db, zap.NewNop())
+	ctx := context.Background()
+	sid, err := s.CreateSession(ctx, a, "web_widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM chat_sessions WHERE id = $1`, sid) })
+	for _, q := range []string{"q0", "q1", "q2"} {
+		if err := s.AppendMessages(ctx, a, sid, ai.Message{Role: "user", Content: q}, ai.Message{Role: "assistant", Content: "a" + q[1:]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Another tenant cannot touch it; out of range is ErrNoTurn.
+	if err := s.DeleteTurn(ctx, b, sid, 0); !errors.Is(err, ErrNoTurn) {
+		t.Fatalf("other tenant: %v", err)
+	}
+	if err := s.DeleteTurn(ctx, a, sid, 3); !errors.Is(err, ErrNoTurn) {
+		t.Fatalf("out of range: %v", err)
+	}
+	// Remove the middle turn: q0/a0 and q2/a2 stay, in order.
+	if err := s.DeleteTurn(ctx, a, sid, 1); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := s.LoadHistory(ctx, a, sid)
+	got := ""
+	for _, m := range h {
+		got += m.Content + ","
+	}
+	var count int
+	_ = db.QueryRow(`SELECT message_count FROM chat_sessions WHERE id = $1`, sid).Scan(&count)
+	if got != "q0,a0,q2,a2," || count != 4 {
+		t.Fatalf("after delete: %s count %d", got, count)
+	}
+
+	// Clear empties it; clearing an unknown id is not an error.
+	if err := s.ClearSession(ctx, a, sid); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := s.LoadHistory(ctx, a, sid); len(h) != 0 {
+		t.Fatalf("after clear: %v", h)
+	}
+	if err := s.ClearSession(ctx, a, uuid.New()); err != nil {
+		t.Fatal(err)
 	}
 }
