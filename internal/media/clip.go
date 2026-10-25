@@ -29,8 +29,8 @@ const CapImageToVideo Capability = "image_to_video"
 // 2026-10-24, see docs/integrations/video-generation-providers.md section 3.
 var ClipRoutes = []Route{
 	{Key: "higgsfield/kling-v3-std", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.084, Quality: 4, PAYG: true, Timeout: 6 * time.Minute},
-	{Key: "fal/grok-imagine-video", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.05, Quality: 3, PAYG: true, Timeout: 6 * time.Minute},
-	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, Quality: 4, PAYG: true, Timeout: 6 * time.Minute},
+	{Key: "fal/grok-imagine-video", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.05, Quality: 3, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
+	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, Quality: 4, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
 	{Key: "higgsfield/seedance-2.0", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.141, Quality: 4.5, PAYG: true, Timeout: 8 * time.Minute, MinTier: TierPremium},
 }
 
@@ -232,31 +232,37 @@ func clipPrompt(p string) string {
 
 // save downloads the provider's clip to path (bounded).
 func (c *Clips) save(ctx context.Context, url, path string) error {
+	return downloadTo(ctx, c.fetch, url, path, maxClipBytes, "clip")
+}
+
+// downloadTo streams url into path, refusing more than limit bytes; what names
+// the file in errors.
+func downloadTo(ctx context.Context, hc *http.Client, url, path string, limit int64, what string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := c.fetch.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("download clip: %w", err)
+		return fmt.Errorf("download %s: %w", what, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download clip: status %d", resp.StatusCode)
+		return fmt.Errorf("download %s: status %d", what, resp.StatusCode)
 	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, io.LimitReader(resp.Body, maxClipBytes+1))
+	n, err := io.Copy(f, io.LimitReader(resp.Body, limit+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return fmt.Errorf("download clip: %w", err)
+		return fmt.Errorf("download %s: %w", what, err)
 	}
-	if n > maxClipBytes {
-		return fmt.Errorf("download clip: larger than %d MB", maxClipBytes>>20)
+	if n > limit {
+		return fmt.Errorf("download %s: larger than %d MB", what, limit>>20)
 	}
 	return nil
 }

@@ -46,6 +46,8 @@ type fakeProviders struct {
 	failFal bool
 	scene   []byte
 	clip    []byte // served at /clip.mp4 (made with ffmpeg by the clip test)
+	// failFalPath fails only the fal submits whose path contains it.
+	failFalPath string
 }
 
 func newFakeProviders(t *testing.T) *fakeProviders {
@@ -69,10 +71,15 @@ func (f *fakeProviders) serve(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "COMPLETED", "request_id": "r1", "response_url": f.srv.URL + "/fal/requests/r1"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"images": []map[string]any{{"url": f.srv.URL + "/scene.png", "width": 2160, "height": 2700}}, "seed": 1})
+		// One result body serves every model: images, a video or an audio file.
+		_ = json.NewEncoder(w).Encode(map[string]any{"images": []map[string]any{{"url": f.srv.URL + "/scene.png", "width": 2160, "height": 2700}}, "seed": 1,
+			"video": map[string]any{"url": f.srv.URL + "/clip.mp4"}, "audio": map[string]any{"url": f.srv.URL + "/voice.mp3"}})
+	case p == "/voice.mp3":
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(bytes.Repeat([]byte{0xff}, 32000)) // 2 s at 128 kbit/s
 	case strings.HasPrefix(p, "/fal/"):
 		f.record(r, strings.TrimPrefix(p, "/fal/"))
-		if f.failFal {
+		if f.failFal || (f.failFalPath != "" && strings.Contains(p, f.failFalPath)) {
 			http.Error(w, `{"detail":"upstream error"}`, http.StatusBadGateway)
 			return
 		}
@@ -251,6 +258,17 @@ func TestRouterOrderByTier(t *testing.T) {
 	}
 	if got := keys(r.Order(CapPosterImage, TierStandard, nil)); got[0] == "fal/seedream-v5-lite" || got[len(got)-1] != "fal/seedream-v5-lite" {
 		t.Fatalf("an open route must go last: %v", got)
+	}
+
+	// The providers doc's fallbacks come after every primary route even when
+	// they score higher on price: Kling 3.0 std is the clip default, not Grok.
+	clips := keys(NewRouter(ClipRoutes).Order(CapImageToVideo, TierStandard, nil))
+	if strings.Join(clips, ",") != "higgsfield/kling-v3-std,fal/grok-imagine-video,fal/kling-v3-pro" {
+		t.Fatalf("clip order = %v", clips)
+	}
+	pres := keys(NewRouter(PresenterRoutes).Order(CapPresenter, TierPremium, nil))
+	if pres[0] != "fal/veed-fabric" {
+		t.Fatalf("presenter order = %v", pres)
 	}
 }
 

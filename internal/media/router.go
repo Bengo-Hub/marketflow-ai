@@ -34,6 +34,10 @@ type Route struct {
 	PAYG       bool          // pay as you go (preferred) or subscription
 	Timeout    time.Duration // per attempt
 	MinTier    string        // the lowest tier that may use it ("" = any)
+	// Fallback routes are tried only after every primary route, however they
+	// score: the providers doc names them fallbacks (often a cheaper, weaker or
+	// cross-provider option that would otherwise win on price).
+	Fallback bool
 }
 
 // weights from docs/integrations/video-generation-providers.md: quality, cost,
@@ -91,7 +95,12 @@ func (r *Router) Order(cap Capability, tier string, available func(Route) bool) 
 	for _, rt := range eligible {
 		scores[rt.Key] = r.score(rt, cheapest, w)
 	}
-	sort.SliceStable(eligible, func(i, j int) bool { return scores[eligible[i].Key] > scores[eligible[j].Key] })
+	sort.SliceStable(eligible, func(i, j int) bool {
+		if eligible[i].Fallback != eligible[j].Fallback {
+			return !eligible[i].Fallback
+		}
+		return scores[eligible[i].Key] > scores[eligible[j].Key]
+	})
 
 	healthy := make([]Route, 0, len(eligible))
 	var open []Route
