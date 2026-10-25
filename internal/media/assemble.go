@@ -40,6 +40,12 @@ type AdScene struct {
 	VideoURL string  `json:"video_url,omitempty"`
 	ImageURL string  `json:"image_url,omitempty"`
 	Seconds  float64 `json:"seconds"`
+	// StartAt takes the scene from this point of a longer clip (owner footage,
+	// a screen recording).
+	StartAt float64 `json:"start_at,omitempty"`
+	// Fit shows the whole frame over a blurred fill instead of cropping to cover:
+	// for landscape footage and screen recordings in a portrait ad.
+	Fit bool `json:"fit,omitempty"`
 }
 
 // AssembleRequest is a whole ad.
@@ -114,6 +120,9 @@ func (r *AssembleRequest) validate() (size image.Point, total float64, err error
 		if s.Seconds < minSceneSeconds {
 			return size, 0, fmt.Errorf("media: scene %d is shorter than %.0f s", i+1, minSceneSeconds)
 		}
+		if s.StartAt < 0 || (s.StartAt > 0 && s.VideoURL == "") {
+			return size, 0, fmt.Errorf("media: scene %d: start_at needs a video and cannot be negative", i+1)
+		}
 		total += s.Seconds
 	}
 	if total > MaxAdSeconds {
@@ -150,7 +159,7 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*AssembleRes
 			return nil, err
 		}
 		out := filepath.Join(dir, fmt.Sprintf("s%d.mp4", i))
-		if err := a.normalize(ctx, raw, out, s.VideoURL == "", size.X, size.Y, s.Seconds); err != nil {
+		if err := a.normalize(ctx, raw, out, s, size.X, size.Y); err != nil {
 			return nil, fmt.Errorf("media: scene %d: %w", i+1, err)
 		}
 		fmt.Fprintf(&list, "file '%s'\n", filepath.ToSlash(out))
@@ -287,24 +296,56 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*AssembleRes
 	return &AssembleResult{URL: url, Key: key, Bytes: n, Seconds: total, Width: size.X, Height: size.Y, SHA256: sum, Lines: lines}, nil
 }
 
+// cleanPTS renumbers a scene's frames from zero at the ad's frame rate. Inputs
+// carry their own timing (a WebP still's decoder, a phone clip's variable rate),
+// and after the scenes are joined any odd timestamp shifts the clock that
+// switches the captions and the end card on and off.
+var cleanPTS = fmt.Sprintf("setpts=N/(%d*TB)", adFPS)
+
+// sceneColour converts every scene to one colour standard (BT.709, TV range),
+// and sceneColourTags writes it into each piece. Sources differ: a JPEG or WebP
+// still decodes as full or TV range BT.601, a PNG or phone clip carries none.
+// Joined pieces with different colour parameters make ffmpeg rebuild its
+// filter graph mid-ad, and the caption and end card layers (single images,
+// already consumed) then vanish for the rest of the ad.
+const sceneColour = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p"
+
+var sceneColourTags = []string{"-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"}
+
 // normalize turns one scene into a silent H.264 piece of the format: a clip is
-// cropped to cover and held on its last frame if it is short; a still gets a
-// slow push-in.
-func (a *Assembler) normalize(ctx context.Context, in, out string, still bool, w, h int, seconds float64) error {
-	dur := strconv.FormatFloat(seconds, 'f', 3, 64)
-	var args []string
-	if still {
-		frames := int(math.Ceil(seconds * adFPS))
-		vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,"+
-			"zoompan=z='min(zoom+0.0006,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=%d:s=%dx%d:fps=%d,setsar=1,format=yuv420p",
-			w*2, h*2, w*2, h*2, frames, w, h, adFPS)
-		args = []string{"-loop", "1", "-i", in, "-vf", vf, "-t", dur}
-	} else {
-		vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1,fps=%d,tpad=stop_mode=clone:stop_duration=%s,format=yuv420p",
-			w, h, w, h, adFPS, dur)
-		args = []string{"-i", in, "-vf", vf, "-t", dur}
+// cropped to cover (or fitted over a blurred fill) and held on its last frame
+// if it is short; a still gets a slow push-in.
+func (a *Assembler) normalize(ctx context.Context, in, out string, s AdScene, w, h int) error {
+	dur := strconv.FormatFloat(s.Seconds, 'f', 3, 64)
+	// frame is the scene at w x h before the push-in or hold.
+	frame := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d", w, h, w, h)
+	if s.Fit {
+		// The fill is blurred at a quarter size (cheap), kept even for 4:2:0, then
+		// scaled back up and darkened so the fitted frame stands out.
+		bw, bh := w/8*2, h/8*2
+		frame = fmt.Sprintf("split[bgsrc][fgsrc];"+
+			"[bgsrc]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,boxblur=12:2,scale=%d:%d,eq=brightness=-0.12[bg];"+
+			"[fgsrc]scale=%d:%d:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2",
+			bw, bh, bw, bh, w, h, w, h)
 	}
-	args = append(args, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", strconv.Itoa(adFPS), out)
+	var args []string
+	if s.VideoURL == "" {
+		frames := int(math.Ceil(s.Seconds * adFPS))
+		// zoompan turns the single input frame into exactly `frames` frames with
+		// clean timestamps. The still must not be looped (-loop 1): zoompan would
+		// restart its zoom on every looped frame (no motion), make d frames for
+		// each (slow), and leave timestamps that break the overlays' clock after
+		// the scenes are joined. The push-in works on a 2x frame so it does not judder.
+		zoomStep := 0.08 / float64(frames)
+		vf := fmt.Sprintf("%s,scale=%d:%d,zoompan=z='min(zoom+%.6f,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=%d:s=%dx%d:fps=%d,setsar=1,%s,%s",
+			frame, w*2, h*2, zoomStep, frames, w, h, adFPS, cleanPTS, sceneColour)
+		args = []string{"-i", in, "-filter_complex", vf, "-frames:v", strconv.Itoa(frames)}
+	} else {
+		vf := fmt.Sprintf("%s,setsar=1,fps=%d,tpad=stop_mode=clone:stop_duration=%s,%s,%s", frame, adFPS, dur, cleanPTS, sceneColour)
+		args = []string{"-ss", strconv.FormatFloat(s.StartAt, 'f', 3, 64), "-i", in, "-filter_complex", vf, "-t", dur}
+	}
+	args = append(args, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", strconv.Itoa(adFPS))
+	args = append(append(args, sceneColourTags...), out)
 	return a.run(ctx, args...)
 }
 
