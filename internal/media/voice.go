@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +34,9 @@ var VoiceRoutes = []Route{
 // MaxVoiceChars bounds one voice-over (a 60 s ad is about 900 characters).
 const MaxVoiceChars = 3000
 
-// VoiceCatalog maps the voices the studio offers to their ElevenLabs ids. fal's
-// ElevenLabs route takes the name. All are ElevenLabs premade voices, so both
-// routes have them.
+// VoiceCatalog maps the premade ElevenLabs voices to their ids: the fallback
+// after the owner's voice collection (voice_library.go). fal's ElevenLabs route
+// takes the name. Premade voices exist on both routes.
 var VoiceCatalog = map[string]string{
 	"Bella":   "hpp4J3VqNfWAUOO0d1Us", // warm, bright female
 	"Sarah":   "EXAVITQu4vr4xnSDxMaL", // mature, reassuring female
@@ -48,7 +49,7 @@ var VoiceCatalog = map[string]string{
 	"Will":    "bIHbv24MWmeRgasZH58o", // relaxed, optimistic male
 }
 
-// DefaultVoice is used when a script names none.
+// DefaultVoice is the premade voice used when the collection has none that fits.
 const DefaultVoice = "Bella"
 
 // AudioStore keeps voice-overs with the draft (public: the presenter route
@@ -64,7 +65,7 @@ type VoiceRequest struct {
 	Name      string // names the file within the version, e.g. "voice" or "scene-2"
 	Text      string
 	Language  string // en (default) or sw
-	Voice     string // a VoiceCatalog name
+	Voice     string // a collection voice's name (a prefix will do) or id, or a premade name; "" picks the default
 	Tier      string
 }
 
@@ -83,6 +84,7 @@ type VoiceResult struct {
 	Seconds    float64      `json:"seconds"`
 	Words      []WordTiming `json:"words"`
 	Exact      bool         `json:"exact_timings"` // false when the timings are estimated
+	Voice      string       `json:"voice"`         // the voice that read it
 	Characters int          `json:"characters"`
 	Route      string       `json:"route"`
 	CostUSD    float64      `json:"cost_usd"`
@@ -94,12 +96,13 @@ var elevenBase = "https://api.elevenlabs.io"
 
 // Voices makes voice-overs on the best route with fallbacks.
 type Voices struct {
-	router *Router
-	keys   KeySource
-	store  AudioStore
-	queue  *queueClient
-	http   *http.Client
-	logger *zap.Logger
+	router  *Router
+	keys    KeySource
+	store   AudioStore
+	queue   *queueClient
+	http    *http.Client
+	library *voiceLibrary
+	logger  *zap.Logger
 
 	mu    sync.Mutex
 	plans map[string]planEntry // ElevenLabs plan per key
@@ -119,7 +122,28 @@ func NewVoices(keys KeySource, store AudioStore, logger *zap.Logger) *Voices {
 		logger = zap.NewNop()
 	}
 	return &Voices{router: NewRouter(VoiceRoutes), keys: keys, store: store, queue: newQueueClient(),
-		http: &http.Client{Timeout: 90 * time.Second}, logger: logger.Named("media.voices"), plans: map[string]planEntry{}}
+		http: &http.Client{Timeout: 90 * time.Second}, library: newVoiceLibrary(""), logger: logger.Named("media.voices"),
+		plans: map[string]planEntry{}}
+}
+
+// WithCollection names the ElevenLabs voice collection to offer (default
+// DefaultVoiceCollection); a collection id works too.
+func (v *Voices) WithCollection(name string) *Voices {
+	v.library = newVoiceLibrary(name)
+	return v
+}
+
+// List returns the voices the studio offers: the collection, then the premade ones.
+func (v *Voices) List(ctx context.Context) []LibraryVoice {
+	return append(v.collection(ctx), premadeVoices()...)
+}
+
+// collection reads the owner's collection with the ElevenLabs key, if any.
+func (v *Voices) collection(ctx context.Context) []LibraryVoice {
+	if v.keys == nil {
+		return nil
+	}
+	return v.library.voices(ctx, v.keys(ctx, "elevenlabs"))
 }
 
 // ErrVoiceInput is a request the caller must fix.
@@ -138,10 +162,8 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 	if req.Language != "en" && req.Language != "sw" {
 		return nil, fmt.Errorf("%w: language must be en or sw", ErrVoiceInput)
 	}
-	if req.Voice == "" {
-		req.Voice = DefaultVoice
-	}
-	if _, ok := VoiceCatalog[req.Voice]; !ok {
+	collection := v.collection(ctx)
+	if _, ok := chooseVoice(collection, req.Voice, req.Language, ""); !ok {
 		return nil, fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
 	}
 	if req.Tier == "" {
@@ -160,7 +182,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 			break
 		}
 		actx, cancel := context.WithTimeout(ctx, rt.Timeout)
-		audio, words, exact, err := v.speak(actx, rt, req)
+		audio, words, exact, used, err := v.speak(actx, rt, req, collection)
 		cancel()
 		if err != nil {
 			lastErr = err
@@ -181,7 +203,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 		if err != nil {
 			return nil, fmt.Errorf("media: store voice: %w", err)
 		}
-		return &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact,
+		return &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Voice: used,
 			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1}, nil
 	}
 	if lastErr == nil {
@@ -233,8 +255,9 @@ func (v *Voices) paidPlan(ctx context.Context, key string) bool {
 	return paid
 }
 
-// speak runs one route; exact reports whether words came from the provider.
-func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest) ([]byte, []WordTiming, bool, error) {
+// speak runs one route; exact reports whether words came from the provider,
+// used names the voice that read it.
+func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collection []LibraryVoice) ([]byte, []WordTiming, bool, string, error) {
 	key := v.keys(ctx, rt.Provider)
 	switch rt.Key {
 	case "elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-v4":
@@ -242,33 +265,39 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest) ([]byte,
 		if rt.Key == "elevenlabs/eleven-v4" {
 			model = "eleven_v4"
 		}
-		audio, words, err := v.eleven(ctx, key, model, req)
-		return audio, words, err == nil, err
+		voice, ok := chooseVoice(collection, req.Voice, req.Language, model)
+		if !ok {
+			return nil, nil, false, "", fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
+		}
+		audio, words, err := v.eleven(ctx, key, model, voice.ID, req)
+		return audio, words, err == nil, voice.Name, err
 	case "fal/elevenlabs-v3":
+		voice, _ := chooseVoice(collection, req.Voice, req.Language, "")
+		name := falVoiceFor(voice)
 		var out struct {
 			Audio struct {
 				URL string `json:"url"`
 			} `json:"audio"`
 		}
-		input := map[string]any{"text": req.Text, "voice": req.Voice, "language_code": req.Language}
+		input := map[string]any{"text": req.Text, "voice": name, "language_code": req.Language}
 		if err := v.queue.run(ctx, falJob(key, "fal-ai/elevenlabs/tts/eleven-v3"), input, &out); err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, "", err
 		}
 		if out.Audio.URL == "" {
-			return nil, nil, false, &errJobFailed{provider: "fal", status: "completed", detail: "no audio in the result"}
+			return nil, nil, false, "", &errJobFailed{provider: "fal", status: "completed", detail: "no audio in the result"}
 		}
 		audio, err := v.download(ctx, out.Audio.URL)
-		return audio, nil, false, err
+		return audio, nil, false, name, err
 	}
-	return nil, nil, false, fmt.Errorf("media: no builder for route %s", rt.Key)
+	return nil, nil, false, "", fmt.Errorf("media: no builder for route %s", rt.Key)
 }
 
 // eleven calls ElevenLabs text to speech with timestamps: the audio and the
 // time of every character, grouped here into words.
-func (v *Voices) eleven(ctx context.Context, key, model string, req VoiceRequest) ([]byte, []WordTiming, error) {
+func (v *Voices) eleven(ctx context.Context, key, model, voiceID string, req VoiceRequest) ([]byte, []WordTiming, error) {
 	body, _ := json.Marshal(map[string]any{"text": req.Text, "model_id": model, "language_code": req.Language})
-	url := elevenBase + "/v1/text-to-speech/" + VoiceCatalog[req.Voice] + "/with-timestamps?output_format=mp3_44100_128"
-	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := elevenBase + "/v1/text-to-speech/" + url.PathEscape(voiceID) + "/with-timestamps?output_format=mp3_44100_128"
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}

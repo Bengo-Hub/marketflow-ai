@@ -393,15 +393,20 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		media.SetBases(os.Getenv("MF_MEDIA_FAL_QUEUE_URL"), os.Getenv("MF_MEDIA_HIGGSFIELD_API_URL"))
 		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger)
 		osHandler.SetPosters(posters)
-		// Motion posters: background jobs in Redis; ffmpeg draws the exact words.
-		clips := media.NewClips(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, posters, logger)
+		// Motion posters and template video ads: background jobs in Redis; ffmpeg
+		// draws the exact words and assembles the ads.
+		store := media.ObjectStore{S: mediaStore}
+		clips := media.NewClips(mediaKeySource(resolver), store, posters, logger)
 		if !clips.Ready() {
-			logger.Warn("ffmpeg not found; motion posters disabled")
+			logger.Warn("ffmpeg not found; motion posters and video ads disabled")
 		}
-		// A settled job is pushed to marketflow-api's clip callback; its renderer
+		// Voices come from the owner's ElevenLabs collection (codevertex-voices unless set).
+		voices := media.NewVoices(mediaKeySource(resolver), store, logger).WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION"))
+		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger))
+		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.
-		osHandler.SetClips(media.NewClipJobs(clips, redisClient, cfg.Redis.Namespace, logger).
-			WithNotify(media.NewClipCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)))
+		osHandler.SetVideo(media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
+			WithNotify(media.NewJobCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)), clips, ads)
 	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
@@ -473,6 +478,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			r.Post("/optimize", osHandler.Optimize)
 			r.Post("/plan/quote", osHandler.Quote)
 			r.Get("/creative/quote", osHandler.CreativeQuote)
+			r.Get("/creative/voices", osHandler.CreativeVoices)
 			r.Get("/library/templates", osHandler.Templates)
 			r.Get("/team", osHandler.Team)
 		})
@@ -490,7 +496,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
-		r.Get("/creative/clip/{version_id}", osHandler.ClipStatus)
+		r.Post("/creative/script", osHandler.Script)
+		r.Post("/creative/ad", osHandler.Ad)
+		r.Get("/creative/jobs/{version_id}", osHandler.JobStatus)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

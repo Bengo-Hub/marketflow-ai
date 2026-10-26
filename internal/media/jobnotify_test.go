@@ -11,18 +11,18 @@ import (
 	"github.com/Bengo-Hub/httpware"
 )
 
-func TestClipCallbackRetriesThenDelivers(t *testing.T) {
-	saved := clipCallbackDelays
-	clipCallbackDelays = []time.Duration{0, time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { clipCallbackDelays = saved })
+func TestJobCallbackRetriesThenDelivers(t *testing.T) {
+	saved := jobCallbackDelays
+	jobCallbackDelays = []time.Duration{0, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { jobCallbackDelays = saved })
 
 	var mu sync.Mutex
 	var calls int
-	var got ClipJob
+	var got Job
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
-		if r.URL.Path != "/api/v1/internal/creative/clips/v1" || !httpware.ValidServiceKey(r, "svc") {
+		if r.URL.Path != "/api/v1/internal/creative/jobs/v1" || !httpware.ValidServiceKey(r, "svc") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -36,19 +36,19 @@ func TestClipCallbackRetriesThenDelivers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	notify := NewClipCallback(srv.URL+"/", "svc", nil)
-	notify("v1", ClipJob{Status: ClipDone, CreditsCharged: 14, Clip: &ClipResult{URL: "https://x/c.mp4", Key: "k", SHA256: "h"}})
-	if calls != 2 || got.Status != ClipDone || got.Clip == nil || got.Clip.SHA256 != "h" || got.CreditsCharged != 14 {
+	notify := NewJobCallback(srv.URL+"/", "svc", nil)
+	notify("v1", Job{Status: JobDone, CreditsCharged: 12, Result: &MediaResult{URL: "https://x/ad.mp4", Key: "k", SHA256: "h", Seconds: 23.5}})
+	if calls != 2 || got.Status != JobDone || got.Result == nil || got.Result.SHA256 != "h" || got.Result.Seconds != 23.5 || got.CreditsCharged != 12 {
 		t.Fatalf("calls %d, got %+v", calls, got)
 	}
 
 	// A 404 (the version is gone) is final: no more tries.
 	calls = 0
-	notify("missing", ClipJob{Status: ClipFailed})
+	notify("missing", Job{Status: JobFailed})
 	if calls != 0 {
 		t.Fatalf("a 404 must not be retried: %d", calls)
 	}
-	if NewClipCallback("", "svc", nil) != nil {
+	if NewJobCallback("", "svc", nil) != nil {
 		t.Fatal("no URL: no notifier")
 	}
 }

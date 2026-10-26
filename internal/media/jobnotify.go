@@ -13,31 +13,31 @@ import (
 	"go.uber.org/zap"
 )
 
-// clipCallbackDelays space the callback's tries; past the last one
+// jobCallbackDelays space the callback's tries; past the last one
 // marketflow-api's fallback poll picks the job up from Get.
-var clipCallbackDelays = []time.Duration{0, 2 * time.Second, 10 * time.Second, 30 * time.Second}
+var jobCallbackDelays = []time.Duration{0, 2 * time.Second, 10 * time.Second, 30 * time.Second}
 
-// NewClipCallback returns a ClipJobs notifier that reports a settled job to
-// marketflow-api: POST {base}/api/v1/internal/creative/clips/{version_id} with
+// NewJobCallback returns a Jobs notifier that reports a settled job to
+// marketflow-api: POST {base}/api/v1/internal/creative/jobs/{version_id} with
 // the job state, service key auth. A 4xx other than 429 is final (the version
 // is gone); a 5xx or a network error is tried again.
-func NewClipCallback(baseURL, serviceKey string, logger *zap.Logger) func(versionID string, job ClipJob) {
+func NewJobCallback(baseURL, serviceKey string, logger *zap.Logger) func(versionID string, job Job) {
 	if baseURL == "" || serviceKey == "" {
 		return nil
 	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	logger = logger.Named("media.clipcallback")
+	logger = logger.Named("media.jobcallback")
 	base := strings.TrimSuffix(baseURL, "/")
 	hc := &http.Client{Timeout: 15 * time.Second}
-	return func(versionID string, job ClipJob) {
+	return func(versionID string, job Job) {
 		body, _ := json.Marshal(job)
-		url := base + "/api/v1/internal/creative/clips/" + versionID
+		url := base + "/api/v1/internal/creative/jobs/" + versionID
 		var last error
-		for _, d := range clipCallbackDelays {
+		for _, d := range jobCallbackDelays {
 			time.Sleep(d)
-			final, err := postClipCallback(hc, url, serviceKey, body)
+			final, err := postJobCallback(hc, url, serviceKey, body)
 			if err == nil {
 				return
 			}
@@ -46,11 +46,11 @@ func NewClipCallback(baseURL, serviceKey string, logger *zap.Logger) func(versio
 				break
 			}
 		}
-		logger.Warn("clip callback not delivered; marketflow-api will poll", zap.String("version_id", versionID), zap.Error(last))
+		logger.Warn("job callback not delivered; marketflow-api will poll", zap.String("version_id", versionID), zap.Error(last))
 	}
 }
 
-func postClipCallback(hc *http.Client, url, key string, body []byte) (final bool, err error) {
+func postJobCallback(hc *http.Client, url, key string, body []byte) (final bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

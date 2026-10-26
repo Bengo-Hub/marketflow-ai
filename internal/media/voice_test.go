@@ -23,6 +23,23 @@ type fakeEleven struct {
 	got  map[string]any
 	path string
 	key  string
+	// collection holds the codevertex-voices collection's voices (nil: no collection).
+	collection []map[string]any
+	// audio replaces the placeholder bytes (a real MP3 for assembly tests);
+	// seconds spreads the character timings over its length.
+	audio   []byte
+	seconds float64
+}
+
+// ownerCollection mirrors the owner's codevertex-voices collection read on 2026-10-26.
+func ownerCollection() []map[string]any {
+	v4 := []string{"eleven_multilingual_v2", "eleven_v4", "eleven_v4_turbo"}
+	return []map[string]any{
+		{"voice_id": "VUGQSU6BSEjkbudnJbOj", "name": "Emily - Confident and Steady", "high_quality_base_model_ids": v4,
+			"labels": map[string]string{"language": "en", "accent": "american", "gender": "female"}},
+		{"voice_id": "CXoGcuszI2UkuF6sqV8W", "name": "Emily E.-Premium Female Commercial Voice", "high_quality_base_model_ids": v4,
+			"labels": map[string]string{"language": "en", "accent": "british", "gender": "female"}},
+	}
 }
 
 func newFakeEleven(t *testing.T, tier string) *fakeEleven {
@@ -31,6 +48,12 @@ func newFakeEleven(t *testing.T, tier string) *fakeEleven {
 		switch {
 		case r.URL.Path == "/v1/user/subscription":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tier": f.tier, "character_limit": 10000})
+		case r.URL.Path == "/v1/voices/collections" && f.collection != nil:
+			_ = json.NewEncoder(w).Encode(map[string]any{"collections": []map[string]any{
+				{"collection_id": "other1", "title": "someone-else"},
+				{"collection_id": "vMfi9czGSDnodSoI3y1C", "title": "codevertex-voices"}}})
+		case r.URL.Path == "/v2/voices" && r.URL.Query().Get("collection_id") == "vMfi9czGSDnodSoI3y1C":
+			_ = json.NewEncoder(w).Encode(map[string]any{"voices": f.collection})
 		case strings.HasSuffix(r.URL.Path, "/with-timestamps"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -38,15 +61,25 @@ func newFakeEleven(t *testing.T, tier string) *fakeEleven {
 			f.got, f.path, f.key = body, r.URL.Path+"?"+r.URL.RawQuery, r.Header.Get("xi-api-key")
 			f.mu.Unlock()
 			text := body["text"].(string)
+			step := 0.1
+			if f.seconds > 0 {
+				step = f.seconds / float64(len([]rune(text)))
+			}
 			var chars []string
 			var starts, ends []float64
-			for i, c := range text {
+			i := 0
+			for _, c := range text {
 				chars = append(chars, string(c))
-				starts = append(starts, float64(i)*0.1)
-				ends = append(ends, float64(i)*0.1+0.1)
+				starts = append(starts, float64(i)*step)
+				ends = append(ends, float64(i)*step+step)
+				i++
+			}
+			audio := []byte("ID3fake-mp3")
+			if f.audio != nil {
+				audio = f.audio
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"audio_base64": base64.StdEncoding.EncodeToString([]byte("ID3fake-mp3")),
+				"audio_base64": base64.StdEncoding.EncodeToString(audio),
 				"alignment":    map[string]any{"characters": chars, "character_start_times_seconds": starts, "character_end_times_seconds": ends},
 			})
 		default:
@@ -123,6 +156,69 @@ func TestVoiceFreePlanUsesFal(t *testing.T) {
 	// 32,000 bytes at 128 kbit/s is 2 s, spread over four words.
 	if res.Seconds != 2 || len(res.Words) != 4 || res.Words[3].End < 1.99 {
 		t.Fatalf("estimated timings: %v %+v", res.Seconds, res.Words)
+	}
+
+	// With the owner's collection, Emily E. (British, female) becomes the closest
+	// premade voice on fal's route, which may not hold library voices.
+	el.collection = ownerCollection()
+	res, err = NewVoices(keysFor("elevenlabs", "fal"), &memAudio{}, nil).Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v2", Text: "Soft skin"})
+	if err != nil || f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]["voice"] != "Alice" || res.Voice != "Alice" {
+		t.Fatalf("fal voice for Emily E.: %v %v %+v", err, f.inputs["fal-ai/elevenlabs/tts/eleven-v3"], res)
+	}
+}
+
+// With no voice named, the owner's collection decides: Emily E. reads it on
+// the direct route, in English or Swahili (a v4 multilingual model); fal's
+// route, which may not hold a library voice, gets the closest premade one.
+func TestVoiceDefaultsToEmilyEFromTheCollection(t *testing.T) {
+	newFakeProviders(t)
+	el := newFakeEleven(t, "creator")
+	el.collection = ownerCollection()
+	v := NewVoices(keysFor("elevenlabs", "fal"), &memAudio{}, nil)
+	for _, lang := range []string{"en", "sw"} {
+		res, err := v.Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v1", Text: "Karibu Codevertex", Language: lang})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(el.path, "/v1/text-to-speech/CXoGcuszI2UkuF6sqV8W/") || !strings.HasPrefix(res.Voice, "Emily E.") {
+			t.Fatalf("%s: voice %q, path %s", lang, res.Voice, el.path)
+		}
+	}
+	// A voice named by a prefix of its name, from the collection.
+	if res, err := v.Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v1", Text: "Hello", Voice: "emily - confident"}); err != nil ||
+		!strings.Contains(el.path, "/VUGQSU6BSEjkbudnJbOj/") || !strings.HasPrefix(res.Voice, "Emily - Confident") {
+		t.Fatalf("named voice: %v %+v %s", err, res, el.path)
+	}
+	if _, err := v.Make(context.Background(), VoiceRequest{Text: "Hello", Voice: "Nobody"}); !errors.Is(err, ErrVoiceInput) {
+		t.Fatalf("unknown voice: %v", err)
+	}
+	// The voices the studio offers: the collection first, then the premade ones.
+	list := v.List(context.Background())
+	if len(list) != 2+len(VoiceCatalog) || list[0].ID != "VUGQSU6BSEjkbudnJbOj" || !list[len(list)-1].Premade {
+		t.Fatalf("list = %+v", list)
+	}
+}
+
+func TestChooseVoiceOrder(t *testing.T) {
+	coll := []LibraryVoice{
+		{ID: "a", Name: "Zawadi", Language: "sw", Models: []string{"eleven_v4_turbo"}},
+		{ID: "b", Name: "Emily - Confident and Steady", Language: "en", Models: []string{"eleven_v4_turbo"}},
+	}
+	// No Emily E.: another Emily.
+	if v, _ := chooseVoice(coll, "", "en", "eleven_v4_turbo"); v.ID != "b" {
+		t.Fatalf("got %+v", v)
+	}
+	// A model the Emily voice is not tuned for: the next voice that can read it.
+	if v, _ := chooseVoice([]LibraryVoice{{ID: "b", Name: "Emily", Models: []string{"eleven_v3"}}, {ID: "c", Name: "Juma"}}, "", "en", "eleven_v4_turbo"); v.ID != "c" {
+		t.Fatalf("got %+v", v)
+	}
+	// An empty collection: the premade default.
+	if v, _ := chooseVoice(nil, "", "en", "eleven_v4_turbo"); v.Name != DefaultVoice || !v.Premade {
+		t.Fatalf("got %+v", v)
+	}
+	if falVoiceFor(LibraryVoice{Name: "Emily E.", Accent: "british", Gender: "female"}) != "Alice" ||
+		falVoiceFor(LibraryVoice{Name: "Juma", Gender: "male"}) != "Brian" || falVoiceFor(LibraryVoice{Name: "Sarah", Premade: true}) != "Sarah" {
+		t.Fatal("fal voice mapping")
 	}
 }
 

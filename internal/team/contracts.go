@@ -32,9 +32,12 @@ type Scene struct {
 	ID        string  `json:"id"`
 	DurationS float64 `json:"duration_s"`
 	Shot      string  `json:"shot"` // presenter | product_clip | owner_footage | end_card | b_roll
-	Visual    string  `json:"visual"`
-	Voiceover string  `json:"voiceover"`
-	Caption   string  `json:"caption"`
+	// Asset is the 1-based owner photo (product_clip, b_roll, end_card) or clip
+	// (owner_footage) the scene shows; 0 lets the renderer pick in order.
+	Asset     int    `json:"asset,omitempty"`
+	Visual    string `json:"visual"`
+	Voiceover string `json:"voiceover"`
+	Caption   string `json:"caption"`
 }
 
 // VideoScript is the video_script contract.
@@ -115,7 +118,7 @@ type ReviewFindings struct {
 // contractShapes are the JSON shapes shown to the model.
 var contractShapes = map[string]string{
 	"ad_copy_batch":    `{"variants":[{"id":"v1","format":"","angle":"","hook":"","headline":"","primary_text":"","cta":"","hypothesis":"","source":""}]}`,
-	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","visual":"","voiceover":"","caption":""}],"cta":""}`,
+	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":""}],"cta":""}`,
 	"poster_brief":     `{"headline":"","subline":"","cta":"","layout":"","image_prompt":"","sizes":["1080x1080","1080x1350","1080x1920"]}`,
 	"social_posts":     `{"posts":[{"platform":"","hook":"","text":"","visual":""}]}`,
 	"content_calendar": `{"pillars":[""],"items":[{"day":"","platform":"","pillar":"","format":"","hook":"","cta":"","ad_candidate":false}]}`,
@@ -173,7 +176,7 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 		}
 		total := 0.0
 		for i, s := range v.Scenes {
-			if s.DurationS <= 0 || s.DurationS > 20 || tooLong(s.Visual, s.Voiceover, s.Caption) {
+			if s.DurationS <= 0 || s.DurationS > 20 || s.Asset < 0 || tooLong(s.Visual, s.Voiceover, s.Caption) {
 				return nil, fmt.Errorf("video_script: scene %d is invalid", i+1)
 			}
 			if s.ID == "" {

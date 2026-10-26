@@ -122,11 +122,11 @@ func TestAssembleMakesTheAd(t *testing.T) {
 	}
 	// The clip is shorter than its scene, so its last frame must be held.
 	files := map[string]string{
-		"/clip.mp4":  mk("clip.mp4", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=24:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p"),
+		"/clip.mp4": mk("clip.mp4", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=24:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p"),
 		// WebP, as on the website: its decoder's timing once broke the overlays.
 		"/still.webp": mk("still.webp", "-f", "lavfi", "-i", "testsrc=size=1200x1200:duration=1", "-frames:v", "1", "-c:v", "libwebp"),
-		"/voice.mp3": mk("voice.mp3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libmp3lame"),
-		"/music.mp3": mk("music.mp3", "-f", "lavfi", "-i", "sine=frequency=220:duration=10", "-c:a", "libmp3lame"),
+		"/voice.mp3":  mk("voice.mp3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libmp3lame"),
+		"/music.mp3":  mk("music.mp3", "-f", "lavfi", "-i", "sine=frequency=220:duration=10", "-c:a", "libmp3lame"),
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := files[r.URL.Path]
@@ -152,7 +152,7 @@ func TestAssembleMakesTheAd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Seconds != 9 || res.Width != 1080 || res.Height != 1920 || res.SHA256 == "" || res.Lines < 2 ||
+	if res.Seconds != 9 || res.Width != 1080 || res.Height != 1920 || res.SHA256 == "" || res.CaptionLines < 2 ||
 		!strings.HasSuffix(res.Key, "/video-drafts/ads/ad1.mp4") {
 		t.Fatalf("result = %+v", res)
 	}

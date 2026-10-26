@@ -59,21 +59,6 @@ type ClipRequest struct {
 	LogoURL   string
 }
 
-// ClipResult is the stored clip.
-type ClipResult struct {
-	URL       string  `json:"url"`
-	Key       string  `json:"key"`
-	Bytes     int64   `json:"bytes"`
-	Seconds   int     `json:"seconds"`
-	Width     int     `json:"width"`
-	Height    int     `json:"height"`
-	SHA256    string  `json:"sha256"` // of the stored file: the approval evidence names it
-	Route     string  `json:"route"`
-	CostUSD   float64 `json:"cost_usd"`
-	SourceURL string  `json:"source_url"` // the provider's clip link (expires)
-	Attempts  int     `json:"attempts"`
-}
-
 // VideoStore keeps finished clips (httpware/objectstore's video-drafts type).
 type VideoStore interface {
 	PutClip(ctx context.Context, tenantID uuid.UUID, versionID, path string) (key, url string, size int64, err error)
@@ -106,7 +91,7 @@ func (c *Clips) Ready() bool { return c != nil && c.ffmpeg != "" && c.store != n
 
 // Make animates the scene on the best route with fallbacks, lays the exact
 // words over it and stores the clip. ctx should allow several minutes.
-func (c *Clips) Make(ctx context.Context, req ClipRequest) (*ClipResult, error) {
+func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error) {
 	if !c.Ready() {
 		return nil, ErrNoFFmpeg
 	}
@@ -173,7 +158,7 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*ClipResult, error) 
 		if err != nil {
 			return nil, fmt.Errorf("media: store clip: %w", err)
 		}
-		return &ClipResult{URL: url, Key: key, Bytes: n, Seconds: req.Seconds, Width: size.X, Height: size.Y, SHA256: sum,
+		return &MediaResult{URL: url, Key: key, Bytes: n, Seconds: float64(req.Seconds), Width: size.X, Height: size.Y, SHA256: sum,
 			Route: rt.Key, CostUSD: rt.PriceUSD * float64(req.Seconds), SourceURL: src, Attempts: i + 1}, nil
 	}
 	if lastErr == nil {

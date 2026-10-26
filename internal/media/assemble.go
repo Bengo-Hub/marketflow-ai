@@ -62,18 +62,6 @@ type AssembleRequest struct {
 	LogoURL   string   // fetched into EndCard.Logo when set
 }
 
-// AssembleResult is the stored ad.
-type AssembleResult struct {
-	URL     string  `json:"url"`
-	Key     string  `json:"key"`
-	Bytes   int64   `json:"bytes"`
-	Seconds float64 `json:"seconds"`
-	Width   int     `json:"width"`
-	Height  int     `json:"height"`
-	SHA256  string  `json:"sha256"`
-	Lines   int     `json:"caption_lines"`
-}
-
 // AdStore keeps finished ads (httpware's video-drafts type).
 type AdStore interface {
 	PutAd(ctx context.Context, tenantID uuid.UUID, versionID, path string) (key, url string, size int64, err error)
@@ -133,7 +121,7 @@ func (r *AssembleRequest) validate() (size image.Point, total float64, err error
 
 // Make assembles and stores the ad. Every input is downloaded first, so a
 // missing scene fails before any encoding.
-func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*AssembleResult, error) {
+func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult, error) {
 	if !a.Ready() {
 		return nil, ErrNoFFmpeg
 	}
@@ -293,7 +281,7 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*AssembleRes
 	if err != nil {
 		return nil, fmt.Errorf("media: store ad: %w", err)
 	}
-	return &AssembleResult{URL: url, Key: key, Bytes: n, Seconds: total, Width: size.X, Height: size.Y, SHA256: sum, Lines: lines}, nil
+	return &MediaResult{URL: url, Key: key, Bytes: n, Seconds: total, Width: size.X, Height: size.Y, SHA256: sum, CaptionLines: lines}, nil
 }
 
 // cleanPTS renumbers a scene's frames from zero at the ad's frame rate. Inputs
