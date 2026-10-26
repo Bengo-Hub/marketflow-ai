@@ -400,8 +400,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		if !clips.Ready() {
 			logger.Warn("ffmpeg not found; motion posters and video ads disabled")
 		}
-		// Voices come from the owner's ElevenLabs collection (codevertex-voices unless set).
-		voices := media.NewVoices(mediaKeySource(resolver), store, logger).WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION"))
+		// Voices: the best voice for each content from the ElevenLabs account, the
+		// owner's collection (codevertex-voices unless set) and default list preferred.
+		voices := media.NewVoices(mediaKeySource(resolver), store, logger).
+			WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION")).
+			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES")))
 		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger))
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.

@@ -190,7 +190,10 @@ type adRequest struct {
 	VersionID   string              `json:"version_id"`
 	Format      string              `json:"format"`
 	Tier        string              `json:"tier"`
-	Voice       string              `json:"voice"`
+	Voice       string              `json:"voice"`    // a voice id or name; "" picks the best for the delivery
+	Delivery    string              `json:"delivery"` // ad (default) | ugc | kids | story | info
+	VoiceGender string              `json:"voice_gender"`
+	VoiceAccent string              `json:"voice_accent"` // e.g. african, kenyan, nigerian, british
 	Language    string              `json:"language"`
 	Scenes      []media.ScriptScene `json:"scenes"`
 	PhotoURLs   []string            `json:"photo_urls"`
@@ -236,7 +239,8 @@ func (h *OSHandler) Ad(w http.ResponseWriter, r *http.Request) {
 		req.Tier = media.TierStandard
 	}
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Tier: req.Tier,
-		Voice: req.Voice, Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
+		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
+		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
 		LogoURL: req.LogoURL, EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
@@ -266,8 +270,9 @@ func (h *OSHandler) Ad(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreativeVoices handles GET /api/v1/os/creative/voices: the voices a video ad
-// can use, the owner's collection first (the first is the default), then the
-// premade voices. Any signed-in tenant may read it.
+// can use (the account's, the owner's collection first, then the premade
+// ones) and the deliveries (ad, ugc, kids, story, info) that pick and direct
+// the voice when none is named. Any signed-in tenant may read it.
 func (h *OSHandler) CreativeVoices(w http.ResponseWriter, r *http.Request) {
 	if _, status, msg := tenantFromAuth(r); status != 0 {
 		writeError(w, status, msg)
@@ -277,7 +282,11 @@ func (h *OSHandler) CreativeVoices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"voices": h.ads.Voices().List(r.Context())})
+	deliveries := make([]media.Delivery, 0, len(media.Deliveries))
+	for _, k := range []string{media.DeliveryAd, media.DeliveryUGC, media.DeliveryKids, media.DeliveryStory, media.DeliveryInfo} {
+		deliveries = append(deliveries, media.Deliveries[k])
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"voices": h.ads.Voices().List(r.Context()), "deliveries": deliveries})
 }
 
 // businessType reads the tenant's business type for the compliance rules; ""

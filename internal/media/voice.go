@@ -65,8 +65,12 @@ type VoiceRequest struct {
 	Name      string // names the file within the version, e.g. "voice" or "scene-2"
 	Text      string
 	Language  string // en (default) or sw
-	Voice     string // a collection voice's name (a prefix will do) or id, or a premade name; "" picks the default
+	Voice     string // a voice id or name (a prefix will do); "" lets the delivery pick the best voice
 	Tier      string
+	// Delivery is the content kind (DeliveryAd, DeliveryUGC, ...): the voice
+	// settings, the direction tag and the traits the chosen voice should have.
+	Delivery string
+	Prefs    VoicePrefs
 }
 
 // WordTiming places a word in the audio, for captions.
@@ -96,13 +100,14 @@ var elevenBase = "https://api.elevenlabs.io"
 
 // Voices makes voice-overs on the best route with fallbacks.
 type Voices struct {
-	router  *Router
-	keys    KeySource
-	store   AudioStore
-	queue   *queueClient
-	http    *http.Client
-	library *voiceLibrary
-	logger  *zap.Logger
+	router   *Router
+	keys     KeySource
+	store    AudioStore
+	queue    *queueClient
+	http     *http.Client
+	library  *voiceLibrary
+	defaults []string // DefaultVoices unless set
+	logger   *zap.Logger
 
 	mu    sync.Mutex
 	plans map[string]planEntry // ElevenLabs plan per key
@@ -122,23 +127,33 @@ func NewVoices(keys KeySource, store AudioStore, logger *zap.Logger) *Voices {
 		logger = zap.NewNop()
 	}
 	return &Voices{router: NewRouter(VoiceRoutes), keys: keys, store: store, queue: newQueueClient(),
-		http: &http.Client{Timeout: 90 * time.Second}, library: newVoiceLibrary(""), logger: logger.Named("media.voices"),
-		plans: map[string]planEntry{}}
+		http: &http.Client{Timeout: 90 * time.Second}, library: newVoiceLibrary(""), defaults: DefaultVoices,
+		logger: logger.Named("media.voices"), plans: map[string]planEntry{}}
 }
 
-// WithCollection names the ElevenLabs voice collection to offer (default
+// WithCollection names the ElevenLabs voice collection to prefer (default
 // DefaultVoiceCollection); a collection id works too.
 func (v *Voices) WithCollection(name string) *Voices {
 	v.library = newVoiceLibrary(name)
 	return v
 }
 
-// List returns the voices the studio offers: the collection, then the premade ones.
-func (v *Voices) List(ctx context.Context) []LibraryVoice {
-	return append(v.collection(ctx), premadeVoices()...)
+// WithDefaults sets the default voices, best first (ids or name prefixes);
+// empty keeps DefaultVoices.
+func (v *Voices) WithDefaults(list []string) *Voices {
+	if len(list) > 0 {
+		v.defaults = list
+	}
+	return v
 }
 
-// collection reads the owner's collection with the ElevenLabs key, if any.
+// List returns the voices the studio offers: the account's (collection first),
+// then the catalogued premade ones it lacks.
+func (v *Voices) List(ctx context.Context) []LibraryVoice {
+	return withPremade(v.collection(ctx))
+}
+
+// collection reads the account's voices with the ElevenLabs key, if any.
 func (v *Voices) collection(ctx context.Context) []LibraryVoice {
 	if v.keys == nil {
 		return nil
@@ -162,8 +177,13 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 	if req.Language != "en" && req.Language != "sw" {
 		return nil, fmt.Errorf("%w: language must be en or sw", ErrVoiceInput)
 	}
+	if req.Delivery != "" {
+		if _, ok := Deliveries[req.Delivery]; !ok {
+			return nil, fmt.Errorf("%w: unknown delivery %q", ErrVoiceInput, req.Delivery)
+		}
+	}
 	collection := v.collection(ctx)
-	if _, ok := chooseVoice(collection, req.Voice, req.Language, ""); !ok {
+	if _, ok := pickVoice(collection, v.choice(req), req.Language, ""); !ok {
 		return nil, fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
 	}
 	if req.Tier == "" {
@@ -197,7 +217,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 		}
 		if !exact {
 			seconds = mp3Seconds(audio)
-			words = estimateWords(req.Text, seconds)
+			words = estimateWords(stripTags(req.Text), seconds)
 		}
 		key, url, err := v.store.PutAudio(ctx, req.TenantID, req.VersionID, req.Name, audio)
 		if err != nil {
@@ -265,21 +285,24 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 		if rt.Key == "elevenlabs/eleven-v4" {
 			model = "eleven_v4"
 		}
-		voice, ok := chooseVoice(collection, req.Voice, req.Language, model)
+		voice, ok := pickVoice(collection, v.choice(req), req.Language, model)
 		if !ok {
 			return nil, nil, false, "", fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
 		}
 		audio, words, err := v.eleven(ctx, key, model, voice.ID, req)
 		return audio, words, err == nil, voice.Name, err
 	case "fal/elevenlabs-v3":
-		voice, _ := chooseVoice(collection, req.Voice, req.Language, "")
+		voice, _ := pickVoice(collection, v.choice(req), req.Language, "")
 		name := falVoiceFor(voice)
+		d := DeliveryFor(req.Delivery)
 		var out struct {
 			Audio struct {
 				URL string `json:"url"`
 			} `json:"audio"`
 		}
-		input := map[string]any{"text": req.Text, "voice": name, "language_code": req.Language}
+		// fal's route takes stability only; the direction tag works on v3 too.
+		input := map[string]any{"text": directed(d, req.Text), "voice": name, "language_code": req.Language,
+			"stability": d.Settings.Stability}
 		if err := v.queue.run(ctx, falJob(key, "fal-ai/elevenlabs/tts/eleven-v3"), input, &out); err != nil {
 			return nil, nil, false, "", err
 		}
@@ -292,10 +315,27 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 	return nil, nil, false, "", fmt.Errorf("media: no builder for route %s", rt.Key)
 }
 
+// choice is a request's voice choice.
+func (v *Voices) choice(req VoiceRequest) VoiceChoice {
+	return VoiceChoice{Name: req.Voice, Delivery: DeliveryFor(req.Delivery), Prefs: req.Prefs, Defaults: v.defaults}
+}
+
+// directed opens the text with the delivery's direction tag, unless the text
+// already starts with a tag of its own (the script's, or the owner's).
+func directed(d Delivery, text string) string {
+	if d.Direction == "" || strings.HasPrefix(strings.TrimSpace(text), "[") {
+		return text
+	}
+	return d.Direction + " " + text
+}
+
 // eleven calls ElevenLabs text to speech with timestamps: the audio and the
-// time of every character, grouped here into words.
+// time of every character, grouped here into words. The delivery sets the
+// voice settings and the opening direction tag.
 func (v *Voices) eleven(ctx context.Context, key, model, voiceID string, req VoiceRequest) ([]byte, []WordTiming, error) {
-	body, _ := json.Marshal(map[string]any{"text": req.Text, "model_id": model, "language_code": req.Language})
+	d := DeliveryFor(req.Delivery)
+	body, _ := json.Marshal(map[string]any{"text": directed(d, req.Text), "model_id": model, "language_code": req.Language,
+		"voice_settings": d.Settings})
 	endpoint := elevenBase + "/v1/text-to-speech/" + url.PathEscape(voiceID) + "/with-timestamps?output_format=mp3_44100_128"
 	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -335,10 +375,13 @@ func (v *Voices) eleven(ctx context.Context, key, model, voiceID string, req Voi
 }
 
 // wordsFromChars groups character timings into words (runs without spaces).
+// Bracketed directions ([excited], [Warm, upbeat tone]) are not spoken, so
+// they are skipped: captions and scene timing see only the spoken words.
 func wordsFromChars(chars []string, starts, ends []float64) []WordTiming {
 	var words []WordTiming
 	var cur strings.Builder
 	start, end := 0.0, 0.0
+	depth := 0
 	flush := func() {
 		if cur.Len() > 0 {
 			words = append(words, WordTiming{Text: cur.String(), Start: start, End: end})
@@ -346,6 +389,17 @@ func wordsFromChars(chars []string, starts, ends []float64) []WordTiming {
 		}
 	}
 	for i, c := range chars {
+		switch {
+		case c == "[":
+			flush()
+			depth++
+			continue
+		case c == "]" && depth > 0:
+			depth--
+			continue
+		case depth > 0:
+			continue
+		}
 		if strings.TrimSpace(c) == "" {
 			flush()
 			continue

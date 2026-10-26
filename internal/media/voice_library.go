@@ -13,33 +13,39 @@ import (
 	"time"
 )
 
-// The studio's voices are the platform owner's ElevenLabs collection (named by
-// VoiceCollection, "codevertex-voices" by default): voices added there are
-// offered within libraryTTL, with no code change. The default is Emily E., then
-// any other Emily that speaks the language, then any voice in the collection,
-// then the premade voices in VoiceCatalog. Library voices work only on a paid
+// The studio picks from every voice the ElevenLabs account holds: the owner's
+// collection (VoiceCollection, "codevertex-voices" by default) is preferred,
+// but never the only choice, so the best voice for the content wins (see
+// rankVoices). Voices added to the account or the collection are picked up
+// within libraryTTL, with no code change. Library voices work only on a paid
 // ElevenLabs plan ("Free users cannot use library voices via the API",
 // 2026-10-26), which the direct route already requires.
 
 // DefaultVoiceCollection is the owner's ElevenLabs voice collection.
 const DefaultVoiceCollection = "codevertex-voices"
 
-// preferredVoices are tried in order for a request that names no voice: a name
-// prefix, case-insensitive.
-var preferredVoices = []string{"Emily E", "Emily"}
+// DefaultVoices are the configured defaults, best first: an id or a name
+// prefix each (owner, 2026-10-27). Yna Agalo, a Kenyan voice, leads; then
+// the multilingual Emily the owner uses in ElevenLabs Studio
+// (yYHmXZDCllTpvyYiLRDT, counted once the account holds it), then Emily E.
+// MF_ELEVENLABS_DEFAULT_VOICES overrides the list.
+var DefaultVoices = []string{"ijKilL5CnjXKMWDHOJH8", "yYHmXZDCllTpvyYiLRDT", "Emily E", "Emily"}
 
 // libraryTTL: the owner adds voices now and then, not by the minute.
 const libraryTTL = time.Hour
 
-// LibraryVoice is one voice of the collection.
+// LibraryVoice is one voice the studio can use.
 type LibraryVoice struct {
-	ID       string   `json:"voice_id"`
-	Name     string   `json:"name"`
-	Language string   `json:"language"` // the voice's own language label, e.g. en
-	Accent   string   `json:"accent,omitempty"`
-	Gender   string   `json:"gender,omitempty"`
-	Models   []string `json:"models,omitempty"` // models it is tuned for
-	Premade  bool     `json:"premade,omitempty"`
+	ID           string   `json:"voice_id"`
+	Name         string   `json:"name"`
+	Language     string   `json:"language"` // the voice's own language label, e.g. en
+	Accent       string   `json:"accent,omitempty"`
+	Gender       string   `json:"gender,omitempty"`
+	UseCase      string   `json:"use_case,omitempty"`    // e.g. advertisement, social_media
+	Descriptive  string   `json:"descriptive,omitempty"` // e.g. warm, confident
+	Models       []string `json:"models,omitempty"`      // models it is tuned for
+	InCollection bool     `json:"in_collection,omitempty"`
+	Premade      bool     `json:"premade,omitempty"`
 }
 
 // speaks reports whether the voice can read lang with model: its own language,
@@ -53,7 +59,7 @@ func (v LibraryVoice) speaks(lang, model string) bool {
 
 // multilingual models read Swahili as well as English (eleven_v4 lists 94 languages).
 func multilingual(model string) bool {
-	return strings.HasPrefix(model, "eleven_v4") || strings.HasPrefix(model, "eleven_multilingual")
+	return strings.HasPrefix(model, "eleven_v4") || strings.HasPrefix(model, "eleven_multilingual") || model == ""
 }
 
 func contains(list []string, s string) bool {
@@ -65,7 +71,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// voiceLibrary lists the collection, cached per ElevenLabs key.
+// voiceLibrary lists the account's voices, cached per ElevenLabs key.
 type voiceLibrary struct {
 	collection string
 	http       *http.Client
@@ -86,8 +92,8 @@ func newVoiceLibrary(collection string) *voiceLibrary {
 	return &voiceLibrary{collection: collection, http: &http.Client{Timeout: 10 * time.Second}, cache: map[string]libraryEntry{}}
 }
 
-// voices returns the collection's voices; a failed read keeps the last good
-// list, and with none the premade voices still serve.
+// voices returns the account's voices, collection first; a failed read keeps
+// the last good list, and with none the premade voices still serve.
 func (l *voiceLibrary) voices(ctx context.Context, key string) []LibraryVoice {
 	if key == "" {
 		return nil
@@ -108,6 +114,20 @@ func (l *voiceLibrary) voices(ctx context.Context, key string) []LibraryVoice {
 	return list
 }
 
+type apiVoice struct {
+	ID       string            `json:"voice_id"`
+	Name     string            `json:"name"`
+	Category string            `json:"category"`
+	Labels   map[string]string `json:"labels"`
+	Models   []string          `json:"high_quality_base_model_ids"`
+}
+
+func (v apiVoice) library(inCollection bool) LibraryVoice {
+	return LibraryVoice{ID: v.ID, Name: v.Name, Language: v.Labels["language"], Accent: v.Labels["accent"],
+		Gender: v.Labels["gender"], UseCase: v.Labels["use_case"], Descriptive: v.Labels["descriptive"],
+		Models: v.Models, InCollection: inCollection, Premade: v.Category == "premade"}
+}
+
 func (l *voiceLibrary) fetch(ctx context.Context, key string) ([]LibraryVoice, error) {
 	var colls struct {
 		Collections []struct {
@@ -118,30 +138,37 @@ func (l *voiceLibrary) fetch(ctx context.Context, key string) ([]LibraryVoice, e
 	if err := l.get(ctx, key, "/v1/voices/collections", &colls); err != nil {
 		return nil, err
 	}
-	id := ""
+	collID := ""
 	for _, c := range colls.Collections {
 		if strings.EqualFold(c.Title, l.collection) || c.ID == l.collection {
-			id = c.ID
+			collID = c.ID
 		}
 	}
-	if id == "" {
-		return nil, nil // no such collection: the premade voices serve
+	var out []LibraryVoice
+	inColl := map[string]bool{}
+	if collID != "" {
+		var page struct {
+			Voices []apiVoice `json:"voices"`
+		}
+		if err := l.get(ctx, key, "/v2/voices?page_size=100&collection_id="+url.QueryEscape(collID), &page); err != nil {
+			return nil, err
+		}
+		for _, v := range page.Voices {
+			out = append(out, v.library(true))
+			inColl[v.ID] = true
+		}
 	}
-	var page struct {
-		Voices []struct {
-			ID     string            `json:"voice_id"`
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
-			Models []string          `json:"high_quality_base_model_ids"`
-		} `json:"voices"`
+	// The rest of the account: the owner's other voices and the premade ones.
+	var all struct {
+		Voices []apiVoice `json:"voices"`
 	}
-	if err := l.get(ctx, key, "/v2/voices?page_size=100&collection_id="+url.QueryEscape(id), &page); err != nil {
-		return nil, err
+	if err := l.get(ctx, key, "/v2/voices?page_size=100", &all); err != nil {
+		return out, nil // the collection alone still serves
 	}
-	out := make([]LibraryVoice, 0, len(page.Voices))
-	for _, v := range page.Voices {
-		out = append(out, LibraryVoice{ID: v.ID, Name: v.Name, Language: v.Labels["language"], Accent: v.Labels["accent"],
-			Gender: v.Labels["gender"], Models: v.Models})
+	for _, v := range all.Voices {
+		if !inColl[v.ID] {
+			out = append(out, v.library(false))
+		}
 	}
 	return out, nil
 }
@@ -162,7 +189,7 @@ func (l *voiceLibrary) get(ctx context.Context, key, path string, out any) error
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("elevenlabs %s: status %d", path, resp.StatusCode)
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
 }
 
 // premadeVoices are the built-in fallback, every one usable on fal's route too,
@@ -176,12 +203,37 @@ func premadeVoices() []LibraryVoice {
 	return out
 }
 
-// chooseVoice picks the voice for a request: the named one (by id or name,
-// case-insensitive, a name prefix such as "Emily E" is enough) from the
-// collection or the premade voices, or else the default order.
-func chooseVoice(collection []LibraryVoice, name, lang, model string) (LibraryVoice, bool) {
-	all := append(append([]LibraryVoice{}, collection...), premadeVoices()...)
-	if name = strings.TrimSpace(name); name != "" {
+// withPremade adds the catalogued premade voices the account list lacks.
+func withPremade(account []LibraryVoice) []LibraryVoice {
+	out := append([]LibraryVoice{}, account...)
+	for _, p := range premadeVoices() {
+		known := false
+		for _, v := range account {
+			if v.ID == p.ID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// VoiceChoice is what a voice-over asks for.
+type VoiceChoice struct {
+	Name     string // a voice id or name (a prefix will do); "" lets the delivery decide
+	Delivery Delivery
+	Prefs    VoicePrefs
+	Defaults []string
+}
+
+// pickVoice returns the named voice, or the best voice for the delivery that
+// can read lang with model; ok is false only for a named voice that does not exist.
+func pickVoice(account []LibraryVoice, c VoiceChoice, lang, model string) (LibraryVoice, bool) {
+	all := withPremade(account)
+	if name := strings.TrimSpace(c.Name); name != "" {
 		for _, v := range all {
 			if v.ID == name || strings.EqualFold(v.Name, name) || hasPrefixFold(v.Name, name) {
 				return v, true
@@ -189,17 +241,11 @@ func chooseVoice(collection []LibraryVoice, name, lang, model string) (LibraryVo
 		}
 		return LibraryVoice{}, false
 	}
-	for _, p := range preferredVoices {
-		for _, v := range collection {
-			if hasPrefixFold(v.Name, p) && v.speaks(lang, model) {
-				return v, true
-			}
-		}
-	}
-	for _, v := range collection {
-		if v.speaks(lang, model) {
-			return v, true
-		}
+	// The premade DefaultVoice closes the default list, so with no account
+	// voices at all the fallback is that one, not the first by name.
+	defaults := append(append([]string{}, c.Defaults...), DefaultVoice)
+	if ranked := rankVoices(all, c.Delivery, c.Prefs, lang, model, defaults); len(ranked) > 0 {
+		return ranked[0], true
 	}
 	return LibraryVoice{ID: VoiceCatalog[DefaultVoice], Name: DefaultVoice, Premade: true}, true
 }
@@ -208,11 +254,11 @@ func hasPrefixFold(s, prefix string) bool {
 	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
-// falVoiceFor is the voice name fal's ElevenLabs route gets: a premade voice as
-// is; for a library voice (which fal's account may not hold) the closest
-// premade one by gender and accent.
+// falVoiceFor is the voice name fal's ElevenLabs route gets: a catalogued
+// premade voice as is; for any other voice (which fal's account may not hold)
+// the closest premade one by gender and accent.
 func falVoiceFor(v LibraryVoice) string {
-	if v.Premade {
+	if _, ok := VoiceCatalog[v.Name]; ok {
 		return v.Name
 	}
 	switch {

@@ -49,7 +49,9 @@ type AdRequest struct {
 	VersionID string
 	Format    string
 	Tier      string
-	Voice     string // a collection voice (name prefix or id) or a premade name; "" picks Emily E.
+	Voice     string // a voice id or name prefix; "" lets the delivery pick the best voice
+	Delivery  string // DeliveryAd (default), DeliveryUGC, DeliveryKids, DeliveryStory, DeliveryInfo
+	Prefs     VoicePrefs
 	Language  string // en or sw
 	Scenes    []ScriptScene
 	Photos    []string // the owner's product photos, http(s)
@@ -77,6 +79,9 @@ func (a *Ads) Ready() bool { return a != nil && a.voices != nil && a.asm.Ready()
 func (a *Ads) Validate(req AdRequest) error {
 	if _, ok := Formats[req.Format]; !ok {
 		return &UserError{Msg: "format must be 1080x1080, 1080x1350 or 1080x1920"}
+	}
+	if _, ok := Deliveries[req.Delivery]; req.Delivery != "" && !ok {
+		return &UserError{Msg: "delivery must be ad, ugc, kids, story or info"}
 	}
 	if len(req.Scenes) < MinAdScenes || len(req.Scenes) > MaxAdScenes {
 		return &UserError{Msg: fmt.Sprintf("a video ad has %d to %d scenes", MinAdScenes, MaxAdScenes)}
@@ -136,7 +141,8 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		}
 	}
 	voice, err := a.voices.Make(ctx, VoiceRequest{TenantID: req.TenantID, VersionID: req.VersionID, Name: "voice",
-		Text: strings.Join(lines, " "), Language: req.Language, Voice: req.Voice, Tier: req.Tier})
+		Text: strings.Join(lines, " "), Language: req.Language, Voice: req.Voice, Tier: req.Tier,
+		Delivery: req.Delivery, Prefs: req.Prefs})
 	if err != nil {
 		return nil, fmt.Errorf("media: voice-over: %w", err)
 	}
@@ -182,7 +188,8 @@ func sceneTimes(scenes []ScriptScene, words []WordTiming, voiceSeconds float64) 
 	counts := make([]int, len(scenes))
 	total := 0
 	for i, s := range scenes {
-		counts[i] = len(strings.Fields(s.Voiceover))
+		// Only spoken words: an inline [tag] is not in the voice's word timings.
+		counts[i] = len(strings.Fields(stripTags(s.Voiceover)))
 		total += counts[i]
 	}
 	if total != len(words) {
@@ -213,10 +220,10 @@ func proportionalTimes(scenes []ScriptScene, voiceSeconds float64) []float64 {
 	out := make([]float64, len(scenes))
 	chars := 0
 	for _, s := range scenes {
-		chars += utf8.RuneCountInString(strings.TrimSpace(s.Voiceover))
+		chars += utf8.RuneCountInString(stripTags(s.Voiceover))
 	}
 	for i, s := range scenes {
-		n := utf8.RuneCountInString(strings.TrimSpace(s.Voiceover))
+		n := utf8.RuneCountInString(stripTags(s.Voiceover))
 		if n == 0 || chars == 0 {
 			out[i] = clampSeconds(s.DurationS)
 			continue

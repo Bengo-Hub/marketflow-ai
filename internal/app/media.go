@@ -21,6 +21,17 @@ var mediaKeyEnv = map[string][]string{
 	"creatomate": {"MF_CREATOMATE_API_KEY"},
 }
 
+// splitList reads a comma-separated setting, dropping empty items.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // mediaKeySource resolves a provider's key from platform settings, falling back
 // to the environment. Each provider's answer is reused for a minute, and a
 // failed lookup keeps the last good key, so a settings or Redis hiccup never

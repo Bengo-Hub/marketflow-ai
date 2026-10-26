@@ -118,7 +118,7 @@ func (s *servedAudio) PutAudio(_ context.Context, _ uuid.UUID, versionID, name s
 	return "audio-drafts/voice" + p, s.srv.URL + p, nil
 }
 
-// A script, the owner's photo and clip and Emily E.'s voice make one ad: as
+// A script, the owner's photo and clip and the default voice make one ad: as
 // long as the voice plus the end card, with the end card in its last seconds.
 // Needs ffmpeg.
 func TestAdsMakeEndToEnd(t *testing.T) {
@@ -167,8 +167,8 @@ func TestAdsMakeEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(el.path, "/CXoGcuszI2UkuF6sqV8W/") {
-		t.Fatalf("the default voice must be Emily E.: %s", el.path)
+	if !strings.Contains(el.path, "/ijKilL5CnjXKMWDHOJH8/") {
+		t.Fatalf("the default voice must be Yna Agalo: %s", el.path)
 	}
 	// The voice ends at 4 s; the end card adds endCardTail.
 	if res.Seconds < 4+endCardTail-0.05 || res.Seconds > 4+endCardTail+0.5 || res.CaptionLines < 2 || res.Route != "elevenlabs/eleven-v4-turbo" {
