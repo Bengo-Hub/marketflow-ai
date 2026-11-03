@@ -123,7 +123,7 @@ func (p *Posters) Make(ctx context.Context, req PosterRequest) (*PosterResult, e
 		}
 	}
 
-	routes := p.router.Order(CapPosterImage, req.Tier, func(rt Route) bool { return p.keys(ctx, rt.Provider) != "" })
+	routes := p.router.Order(CapPosterImage, req.Tier, func(rt Route) bool { return usable(ctx, p.keys, rt, rt.Cost(0)) })
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -162,7 +162,7 @@ func (p *Posters) Make(ctx context.Context, req PosterRequest) (*PosterResult, e
 	if lastErr == nil {
 		return nil, ErrNoRoute
 	}
-	return nil, fmt.Errorf("%w: %v", ErrNoRoute, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrNoRoute, lastErr)
 }
 
 // Recompose makes a text-only revision: the same scene (our stored copy) with

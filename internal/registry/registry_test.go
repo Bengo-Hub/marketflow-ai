@@ -4,14 +4,13 @@ import "testing"
 
 func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 	r := Defaults()
-	// Credits from the Ads Autopilot plan, section 4.4.1, re-based on 2026-10-24 on
-	// the provider routes confirmed in docs/integrations/video-generation-providers.md
-	// (presenter and cinematic lite/fast rose; the rest held).
+	// Credits on the 2026-11-03 tier map (docs/integrations/ugc-provider-bakeoff.md and
+	// video-generation-providers.md, "What an ad costs").
 	want := map[string]int{
-		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 3, Poster: 2, PosterPremium: 5,
-		TemplateVideo: 12, Presenter: 53, PresenterPremium: 91,
-		CinematicLite: 57, CinematicFast: 92, CinematicStandard: 262, LaunchFee: 10,
-		MotionPoster: 14, MotionPosterPremium: 23,
+		ChatTurn: 1, CopyBatch: 1, Script: 1, Storyboard: 1, Poster: 2, PosterPremium: 5,
+		TemplateVideo: 12, Presenter: 94, PresenterPremium: 191,
+		CinematicLite: 60, CinematicFast: 187, CinematicStandard: 289, LaunchFee: 10,
+		MotionPoster: 15, MotionPosterPremium: 48,
 	}
 	for k, w := range want {
 		got, err := r.Credits(k)
@@ -23,10 +22,10 @@ func TestDefaultCreditsMatchPlanTable(t *testing.T) {
 		t.Fatal("unknown output must error")
 	}
 	// Per-5 s outputs scale with length, rounding up.
-	if c, _ := r.CreditsFor(MotionPoster, 5); c != 14 {
+	if c, _ := r.CreditsFor(MotionPoster, 5); c != 15 {
 		t.Errorf("5 s = %d", c)
 	}
-	if c, _ := r.CreditsFor(MotionPoster, 8); c != 23 { // 14*8/5 = 22.4
+	if c, _ := r.CreditsFor(MotionPoster, 8); c != 24 { // 15*8/5 = 24
 		t.Errorf("8 s = %d", c)
 	}
 }
@@ -104,7 +103,7 @@ func TestPlanUGCWorkedExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.MaxLiveAds != 2 || p.Recommended.Shortlist != 2 || p.Recommended.Variants != 6 || p.Recommended.Credits != 113 {
+	if p.MaxLiveAds != 2 || p.Recommended.Shortlist != 2 || p.Recommended.Variants != 6 || p.Recommended.Credits != 191 { // copy 1 + 2 storyboards (2) + 2 presenters (188)
 		t.Fatalf("recommended = %+v (max live %d)", p.Recommended, p.MaxLiveAds)
 	}
 	if p.Alternatives[0].Credits != 5 || p.Alternatives[1].Credits != 1 {

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -165,6 +166,29 @@ func (e *errJobFailed) Error() string {
 	return fmt.Sprintf("%s: job %s: %s", e.provider, e.status, e.detail)
 }
 
+// Final job outcomes other than a plain failure. Each is terminal: the job is never polled
+// again, the next route is tried, and a job that ends with no route charges nothing (the
+// media job runner refunds it).
+var (
+	// ErrContentRefused is a provider's safety check rejecting the input or the output
+	// (Higgsfield "nsfw"). The provider is up, so it does not count against the route.
+	ErrContentRefused = errors.New("media: the provider's safety check refused this content")
+	// ErrJobCanceled is a job the provider canceled before it finished.
+	ErrJobCanceled = errors.New("media: the provider canceled the job")
+)
+
+// Unwrap exposes the outcome sentinels, and for a refusal a 422 so the breaker reads it as
+// a bad input rather than an outage.
+func (e *errJobFailed) Unwrap() []error {
+	switch e.status {
+	case "nsfw":
+		return []error{ErrContentRefused, &ai.StatusError{Provider: e.provider, Code: http.StatusUnprocessableEntity, Body: "content refused"}}
+	case "canceled":
+		return []error{ErrJobCanceled}
+	}
+	return nil
+}
+
 // falJob is a fal.ai queue job (https://queue.fal.run). Status values are
 // IN_QUEUE, IN_PROGRESS and COMPLETED; the output is at response_url.
 func falJob(key, endpoint string) queueJob {
@@ -211,7 +235,11 @@ func higgsfieldJob(key, path string) queueJob {
 			case "completed":
 				return true, "", nil
 			case "failed", "nsfw", "canceled":
-				return false, "", &errJobFailed{provider: "higgsfield", status: s.Status, detail: s.Error}
+				detail := s.Error
+				if detail == "" {
+					detail = map[string]string{"failed": "the job failed", "nsfw": "content refused by the safety check", "canceled": "the job was canceled"}[s.Status]
+				}
+				return false, "", &errJobFailed{provider: "higgsfield", status: s.Status, detail: detail}
 			default: // queued, in_progress
 				return false, "", nil
 			}

@@ -64,7 +64,16 @@ type AdRequest struct {
 type Ads struct {
 	voices *Voices
 	asm    *Assembler
+	// presenters makes lip-synced presenter scenes. It is wired here for the presenter
+	// tier; Validate still refuses presenter shots until the ad job renders them (Sprint 15).
+	presenters *Presenters
 }
+
+// WithPresenters attaches the presenter pipeline.
+func (a *Ads) WithPresenters(p *Presenters) *Ads { a.presenters = p; return a }
+
+// Presenters returns the presenter pipeline (nil when not wired).
+func (a *Ads) Presenters() *Presenters { return a.presenters }
 
 // NewAds builds the ad pipeline.
 func NewAds(voices *Voices, asm *Assembler) *Ads { return &Ads{voices: voices, asm: asm} }

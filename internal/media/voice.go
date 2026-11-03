@@ -195,7 +195,8 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 	if v.store == nil {
 		return nil, fmt.Errorf("media: object storage is not configured")
 	}
-	routes := v.router.Order(CapVoice, req.Tier, func(rt Route) bool { return v.eligible(ctx, rt) })
+	chars := float64(n)
+	routes := v.router.Order(CapVoice, req.Tier, func(rt Route) bool { return v.eligible(ctx, rt) && v.covered(rt, chars) })
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -229,7 +230,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 	if lastErr == nil {
 		return nil, ErrNoRoute
 	}
-	return nil, fmt.Errorf("%w: %v", ErrNoRoute, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrNoRoute, lastErr)
 }
 
 // eligible needs the provider's key, and for ElevenLabs direct a paid plan.
@@ -242,6 +243,15 @@ func (v *Voices) eligible(ctx context.Context, rt Route) bool {
 		return v.paidPlan(ctx, key)
 	}
 	return true
+}
+
+// covered checks the provider's last balance reading: ElevenLabs counts characters,
+// fal counts dollars (PriceUSD is per 1,000 characters).
+func (v *Voices) covered(rt Route, chars float64) bool {
+	if rt.Provider == "elevenlabs" {
+		return providerBalances.Allows(rt.Provider, chars)
+	}
+	return providerBalances.Allows(rt.Provider, rt.PriceUSD*chars/1000)
 }
 
 // paidPlan reads the ElevenLabs subscription tier, cached per key. An unknown

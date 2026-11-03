@@ -63,28 +63,28 @@ type Registry struct {
 
 // Output keys used by the OS.
 const (
-	ChatTurn          = "chat_turn"
-	CopyBatch         = "copy_batch"
-	Script            = "script"
-	Storyboard        = "storyboard"
-	Poster            = "poster"
-	PosterPremium     = "poster_premium"
-	TemplateVideo     = "template_video_30s"
+	ChatTurn      = "chat_turn"
+	CopyBatch     = "copy_batch"
+	Script        = "script"
+	Storyboard    = "storyboard"
+	Poster        = "poster"
+	PosterPremium = "poster_premium"
+	TemplateVideo = "template_video_30s"
 	// Motion poster: a poster's clean scene animated, its exact words laid over
 	// it. Priced per 5 s clip; other lengths scale (see CreditsFor).
 	MotionPoster        = "motion_poster_5s"
 	MotionPosterPremium = "motion_poster_premium_5s"
-	Presenter         = "presenter_30s"
-	PresenterPremium  = "presenter_premium_30s"
-	CinematicLite     = "cinematic_lite_20s"
-	CinematicFast     = "cinematic_fast_20s"
-	CinematicStandard = "cinematic_standard_20s"
-	LaunchFee         = "launch_fee"
+	Presenter           = "presenter_30s"
+	PresenterPremium    = "presenter_premium_30s"
+	CinematicLite       = "cinematic_lite_20s"
+	CinematicFast       = "cinematic_fast_20s"
+	CinematicStandard   = "cinematic_standard_20s"
+	LaunchFee           = "launch_fee"
 )
 
-// Defaults returns the registry from the Ads Autopilot plan (researched
-// 2026-10-22). Bundle prices are the live subscriptions-api prices; the
-// re-priced bundles proposed for Sprint 15 apply once they ship there.
+// Defaults returns the registry: the Ads Autopilot plan's outputs priced on the
+// 2026-11-03 tier map. Bundle prices are the live subscriptions-api prices
+// (100 credits for KES 1,000, 500 for KES 4,000).
 func Defaults() Registry {
 	return Registry{
 		Settings: Settings{
@@ -101,31 +101,32 @@ func Defaults() Registry {
 			ChatTurn:  {Key: ChatTurn, Name: "Conversation turn", Kind: "fee", Credits: 1},
 			CopyBatch: {Key: CopyBatch, Name: "Copy batch (text variants)", Kind: "text", Credits: 1},
 			Script:    {Key: Script, Name: "Script and 3 hooks", Kind: "text", Credits: 1},
-			// Six keyframes at about USD 0.015 each on a Flux-class model (the plan's
-			// USD 0.02-0.15 range; its 3-credit price matches the middle of it).
-			Storyboard: {Key: Storyboard, Name: "Storyboard (6 keyframes)", Kind: "media", CostUSD: 0.09},
-			// Upper-bound provider costs per output, from the routes confirmed on
-			// 2026-10-24 (docs/integrations/video-generation-providers.md, "What an ad
-			// costs"). An estimate never sits below its confirmed route cost.
-			// Poster: Seedream v5 lite USD 0.035 plus our compositor (free).
+			// Tier map of 2026-11-03 (marketflow/docs/integrations/ugc-provider-bakeoff.md). The
+			// lowest tier of each output runs on the least costly routes; higher tiers buy quality
+			// and features. Higgsfield bills per generation, measured through /models/usage and
+			// /estimate; fal prices are its published docs prices. Every figure is an upper bound.
+			// Storyboard: six Soul v2 frames at USD 0.004 each, with room for one retry.
+			Storyboard: {Key: Storyboard, Name: "Storyboard (6 keyframes)", Kind: "media", CostUSD: 0.03},
+			// Poster: fal Seedream v5 lite (USD 0.035), then Soul v2 (USD 0.004), plus our compositor.
 			Poster: {Key: Poster, Name: "Poster or static image ad", Kind: "media", CostUSD: 0.05, Feature: "ai_static_ads"},
 			// Premium poster: Nano Banana Pro USD 0.15 plus our compositor.
 			PosterPremium: {Key: PosterPremium, Name: "Premium poster", Kind: "media", CostUSD: 0.15, Feature: "ai_static_ads"},
-			// Template video: about USD 0.25 (frames, images-to-video, voice, music).
+			// Template video: photos with a push-in, voice, music and local ffmpeg assembly.
 			TemplateVideo: {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
-			// Motion poster 5 s: Kling 3.0 std at the list USD 0.084/s (0.42) plus our
-			// ffmpeg text overlay (free); premium is Seedance 2.0 at USD 0.141/s (0.71).
-			MotionPoster:        {Key: MotionPoster, Name: "Motion poster, 5 s", Kind: "media", CostUSD: 0.42, Feature: "ai_video_template"},
-			MotionPosterPremium: {Key: MotionPosterPremium, Name: "Premium motion poster, 5 s", Kind: "media", CostUSD: 0.71, Feature: "ai_video_template"},
-			// Presenter: 12 s VEED Fabric, two 4 s Kling 3.0 clips, voice: about USD 1.66.
-			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 1.70, Feature: "ai_video_presenter", NeedsStoryboard: true},
-			// Premium presenter: Aurora 720p, Seedance 2.0 clips, Eleven v4: about USD 2.85.
-			PresenterPremium: {Key: PresenterPremium, Name: "Premium presenter ad, 30 s", Kind: "media", CostUSD: 2.90, Feature: "ai_video_presenter_premium", NeedsStoryboard: true},
-			// Cinematic lite: Kling 3.0 std 20 s at the list price USD 1.68, plus voice and music.
-			CinematicLite: {Key: CinematicLite, Name: "Cinematic ad 20 s (Lite)", Kind: "media", CostUSD: 1.80, Feature: "ai_video_cinematic", NeedsStoryboard: true},
-			// Cinematic fast: Seedance 2.0 20 s at the list price USD 2.82, plus voice and music.
-			CinematicFast:     {Key: CinematicFast, Name: "Cinematic ad 20 s (Fast)", Kind: "media", CostUSD: 2.95, Feature: "ai_video_cinematic", NeedsStoryboard: true},
-			CinematicStandard: {Key: CinematicStandard, Name: "Cinematic ad 20 s (Standard)", Kind: "media", CostUSD: 8.40, Feature: "ai_video_cinematic_premium", NeedsStoryboard: true},
+			// Motion poster 5 s: Hailuo 2.3 std (USD 0.28 per 6 s clip), then Kling 3.0 std (USD 0.476
+			// a clip), plus our ffmpeg text overlay. Premium is Seedance 2.0 at 720p (about USD 0.30/s).
+			MotionPoster:        {Key: MotionPoster, Name: "Motion poster, 5 s", Kind: "media", CostUSD: 0.48, Feature: "ai_video_template"},
+			MotionPosterPremium: {Key: MotionPosterPremium, Name: "Premium motion poster, 5 s", Kind: "media", CostUSD: 1.51, Feature: "ai_video_template"},
+			// Presenter 30 s: fal VEED Fabric at its docs price, then Seedance 2.5 reference-to-video at
+			// 480p (about USD 0.21/s) as the fallback, Hailuo B-roll and voice: USD 1.90 to 3.00.
+			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 3.00, Feature: "ai_video_presenter", NeedsStoryboard: true},
+			// Premium presenter 30 s: Seedance 2.5 at 720p (about USD 0.46/s), Kling 3.0 std B-roll, voice.
+			PresenterPremium: {Key: PresenterPremium, Name: "Premium presenter ad, 30 s", Kind: "media", CostUSD: 6.10, Feature: "ai_video_presenter_premium", NeedsStoryboard: true},
+			// Cinematic 20 s: Lite on Kling 3.0 std clips (about USD 1.90), Fast on Seedance 2.0 at
+			// 720p (about USD 6.00), Standard on Seedance 2.5 at 720p (about USD 9.25), voice and music included.
+			CinematicLite:     {Key: CinematicLite, Name: "Cinematic ad 20 s (Lite)", Kind: "media", CostUSD: 1.90, Feature: "ai_video_cinematic", NeedsStoryboard: true},
+			CinematicFast:     {Key: CinematicFast, Name: "Cinematic ad 20 s (Fast)", Kind: "media", CostUSD: 6.00, Feature: "ai_video_cinematic", NeedsStoryboard: true},
+			CinematicStandard: {Key: CinematicStandard, Name: "Cinematic ad 20 s (Standard)", Kind: "media", CostUSD: 9.25, Feature: "ai_video_cinematic_premium", NeedsStoryboard: true},
 			LaunchFee:         {Key: LaunchFee, Name: "Paid launch (clients without a plan)", Kind: "fee", Credits: 10},
 		},
 		Bundles: []Bundle{

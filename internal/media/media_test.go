@@ -261,14 +261,16 @@ func TestRouterOrderByTier(t *testing.T) {
 	}
 
 	// The providers doc's fallbacks come after every primary route even when
-	// they score higher on price: Kling 3.0 std is the clip default, not Grok.
+	// they score higher on price: Hailuo 2.3 std is the clip default, not Grok.
 	clips := keys(NewRouter(ClipRoutes).Order(CapImageToVideo, TierStandard, nil))
-	if strings.Join(clips, ",") != "higgsfield/kling-v3-std,fal/grok-imagine-video,fal/kling-v3-pro" {
+	if strings.Join(clips, ",") != "higgsfield/hailuo-2.3-std,higgsfield/kling-v3-std,higgsfield/kling-v3-turbo,fal/grok-imagine-video,fal/kling-v3-pro" {
 		t.Fatalf("clip order = %v", clips)
 	}
-	pres := keys(NewRouter(PresenterRoutes).Order(CapPresenter, TierPremium, nil))
-	if pres[0] != "fal/veed-fabric" {
-		t.Fatalf("presenter order = %v", pres)
+	if pres := keys(NewRouter(PresenterRoutes).Order(CapPresenter, TierStandard, nil)); pres[0] != "fal/veed-fabric" {
+		t.Fatalf("standard presenter order = %v", pres)
+	}
+	if pres := keys(NewRouter(PresenterRoutes).Order(CapPresenter, TierPremium, nil)); pres[0] != "higgsfield/seedance-2.5-720p" {
+		t.Fatalf("premium presenter order = %v", pres)
 	}
 }
 

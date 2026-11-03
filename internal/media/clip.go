@@ -23,15 +23,22 @@ import (
 // CapImageToVideo animates a still (a poster's clean scene) into a short clip.
 const CapImageToVideo Capability = "image_to_video"
 
-// ClipRoutes are the image-to-video routes in fallback order before scoring.
-// PriceUSD is per second (the router compares routes of one capability, so
-// per-second prices order them correctly); request shapes were confirmed
-// 2026-10-24, see docs/integrations/video-generation-providers.md section 3.
+// ClipRoutes are the image-to-video routes. Higgsfield bills per generation
+// (measured 2026-11-03 through /models/usage and /estimate, see
+// docs/integrations/ugc-provider-bakeoff.md); the fal fallbacks bill per second at
+// their docs prices. The standard tier starts on Hailuo 2.3 std, the least costly
+// route, then Kling 3.0 std and Kling 3.0 Turbo; premium is Seedance 2.0 at 720p.
 var ClipRoutes = []Route{
-	{Key: "higgsfield/kling-v3-std", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.084, Quality: 4, PAYG: true, Timeout: 6 * time.Minute},
-	{Key: "fal/grok-imagine-video", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.05, Quality: 3, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
-	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, Quality: 4, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
-	{Key: "higgsfield/seedance-2.0", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.141, Quality: 4.5, PAYG: true, Timeout: 8 * time.Minute, MinTier: TierPremium},
+	// USD 0.28 per 6 s clip; it makes 6 or 10 s, cut to the asked length.
+	{Key: "higgsfield/hailuo-2.3-std", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.28, BaseSeconds: 6, MaxSeconds: 10, Quality: 3.5, PAYG: true, Timeout: 6 * time.Minute},
+	// USD 0.476 a clip, billed the same for 5 and 7 s.
+	{Key: "higgsfield/kling-v3-std", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.476, BaseSeconds: 7, Quality: 4, PAYG: true, Timeout: 6 * time.Minute},
+	// USD 0.56 for 5 s at 720p (/estimate).
+	{Key: "higgsfield/kling-v3-turbo", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.56, BaseSeconds: 5, Quality: 4, PAYG: true, Timeout: 5 * time.Minute},
+	{Key: "fal/grok-imagine-video", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.05, PerSecond: true, Quality: 3, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
+	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, PerSecond: true, Quality: 4, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
+	// Token metered: 1280x720 x 24 fps / 1024 tokens a second at USD 0.014 per 1,000, about USD 0.30/s.
+	{Key: "higgsfield/seedance-2.0", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.3024, PerSecond: true, Quality: 5, PAYG: true, Timeout: 8 * time.Minute, MinTier: TierPremium},
 }
 
 // Clip limits.
@@ -74,6 +81,8 @@ type Clips struct {
 	ffmpeg string
 	logger *zap.Logger
 	posts  *Posters // logo download and the shared fetch rules
+	// estimate quotes Higgsfield routes (cached, short timeout).
+	estimate *Estimator
 }
 
 // NewClips builds the clip pipeline; ffmpeg is looked up on PATH once.
@@ -83,7 +92,7 @@ func NewClips(keys KeySource, store VideoStore, posters *Posters, logger *zap.Lo
 	}
 	path, _ := exec.LookPath("ffmpeg")
 	return &Clips{router: NewRouter(ClipRoutes), keys: keys, store: store, queue: newQueueClient(),
-		fetch: &http.Client{Timeout: 3 * time.Minute}, ffmpeg: path, logger: logger.Named("media.clips"), posts: posters}
+		fetch: &http.Client{Timeout: 3 * time.Minute}, ffmpeg: path, logger: logger.Named("media.clips"), posts: posters, estimate: NewEstimator()}
 }
 
 // Ready reports whether clips can be made here (ffmpeg and storage present).
@@ -125,7 +134,8 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error)
 		return nil, err
 	}
 
-	routes := c.router.Order(CapImageToVideo, req.Tier, func(rt Route) bool { return c.keys(ctx, rt.Provider) != "" })
+	secs := float64(req.Seconds)
+	routes := c.router.OrderFor(CapImageToVideo, req.Tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -159,12 +169,12 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error)
 			return nil, fmt.Errorf("media: store clip: %w", err)
 		}
 		return &MediaResult{URL: url, Key: key, Bytes: n, Seconds: float64(req.Seconds), Width: size.X, Height: size.Y, SHA256: sum,
-			Route: rt.Key, CostUSD: rt.PriceUSD * float64(req.Seconds), SourceURL: src, Attempts: i + 1}, nil
+			Route: rt.Key, CostUSD: rt.Cost(secs), SourceURL: src, Attempts: i + 1}, nil
 	}
 	if lastErr == nil {
 		return nil, ErrNoRoute
 	}
-	return nil, fmt.Errorf("%w: %v", ErrNoRoute, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrNoRoute, lastErr)
 }
 
 type videoOut struct {
@@ -175,27 +185,14 @@ type videoOut struct {
 
 // animate runs one route and returns the provider's clip URL.
 func (c *Clips) animate(ctx context.Context, rt Route, req ClipRequest) (string, error) {
+	endpoint, input, err := clipInput(rt, req)
+	if err != nil {
+		return "", err
+	}
 	key := c.keys(ctx, rt.Provider)
-	prompt := clipPrompt(req.Prompt)
-	var (
-		job   queueJob
-		input map[string]any
-	)
-	switch rt.Key {
-	case "higgsfield/kling-v3-std":
-		input = map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "sound": "off"}
-		job = higgsfieldJob(key, "kling-video/v3.0/std/image-to-video")
-	case "higgsfield/seedance-2.0":
-		input = map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "1080p", "generate_audio": false}
-		job = higgsfieldJob(key, "bytedance/seedance-2.0/image-to-video")
-	case "fal/grok-imagine-video":
-		input = map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "720p"}
-		job = falJob(key, "xai/grok-imagine-video/image-to-video")
-	case "fal/kling-v3-pro":
-		input = map[string]any{"start_image_url": req.SceneURL, "prompt": prompt, "duration": strconv.Itoa(req.Seconds), "generate_audio": false}
-		job = falJob(key, "fal-ai/kling-video/v3/pro/image-to-video")
-	default:
-		return "", fmt.Errorf("media: no builder for route %s", rt.Key)
+	job := higgsfieldJob(key, endpoint)
+	if rt.Provider == "fal" {
+		job = falJob(key, endpoint)
 	}
 	var out videoOut
 	if err := c.queue.run(ctx, job, input, &out); err != nil {
@@ -205,6 +202,60 @@ func (c *Clips) animate(ctx context.Context, rt Route, req ClipRequest) (string,
 		return "", &errJobFailed{provider: rt.Provider, status: "completed", detail: "no video in the result"}
 	}
 	return out.Video.URL, nil
+}
+
+// clipInput is each route's endpoint and request body. Higgsfield shapes are from its
+// OpenAPI (Hailuo 2.3, Kling turbo), its CLI schemas and /estimate validation; fal shapes
+// from its published schemas.
+func clipInput(rt Route, req ClipRequest) (string, map[string]any, error) {
+	prompt := clipPrompt(req.Prompt)
+	switch rt.Key {
+	case "higgsfield/hailuo-2.3-std":
+		// Hailuo makes 6 or 10 s; the overlay step cuts the clip to the asked length.
+		d := 6
+		if req.Seconds > 6 {
+			d = 10
+		}
+		return "minimax/hailuo-2.3/standard/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": d, "prompt_optimizer": false}, nil
+	case "higgsfield/kling-v3-turbo":
+		return "kling-video/v3.0-turbo/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "720p"}, nil
+	case "higgsfield/kling-v3-std":
+		return "kling-video/v3.0/std/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "sound": "off"}, nil
+	case "higgsfield/seedance-2.0":
+		return "bytedance/seedance-2.0/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "720p", "generate_audio": false}, nil
+	case "fal/grok-imagine-video":
+		return "xai/grok-imagine-video/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "720p"}, nil
+	case "fal/kling-v3-pro":
+		return "fal-ai/kling-video/v3/pro/image-to-video", map[string]any{"start_image_url": req.SceneURL, "prompt": prompt, "duration": strconv.Itoa(req.Seconds), "generate_audio": false}, nil
+	}
+	return "", nil, fmt.Errorf("media: no builder for route %s", rt.Key)
+}
+
+// quoteImage stands in for the scene in an estimate request; /estimate prices the shape
+// and never fetches it.
+const quoteImage = "https://example.com/scene.png"
+
+// Quote is the provider cost of a clip on the route a render would use first: Higgsfield's
+// /estimate when it answers in time, the route's price otherwise. It never stalls a quote.
+func (c *Clips) Quote(ctx context.Context, tier string, seconds int) (usd float64, route string, estimated bool) {
+	if tier == "" {
+		tier = TierStandard
+	}
+	secs := float64(seconds)
+	routes := c.router.OrderFor(CapImageToVideo, tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
+	if len(routes) == 0 {
+		return 0, "", false
+	}
+	rt := routes[0]
+	if rt.Provider != "higgsfield" {
+		return rt.Cost(secs), rt.Key, false
+	}
+	endpoint, input, err := clipInput(rt, ClipRequest{SceneURL: quoteImage, Seconds: seconds})
+	if err != nil {
+		return rt.Cost(secs), rt.Key, false
+	}
+	usd, estimated = c.estimate.USD(ctx, c.keys(ctx, rt.Provider), endpoint, input, rt.Cost(secs))
+	return usd, rt.Key, estimated
 }
 
 // clipPrompt keeps the motion gentle and the frame free of text: our words go on top.

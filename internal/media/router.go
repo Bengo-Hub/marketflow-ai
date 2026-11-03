@@ -1,6 +1,7 @@
 package media
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -27,13 +28,21 @@ var tierFloor = map[string]float64{TierDraft: 2, TierStandard: 3, TierPremium: 4
 // a provisional quality score (1-5) until the golden-brief eval sets it.
 type Route struct {
 	Key        string
-	Provider   string // fal | higgsfield
+	Provider   string // fal | higgsfield | elevenlabs
 	Capability Capability
-	PriceUSD   float64 // per output, the price the cost engine quotes against
+	// PriceUSD is per output (one generation), or per second when PerSecond is set.
+	PriceUSD  float64
+	PerSecond bool
+	// BaseSeconds is the length one generation's price covers; a longer output scales
+	// in proportion (0: the price is flat).
+	BaseSeconds int
+	// MaxSeconds is the longest output the route makes (0: no limit here).
+	MaxSeconds int
 	Quality    float64
 	PAYG       bool          // pay as you go (preferred) or subscription
 	Timeout    time.Duration // per attempt
 	MinTier    string        // the lowest tier that may use it ("" = any)
+	MaxTier    string        // the highest tier that may use it ("" = any)
 	// Fallback routes are tried only after every primary route, however they
 	// score: the providers doc names them fallbacks (often a cheaper, weaker or
 	// cross-provider option that would otherwise win on price).
@@ -69,22 +78,49 @@ func NewRouter(routes []Route) *Router {
 	return &Router{routes: routes, br: breaker.New(3, time.Minute, 15*time.Minute), stats: map[string]*outcomes{}}
 }
 
+// refSeconds prices a per-second route when the caller orders without a length.
+const refSeconds = 5
+
+// Cost is the provider cost of one output of the given length in seconds (ignored
+// for flat per-output prices).
+func (rt Route) Cost(seconds float64) float64 {
+	if seconds <= 0 {
+		seconds = refSeconds
+	}
+	switch {
+	case rt.PerSecond:
+		return rt.PriceUSD * math.Ceil(seconds-1e-9)
+	case rt.BaseSeconds > 0 && seconds > float64(rt.BaseSeconds):
+		return rt.PriceUSD * seconds / float64(rt.BaseSeconds)
+	}
+	return rt.PriceUSD
+}
+
 // Order returns the routes to try for cap at tier, best first. Routes below the
-// tier's quality floor, or restricted to higher tiers, are left out.
+// tier's quality floor, or restricted to other tiers, are left out.
 func (r *Router) Order(cap Capability, tier string, available func(Route) bool) []Route {
+	return r.OrderFor(cap, tier, 0, available)
+}
+
+// OrderFor is Order for an output of the given length: routes that cannot make it
+// are left out and routes are compared on what that length costs on each.
+func (r *Router) OrderFor(cap Capability, tier string, seconds float64, available func(Route) bool) []Route {
 	floor := tierFloor[tier]
 	var eligible []Route
 	cheapest := 0.0
 	for _, rt := range r.routes {
-		if rt.Capability != cap || rt.Quality < floor || !tierAllows(tier, rt.MinTier) {
+		if rt.Capability != cap || rt.Quality < floor || !tierAllows(tier, rt.MinTier) || !tierAtMost(tier, rt.MaxTier) {
+			continue
+		}
+		if rt.MaxSeconds > 0 && seconds > float64(rt.MaxSeconds) {
 			continue
 		}
 		if available != nil && !available(rt) {
 			continue // no key configured, or the provider's balance is below its mark
 		}
 		eligible = append(eligible, rt)
-		if cheapest == 0 || rt.PriceUSD < cheapest {
-			cheapest = rt.PriceUSD
+		if c := rt.Cost(seconds); cheapest == 0 || c < cheapest {
+			cheapest = c
 		}
 	}
 	w, ok := tierWeights[tier]
@@ -93,7 +129,7 @@ func (r *Router) Order(cap Capability, tier string, available func(Route) bool) 
 	}
 	scores := make(map[string]float64, len(eligible))
 	for _, rt := range eligible {
-		scores[rt.Key] = r.score(rt, cheapest, w)
+		scores[rt.Key] = r.score(rt, rt.Cost(seconds), cheapest, w)
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		if eligible[i].Fallback != eligible[j].Fallback {
@@ -114,10 +150,10 @@ func (r *Router) Order(cap Capability, tier string, available func(Route) bool) 
 	return append(healthy, open...)
 }
 
-func (r *Router) score(rt Route, cheapest float64, w weights) float64 {
+func (r *Router) score(rt Route, price, cheapest float64, w weights) float64 {
 	cost := 1.0
-	if rt.PriceUSD > 0 {
-		cost = cheapest / rt.PriceUSD
+	if price > 0 {
+		cost = cheapest / price
 	}
 	billing := 0.5
 	if rt.PAYG {
@@ -161,7 +197,9 @@ func (r *Router) observe(key string, v float64) {
 	o.rate = 0.8*o.rate + 0.2*v
 }
 
-func tierAllows(tier, min string) bool {
-	rank := map[string]int{"": 0, TierDraft: 0, TierStandard: 1, TierPremium: 2}
-	return rank[tier] >= rank[min]
-}
+var tierRank = map[string]int{"": 0, TierDraft: 0, TierStandard: 1, TierPremium: 2}
+
+func tierAllows(tier, min string) bool { return tierRank[tier] >= tierRank[min] }
+
+// tierAtMost reports whether tier is within a route's highest tier ("" = any).
+func tierAtMost(tier, max string) bool { return max == "" || tierRank[tier] <= tierRank[max] }

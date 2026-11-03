@@ -40,10 +40,10 @@ func TestClipNeedsFFmpeg(t *testing.T) {
 	}
 }
 
-// The default route gets the confirmed Kling 3.0 std shape, and the stored clip
+// The default route gets the confirmed Hailuo 2.3 std shape, and the stored clip
 // is the format's size with the text layer burned in. Needs ffmpeg (CI image and
 // production have it; skipped elsewhere).
-func TestClipKlingShapeAndOverlay(t *testing.T) {
+func TestClipHailuoShapeAndOverlay(t *testing.T) {
 	ff, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg not installed")
@@ -66,14 +66,14 @@ func TestClipKlingShapeAndOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := f.inputs["kling-video/v3.0/std/image-to-video"]
-	if in == nil || in["image_url"] != f.srv.URL+"/scene.png" || in["duration"].(float64) != 5 || in["sound"] != "off" {
-		t.Fatalf("kling input = %v (all: %v)", in, f.inputs)
+	in := f.inputs["minimax/hailuo-2.3/standard/image-to-video"]
+	if in == nil || in["image_url"] != f.srv.URL+"/scene.png" || in["duration"].(float64) != 6 || in["prompt_optimizer"] != false {
+		t.Fatalf("hailuo input = %v (all: %v)", in, f.inputs)
 	}
 	if !strings.Contains(in["prompt"].(string), "No text") {
 		t.Fatalf("prompt must keep the frame free of text: %v", in["prompt"])
 	}
-	if res.Route != "higgsfield/kling-v3-std" || res.CostUSD < 0.41 || res.CostUSD > 0.43 || res.Bytes == 0 {
+	if res.Route != "higgsfield/hailuo-2.3-std" || res.CostUSD != 0.28 || res.Bytes == 0 {
 		t.Fatalf("result = %+v", res)
 	}
 	// The stored clip is 1080x1350, 5 s, H.264.

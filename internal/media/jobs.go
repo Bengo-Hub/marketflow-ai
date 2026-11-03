@@ -193,6 +193,10 @@ func jobFailure(err error) string {
 		return ue.Msg + "; nothing was charged"
 	case errors.Is(err, ErrNoFFmpeg):
 		return "video is not available on this server yet; nothing was charged"
+	case errors.Is(err, ErrContentRefused):
+		return "the video provider's safety check refused this scene; change the photo or the wording and try again; nothing was charged"
+	case errors.Is(err, ErrJobCanceled):
+		return "the video provider canceled the job; try again; nothing was charged"
 	}
 	return "the video could not be made right now; nothing was charged"
 }

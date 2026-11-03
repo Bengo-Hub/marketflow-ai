@@ -47,6 +47,8 @@ type App struct {
 	db         *sql.DB
 	redis      *redis.Client
 	httpServer *http.Server
+	// stopBackground ends the provider balance watcher and its NATS connection.
+	stopBackground func()
 }
 
 // New constructs the application.
@@ -383,6 +385,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// object storage (OBJECT_STORAGE_*, or MEDIA_ROOT locally); without it the
 	// endpoint answers 503 rather than paying for an image it cannot keep.
 	mediaStore, err := objectstore.New("marketflow", objectstore.FromEnv())
+	// Provider balances feed every media pipeline's route choice and the platform
+	// owner's low-balance alerts, so the watcher runs whatever the storage state.
+	stopBackground := startBalanceWatch(cfg, resolver, redisClient, logger)
 	switch {
 	case err != nil:
 		logger.Warn("object storage unavailable; posters disabled", zap.Error(err))
@@ -405,7 +410,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		voices := media.NewVoices(mediaKeySource(resolver), store, logger).
 			WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION")).
 			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES")))
-		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger))
+		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger)).
+			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger))
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.
 		osHandler.SetVideo(media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
@@ -526,13 +532,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		IdleTimeout:       cfg.HTTP.IdleTimeout,
 	}
 
-	return &App{
-		cfg:        cfg,
-		logger:     logger,
-		db:         db,
-		redis:      redisClient,
-		httpServer: server,
-	}, nil
+	app := &App{
+		cfg:            cfg,
+		logger:         logger,
+		db:             db,
+		redis:          redisClient,
+		httpServer:     server,
+		stopBackground: stopBackground,
+	}
+	return app, nil
 }
 
 // Run starts the HTTP server.
@@ -544,6 +552,9 @@ func (a *App) Run() error {
 // Shutdown gracefully stops the HTTP server and closes resources.
 func (a *App) Shutdown(ctx context.Context) error {
 	shutdownErr := a.httpServer.Shutdown(ctx)
+	if a.stopBackground != nil {
+		a.stopBackground()
+	}
 	if err := a.db.Close(); err != nil && shutdownErr == nil {
 		shutdownErr = err
 	}

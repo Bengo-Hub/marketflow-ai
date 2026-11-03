@@ -16,6 +16,13 @@ type Config struct {
 	Redis    RedisConfig    `envPrefix:"REDIS_"`
 	Security SecurityConfig `envPrefix:""`
 	AI       AIConfig       `envPrefix:"MF_AI_"`
+	Events   EventsConfig   `envPrefix:"MF_EVENTS_"`
+}
+
+// EventsConfig is the NATS connection marketflow-ai publishes platform events on (the
+// provider balance alerts). Empty means alerts are logged, not published.
+type EventsConfig struct {
+	NATSURL string `env:"NATS_URL"`
 }
 
 type AppConfig struct {
