@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bengobox/marketflow-ai/internal/assistgate"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ type OSHandler struct {
 	clips       *media.Clips
 	ads         *media.Ads
 	storyboards *media.Storyboards
+	gate        *assistgate.Gate // the WhatsApp assistant gate (whatsapp_ask.go)
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).
@@ -212,17 +214,24 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	available := h.balance(r.Context(), tenantID)
-
 	var sink askSink = jsonSink{w}
-	meter := &llm.Meter{}
-	ctx := llm.WithMeter(r.Context(), meter)
+	ctx := r.Context()
 	if req.Stream {
 		if s, ok := newSSESink(w); ok {
 			sink = s
 			ctx = team.WithProgress(ctx, s.progress)
 		}
 	}
+	h.runTurn(ctx, r, tenantID, req, runID, turnKey, sink)
+}
+
+// runTurn runs one charged Marketing Manager turn and writes the outcome to sink. The portal
+// (Ask) and the WhatsApp assistant (WhatsAppAsk) share it, so a turn behaves the same on both.
+// turnKey is the credit spend to refund when nothing was produced ("" when nothing was charged).
+func (h *OSHandler) runTurn(ctx context.Context, r *http.Request, tenantID uuid.UUID, req askRequest, runID, turnKey string, sink askSink) {
+	available := h.balance(ctx, tenantID)
+	meter := &llm.Meter{}
+	ctx = llm.WithMeter(ctx, meter)
 	res, err := h.runtime.Ask(ctx, team.Request{
 		TenantID: tenantID, Text: req.Text, ApprovePlan: req.ApprovePlan,
 		Tier: req.Tier, Platforms: req.Platforms, CreditsAvailable: available, Playbook: req.Playbook,
@@ -260,9 +269,9 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		out.CreditsCharged = 1
 	}
 	if res.CopyBatchRun {
-		price, _ := h.registry(r.Context()).Credits(registry.CopyBatch)
+		price, _ := h.registry(ctx).Credits(registry.CopyBatch)
 		if price > 0 {
-			if key, ok := h.chargeQuiet(r.Context(), tenantID, int64(price), "os:"+runID+":copy", "Ad copy batch"); ok && key != "" {
+			if key, ok := h.chargeQuiet(ctx, tenantID, int64(price), "os:"+runID+":copy", "Ad copy batch"); ok && key != "" {
 				out.CreditsCharged += price
 			}
 		}

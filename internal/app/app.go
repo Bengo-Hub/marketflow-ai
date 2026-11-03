@@ -18,6 +18,7 @@ import (
 	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/config"
+	"github.com/bengobox/marketflow-ai/internal/assistgate"
 	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
@@ -381,6 +382,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	if meetingPrep != nil {
 		osHandler.SetMeetingPrep(meetingPrep)
 	}
+	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
+	osHandler.WithGate(assistgate.New(decider))
 	// Creative studio posters (Sprint 15). Finished posters go to the shared
 	// object storage (OBJECT_STORAGE_*, or MEDIA_ROOT locally); without it the
 	// endpoint answers 503 rather than paying for an image it cannot keep.
@@ -527,6 +530,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/triage", triageHandler.Triage)
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
+		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)
