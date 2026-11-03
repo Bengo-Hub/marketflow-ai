@@ -29,6 +29,8 @@ type fakeEleven struct {
 	// seconds spreads the character timings over its length.
 	audio   []byte
 	seconds float64
+	// calls counts text-to-speech requests.
+	calls int
 }
 
 // ownerCollection mirrors part of the owner's codevertex-voices collection
@@ -70,6 +72,7 @@ func newFakeEleven(t *testing.T, tier string) *fakeEleven {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
 			f.got, f.path, f.key = body, r.URL.Path+"?"+r.URL.RawQuery, r.Header.Get("xi-api-key")
+			f.calls++
 			f.mu.Unlock()
 			// Spoken characters take time; a bracketed direction is not spoken, so
 			// its characters take none (it is aligned at the current moment).

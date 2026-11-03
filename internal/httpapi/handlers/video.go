@@ -10,11 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/registry"
 	"github.com/bengobox/marketflow-ai/internal/team"
@@ -24,10 +22,10 @@ import (
 // template video ads run as media jobs whose result is pushed back to
 // marketflow-api; the script is written synchronously.
 
-// SetVideo wires the media jobs and the pipelines that run in them; clips or
-// ads may be nil when their tools are missing on this server.
-func (h *OSHandler) SetVideo(jobs *media.Jobs, clips *media.Clips, ads *media.Ads) {
-	h.jobs, h.clips, h.ads = jobs, clips, ads
+// SetVideo wires the media jobs and the pipelines that run in them; clips, ads or
+// storyboards may be nil when their tools are missing on this server.
+func (h *OSHandler) SetVideo(jobs *media.Jobs, clips *media.Clips, ads *media.Ads, storyboards *media.Storyboards) {
+	h.jobs, h.clips, h.ads, h.storyboards = jobs, clips, ads, storyboards
 }
 
 // clipRequest is marketflow-api's creative module asking for a motion poster.
@@ -117,7 +115,10 @@ type scriptRequest struct {
 	Seconds   int    `json:"seconds"`
 	Photos    int    `json:"photos"`
 	Footage   int    `json:"footage"`
-	Charge    bool   `json:"charge"`
+	// Kind is the video type: template (default), presenter or presenter_premium. A
+	// presenter type lets the script use presenter scenes.
+	Kind   string `json:"kind"`
+	Charge bool   `json:"charge"`
 }
 
 // Script handles POST /api/v1/internal/creative/script (service key): the
@@ -168,7 +169,8 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.runtime.WriteVideoScript(r.Context(), team.VideoScriptRequest{TenantID: tenantID, Offering: req.Offering,
 		Facts: req.Facts, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
-		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage})
+		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage,
+		Presenter: req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium})
 	if err != nil {
 		h.refundKey(tenantID, chargeKey)
 		if errors.Is(err, team.ErrScriptBlocked) {
@@ -205,69 +207,20 @@ type adRequest struct {
 	Price       string              `json:"price"`
 	CTA         string              `json:"cta"`
 	Charge      bool                `json:"charge"`
+	// Kind is the video type: template (default), presenter or presenter_premium.
+	Kind string `json:"kind"`
+	// ActorURL and Seed are the approved storyboard's actor (presenter types).
+	ActorURL string `json:"actor_url"`
+	Seed     int64  `json:"seed"`
+	// Stills are the approved storyboard frames by scene id.
+	Stills map[string]string `json:"stills"`
+	// SceneCache is the scenes of earlier versions of this ad, reused when unchanged.
+	SceneCache []media.SceneCache `json:"scene_cache"`
 }
 
 // adBlockChars is about 30 seconds of speech: a longer voice-over costs a
 // second block of the template video price.
 const adBlockChars = 420
-
-// Ad handles POST /api/v1/internal/creative/ad (service key): starts a template
-// video ad job, or reports the one already running or done for this version
-// without charging again. The script is checked first (render rules and the
-// compliance filter, since the owner may have edited it), so a script that
-// cannot be made costs nothing.
-func (h *OSHandler) Ad(w http.ResponseWriter, r *http.Request) {
-	if !h.jobs.Ready() || !h.ads.Ready() {
-		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
-		return
-	}
-	var req adRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	tenantID, ok := jobIDs(w, req.TenantID, req.VersionID)
-	if !ok {
-		return
-	}
-	accent, err := parseHexColor(req.Accent)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "accent must be a #rrggbb colour")
-		return
-	}
-	if req.Tier != media.TierPremium {
-		req.Tier = media.TierStandard
-	}
-	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Tier: req.Tier,
-		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
-		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
-		LogoURL: req.LogoURL, EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
-	if err := h.ads.Validate(areq); err != nil {
-		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
-		return
-	}
-	var words strings.Builder
-	chars := 0
-	for _, s := range req.Scenes {
-		words.WriteString(s.Voiceover + "\n" + s.Caption + "\n")
-		chars += utf8.RuneCountInString(strings.TrimSpace(s.Voiceover))
-	}
-	words.WriteString(strings.Join([]string{req.Headline, req.Subline, req.Price, req.CTA}, "\n"))
-	if _, blocked, reason := compliance.NewFilter().CheckForTenant(words.String(), h.businessType(r.Context(), tenantID)); blocked {
-		writeError(w, http.StatusUnprocessableEntity, "the script did not pass the compliance check: "+reason)
-		return
-	}
-	blocks := 1
-	if chars > adBlockChars {
-		blocks = 2
-	}
-	price := func(reg registry.Registry) (int, error) {
-		c, err := reg.Credits(registry.TemplateVideo)
-		return c * blocks, err
-	}
-	h.startJob(w, r, tenantID, req.VersionID, req.Charge, price, "Video ad",
-		func(ctx context.Context) (*media.MediaResult, error) { return h.ads.Make(ctx, areq) })
-}
 
 // CreativeVoices handles GET /api/v1/os/creative/voices: the voices a video ad
 // can use (the account's, the owner's collection first, then the premade
@@ -309,7 +262,7 @@ func (h *OSHandler) JobStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
 		return
 	}
-	job, ok, err := h.jobs.Get(r.Context(), chi.URLParam(r, "version_id"))
+	job, ok, err := h.jobs.Get(r.Context(), jobID(r))
 	switch {
 	case err != nil:
 		writeError(w, http.StatusServiceUnavailable, "video jobs are unavailable right now")

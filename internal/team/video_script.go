@@ -32,6 +32,8 @@ type VideoScriptRequest struct {
 	Seconds   int    // the target length, 15 to 60
 	Photos    int    // how many product photos the owner gave
 	Footage   int    // how many video clips the owner gave
+	// Presenter allows presenter scenes: an AI presenter talking to camera (presenter ads).
+	Presenter bool
 }
 
 // VideoScriptResult is the reviewed script.
@@ -105,7 +107,7 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 	if err := json.Unmarshal(step.Output, &v); err != nil {
 		return out, fmt.Errorf("team: unreadable script: %w", err)
 	}
-	fitTemplate(&v, in.Photos, in.Footage)
+	fitTemplate(&v, in.Photos, in.Footage, in.Presenter)
 	out.Script = &v
 	return out, nil
 }
@@ -131,7 +133,14 @@ func scriptTask(in VideoScriptRequest) string {
 	if in.Footage > 0 {
 		fmt.Fprintf(&b, "owner_footage shows one of the owner's %d video clips (asset 1 to %d); ", in.Footage, in.Footage)
 	}
-	b.WriteString("end_card is the last scene, with the call to action. There is no presenter and no person on screen.\n")
+	if in.Presenter {
+		b.WriteString("presenter is one AI presenter talking to camera: its voiceover is what the presenter says, at most 200 characters per presenter scene. " +
+			"Open with a presenter hook and use presenter for at most half of the scenes. The presenter explains and recommends; it never claims to have used the product or had a result itself. ")
+		b.WriteString("Give each scene a short visual line describing what is seen (for b_roll, the setting to film; never text on screen). ")
+		b.WriteString("end_card is the last scene, with the call to action.\n")
+	} else {
+		b.WriteString("end_card is the last scene, with the call to action. There is no presenter and no person on screen.\n")
+	}
 	if in.Photos > 0 {
 		fmt.Fprintf(&b, "The owner gave %d product photos: set asset to 1 to %d to choose one per scene.\n", in.Photos, in.Photos)
 	}
@@ -143,9 +152,12 @@ func scriptTask(in VideoScriptRequest) string {
 // fitTemplate makes a script renderable as a template ad: a presenter scene
 // becomes narration over a photo, and an asset beyond what the owner gave is
 // left for the renderer to pick in order.
-func fitTemplate(v *VideoScript, photos, footage int) {
+func fitTemplate(v *VideoScript, photos, footage int, presenter bool) {
 	for i := range v.Scenes {
 		s := &v.Scenes[i]
+		if presenter && s.Shot == "presenter" {
+			continue
+		}
 		if !templateShots[s.Shot] || (s.Shot == "owner_footage" && footage == 0) {
 			s.Shot = "b_roll"
 		}
@@ -158,9 +170,11 @@ func fitTemplate(v *VideoScript, photos, footage int) {
 		}
 	}
 	if photos == 0 {
-		// Footage only: every scene shows a clip.
+		// Footage only: every scene but a presenter's shows a clip.
 		for i := range v.Scenes {
-			v.Scenes[i].Shot = "owner_footage"
+			if !(presenter && v.Scenes[i].Shot == "presenter") {
+				v.Scenes[i].Shot = "owner_footage"
+			}
 		}
 	}
 }

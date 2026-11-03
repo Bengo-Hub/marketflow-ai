@@ -93,6 +93,8 @@ type VoiceResult struct {
 	Route      string       `json:"route"`
 	CostUSD    float64      `json:"cost_usd"`
 	Attempts   int          `json:"attempts"`
+	// Audio is the stored file's bytes, for the re-alignment of estimated timings.
+	Audio []byte `json:"-"`
 }
 
 // ElevenLabs API base (tests point it at a fake server).
@@ -225,7 +227,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 			return nil, fmt.Errorf("media: store voice: %w", err)
 		}
 		return &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Voice: used,
-			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1}, nil
+			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1, Audio: audio}, nil
 	}
 	if lastErr == nil {
 		return nil, ErrNoRoute

@@ -33,7 +33,9 @@ func NewJobCallback(baseURL, serviceKey string, logger *zap.Logger) func(version
 	hc := &http.Client{Timeout: 15 * time.Second}
 	return func(versionID string, job Job) {
 		body, _ := json.Marshal(job)
-		url := base + "/api/v1/internal/creative/jobs/" + versionID
+		// A storyboard job reports to its version too; the body's kind tells them apart.
+		vid, _ := JobVersion(versionID)
+		url := base + "/api/v1/internal/creative/jobs/" + vid
 		var last error
 		for _, d := range jobCallbackDelays {
 			time.Sleep(d)

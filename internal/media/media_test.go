@@ -48,6 +48,8 @@ type fakeProviders struct {
 	clip    []byte // served at /clip.mp4 (made with ffmpeg by the clip test)
 	// failFalPath fails only the fal submits whose path contains it.
 	failFalPath string
+	// calls counts submits per path.
+	calls map[string]int
 }
 
 func newFakeProviders(t *testing.T) *fakeProviders {
@@ -110,6 +112,10 @@ func (f *fakeProviders) record(r *http.Request, path string) {
 	}
 	f.mu.Lock()
 	f.inputs[path], f.auth[path] = m, r.Header.Get("Authorization")
+	if f.calls == nil {
+		f.calls = map[string]int{}
+	}
+	f.calls[path]++
 	f.mu.Unlock()
 }
 

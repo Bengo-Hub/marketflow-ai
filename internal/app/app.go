@@ -410,12 +410,26 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		voices := media.NewVoices(mediaKeySource(resolver), store, logger).
 			WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION")).
 			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES")))
+		// Presenter ads: the presenter routes, the clip routes for product and b-roll
+		// scenes, and the scene cache's files in the same store.
 		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger)).
-			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger))
+			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger)).
+			WithClips(clips, store).WithLogger(logger)
+		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger)
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.
 		osHandler.SetVideo(media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
-			WithNotify(media.NewJobCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)), clips, ads)
+			WithNotify(media.NewJobCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)), clips, ads, storyboards)
+	}
+	// Higgsfield pushes finished jobs to this service (signed); polling is the fallback.
+	hfSecrets := higgsfieldWebhookSecrets(resolver)
+	var hfBox media.PushBox
+	if redisClient != nil {
+		hfBox = media.RedisPushBox{Redis: redisClient, NS: cfg.Redis.Namespace}
+	}
+	if base := publicBaseURL(); base != "" && hfBox != nil {
+		media.SetHiggsfieldPush(base+"/api/v1/webhooks/higgsfield", hfBox,
+			func(ctx context.Context) bool { return len(hfSecrets(ctx)) > 0 })
 	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
@@ -476,6 +490,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
 	})
 
+	// Provider webhooks: no auth header, the Standard Webhooks signature is the credential.
+	r.Post("/api/v1/webhooks/higgsfield", handlers.HiggsfieldWebhook(hfSecrets, hfBox, logger))
+
 	// Authenticated chat + CRM AI — JWT or platform X-API-Key.
 	r.Route("/api/v1", func(r chi.Router) {
 		if authMiddleware != nil {
@@ -514,7 +531,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)
 		r.Post("/creative/ad", osHandler.Ad)
+		r.Post("/creative/ad/quote", osHandler.AdQuote)
+		r.Post("/creative/storyboard", osHandler.Storyboard)
 		r.Get("/creative/jobs/{version_id}", osHandler.JobStatus)
+		r.Post("/creative/jobs/{version_id}/refund", osHandler.JobRefund)
 	})
 
 	// classify — used by ticketing-api (same X-API-Key auth).

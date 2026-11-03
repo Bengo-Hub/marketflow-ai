@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"strings"
 
 	"golang.org/x/image/font"
@@ -74,10 +73,32 @@ func CaptionLines(words []WordTiming) []CaptionLine {
 	return lines
 }
 
-// ComposeCaption draws one caption line on a transparent canvas of the format:
-// bold white text on a dark rounded-corner box, centred in the lower third,
-// clear of the end card's band.
+// Caption placement, as fractions of the frame. Every caption sits inside the 9:16 safe
+// band (a 720x1200 window centred in 1080x1920: two thirds of the width, the middle
+// 62.5% of the height), clear of the feed's own buttons and the end card's band.
+const (
+	safeBandWidth   = 2.0 / 3
+	safeBandTop     = 0.1875
+	captionBottomY  = 0.70 // spoken-word captions end here, as in the bake-off cut
+	sceneCaptionTop = 0.20 // a scene's on-screen caption starts here
+)
+
+// ComposeCaption draws one spoken-word caption on a transparent canvas of the format:
+// bold white text with a black outline, at most 2 lines, centred in the lower part of
+// the safe band.
 func ComposeCaption(format, text string) (*image.RGBA, error) {
+	return composeCaptionAt(format, text, captionBottomY, false)
+}
+
+// ComposeSceneCaption draws a scene's on-screen caption (the script's caption field) in
+// the same style near the top of the safe band, so it never covers the spoken words.
+func ComposeSceneCaption(format, text string) (*image.RGBA, error) {
+	return composeCaptionAt(format, text, sceneCaptionTop, true)
+}
+
+// composeCaptionAt lays the text out within the safe band's width, shrinking it to fit
+// two lines, and anchors its block at y (the bottom edge, or the top edge when fromTop).
+func composeCaptionAt(format, text string, y float64, fromTop bool) (*image.RGBA, error) {
 	size, ok := Formats[format]
 	if !ok {
 		return nil, fmt.Errorf("media: unknown format %q", format)
@@ -92,8 +113,7 @@ func ComposeCaption(format, text string) (*image.RGBA, error) {
 	if text == "" {
 		return canvas, nil
 	}
-	margin := W * 8 / 100
-	maxW := W - 2*margin
+	maxW := int(float64(W) * safeBandWidth)
 	fontSize := float64(W) / 16
 	var lines []string
 	var fc font.Face
@@ -109,37 +129,32 @@ func ComposeCaption(format, text string) (*image.RGBA, error) {
 		lines[1] = ellipsize(fc, lines[1], maxW)
 	}
 	lineH := int(fontSize * 1.2)
-	padX, padY := int(fontSize*0.5), int(fontSize*0.3)
-	boxW := 0
-	for _, l := range lines {
-		boxW = max(boxW, font.MeasureString(fc, l).Ceil())
+	blockH := lineH * len(lines)
+	top := int(float64(H)*y) - blockH
+	if fromTop {
+		top = int(float64(H) * y)
 	}
-	boxW += 2 * padX
-	boxH := lineH*len(lines) + 2*padY
-	bottom := H * 72 / 100
-	box := image.Rect((W-boxW)/2, bottom-boxH, (W+boxW)/2, bottom)
-	fillRounded(canvas, box, int(fontSize*0.35), color.RGBA{0, 0, 0, 0xb4})
-	d := &font.Drawer{Dst: canvas, Src: image.NewUniform(color.White), Face: fc}
+	if minTop := int(float64(H) * safeBandTop); top < minTop {
+		top = minTop
+	}
+	outline := max(2, int(fontSize*0.09))
+	black := image.NewUniform(color.Black)
+	white := image.NewUniform(color.White)
 	for i, l := range lines {
 		tw := font.MeasureString(fc, l).Ceil()
-		d.Dot = fixed.P((W-tw)/2, box.Min.Y+padY+lineH*(i+1)-int(fontSize*0.25))
+		base := fixed.P((W-tw)/2, top+lineH*(i+1)-int(fontSize*0.25))
+		// The outline: the line drawn in black around a ring, then white on top.
+		for dy := -outline; dy <= outline; dy++ {
+			for dx := -outline; dx <= outline; dx++ {
+				if dx*dx+dy*dy > outline*outline {
+					continue
+				}
+				d := &font.Drawer{Dst: canvas, Src: black, Face: fc, Dot: base.Add(fixed.P(dx, dy))}
+				d.DrawString(l)
+			}
+		}
+		d := &font.Drawer{Dst: canvas, Src: white, Face: fc, Dot: base}
 		d.DrawString(l)
 	}
 	return canvas, nil
-}
-
-// fillRounded fills r with c, its corners rounded by radius.
-func fillRounded(dst *image.RGBA, r image.Rectangle, radius int, c color.RGBA) {
-	src := image.NewUniform(c)
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		inset := 0
-		if dy := min(y-r.Min.Y, r.Max.Y-1-y); dy < radius {
-			// Circle: x inset for this row of the corner.
-			off := radius - dy
-			for inset < radius && (radius-inset)*(radius-inset)+off*off > radius*radius {
-				inset++
-			}
-		}
-		draw.Draw(dst, image.Rect(r.Min.X+inset, y, r.Max.X-inset, y+1), src, image.Point{}, draw.Over)
-	}
 }

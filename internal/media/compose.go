@@ -121,7 +121,14 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 			lh = H / 8
 			lw = lb.Dx() * lh / max(lb.Dy(), 1)
 		}
-		xdraw.CatmullRom.Scale(canvas, image.Rect(margin, margin, margin+lw, margin+lh), o.Logo, lb, draw.Over, nil)
+		at := image.Rect(margin, margin, margin+lw, margin+lh)
+		// A light logo vanishes on a light scene (seen on the POS end card): it gets a dark
+		// plate whenever the scene under it is light, or unknown (a video overlay).
+		if lightLogo(o.Logo) && !darkBehind(canvas, at) {
+			pad := max(lw, lh) / 8
+			fillRounded(canvas, at.Inset(-pad), pad, color.RGBA{0, 0, 0, 0x9c})
+		}
+		xdraw.CatmullRom.Scale(canvas, at, o.Logo, lb, draw.Over, nil)
 	}
 
 	textW := W - 2*margin
@@ -265,4 +272,58 @@ func maxf(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// lightLogo reports whether a logo's visible pixels are mostly light (a white logo).
+func lightLogo(img image.Image) bool {
+	b := img.Bounds()
+	step := max(1, max(b.Dx(), b.Dy())/64)
+	var sum, n float64
+	for y := b.Min.Y; y < b.Max.Y; y += step {
+		for x := b.Min.X; x < b.Max.X; x += step {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if a < 0x8000 {
+				continue
+			}
+			// Un-premultiply, then Rec. 709 luma.
+			l := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)) / float64(a)
+			sum += l
+			n++
+		}
+	}
+	return n > 0 && sum/n > 0.6
+}
+
+// darkBehind reports whether the canvas under r is an opaque, dark scene. A transparent
+// canvas (a video overlay, whose scene is not known here) is not.
+func darkBehind(canvas *image.RGBA, r image.Rectangle) bool {
+	r = r.Intersect(canvas.Bounds())
+	step := max(1, max(r.Dx(), r.Dy())/32)
+	var sum, n float64
+	for y := r.Min.Y; y < r.Max.Y; y += step {
+		for x := r.Min.X; x < r.Max.X; x += step {
+			c := canvas.RGBAAt(x, y)
+			if c.A < 0xf0 {
+				return false
+			}
+			sum += (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
+			n++
+		}
+	}
+	return n > 0 && sum/n < 0.35
+}
+
+// fillRounded fills r with c, its corners rounded by radius.
+func fillRounded(dst *image.RGBA, r image.Rectangle, radius int, c color.RGBA) {
+	src := image.NewUniform(c)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		inset := 0
+		if dy := min(y-r.Min.Y, r.Max.Y-1-y); dy < radius {
+			off := radius - dy
+			for inset < radius && (radius-inset)*(radius-inset)+off*off > radius*radius {
+				inset++
+			}
+		}
+		draw.Draw(dst, image.Rect(r.Min.X+inset, y, r.Max.X-inset, y+1), src, image.Point{}, draw.Over)
+	}
 }

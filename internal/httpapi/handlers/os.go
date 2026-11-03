@@ -43,6 +43,7 @@ type OSHandler struct {
 	jobs        *media.Jobs // motion posters and video ads (video.go)
 	clips       *media.Clips
 	ads         *media.Ads
+	storyboards *media.Storyboards
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).

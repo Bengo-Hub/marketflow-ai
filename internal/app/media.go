@@ -77,3 +77,59 @@ func mediaKeySource(resolver *providers.Resolver) media.KeySource {
 		return key
 	}
 }
+
+// higgsfieldWebhookSecrets reads the Standard Webhooks signing secret saved on the
+// media/higgsfield provider setting (webhook_secret, "whsec_..."), falling back to
+// MF_HIGGSFIELD_WEBHOOK_SECRET locally. A second secret (webhook_secret_previous) covers a
+// rotation. The answer is reused for a minute, and a failed lookup keeps the last good one.
+func higgsfieldWebhookSecrets(resolver *providers.Resolver) func(ctx context.Context) []string {
+	var (
+		mu   sync.Mutex
+		last []string
+		at   time.Time
+	)
+	return func(ctx context.Context) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		if !at.IsZero() && time.Since(at) < time.Minute {
+			return last
+		}
+		var list []string
+		ok := false
+		if resolver != nil {
+			rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			settings, err := resolver.ResolveRaw(rctx, "media", "higgsfield")
+			cancel()
+			if err == nil {
+				ok = true
+				for _, k := range []string{"webhook_secret", "webhook_secret_previous"} {
+					if v := strings.TrimSpace(settings[k]); strings.HasPrefix(v, "whsec_") {
+						list = append(list, v)
+					}
+				}
+			}
+		}
+		if len(list) == 0 {
+			if v := strings.TrimSpace(os.Getenv("MF_HIGGSFIELD_WEBHOOK_SECRET")); strings.HasPrefix(v, "whsec_") {
+				list = append(list, v)
+				ok = true
+			}
+		}
+		if ok || at.IsZero() {
+			last, at = list, time.Now()
+		}
+		return last
+	}
+}
+
+// publicBaseURL is where providers reach marketflow-ai (MF_PUBLIC_URL); in the cluster it
+// defaults to the public ingress host. Locally it is empty, so no webhook is asked for.
+func publicBaseURL() string {
+	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("MF_PUBLIC_URL")), "/"); v != "" {
+		return v
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return "https://marketflowai.codevertexafrica.com"
+	}
+	return ""
+}

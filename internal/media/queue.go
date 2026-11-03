@@ -70,7 +70,12 @@ func (c *queueClient) run(ctx context.Context, j queueJob, input, out any) error
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, j.submit, bytes.NewReader(body))
+	submit := j.submit
+	push := pushing(ctx, j.provider)
+	if push {
+		submit = withWebhook(submit)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, submit, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -92,23 +97,37 @@ func (c *queueClient) run(ctx context.Context, j queueJob, input, out any) error
 	}
 
 	wait := pollStart
+	nextPoll := time.Now()
+	if push {
+		// The push normally comes first; the provider is asked only now and then.
+		wait, nextPoll = pushCheck, time.Now().Add(pushPollSlow)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("%s: job %s did not finish in time: %w", j.provider, accepted.RequestID, ctx.Err())
 		case <-time.After(wait):
 		}
-		if wait *= 2; wait > pollMax {
-			wait = pollMax
-		}
-		sreq, err := http.NewRequestWithContext(ctx, http.MethodGet, accepted.StatusURL, nil)
-		if err != nil {
-			return err
-		}
-		sreq.Header.Set("Authorization", j.auth)
-		status, err := c.do(sreq, j.provider)
-		if err != nil {
-			return err
+		var status []byte
+		if pushed, ok := pushedStatus(ctx, push, accepted.RequestID); ok {
+			status = pushed
+		} else {
+			if push && time.Now().Before(nextPoll) {
+				continue
+			}
+			if push {
+				nextPoll = time.Now().Add(pushPollSlow)
+			} else if wait *= 2; wait > pollMax {
+				wait = pollMax
+			}
+			sreq, err := http.NewRequestWithContext(ctx, http.MethodGet, accepted.StatusURL, nil)
+			if err != nil {
+				return err
+			}
+			sreq.Header.Set("Authorization", j.auth)
+			if status, err = c.do(sreq, j.provider); err != nil {
+				return err
+			}
 		}
 		finished, resultURL, jerr := j.done(status)
 		if jerr != nil {
@@ -133,6 +152,14 @@ func (c *queueClient) run(ctx context.Context, j queueJob, input, out any) error
 		}
 		return nil
 	}
+}
+
+// pushedStatus reads a pushed result for the request, when a push is expected.
+func pushedStatus(ctx context.Context, push bool, requestID string) ([]byte, bool) {
+	if !push || requestID == "" {
+		return nil, false
+	}
+	return hfPushBox.Take(ctx, requestID)
 }
 
 // do sends a request and returns the body of a 2xx reply; anything else is an

@@ -86,7 +86,7 @@ func TestAdEndpointChargesOnlyWhatItCanMake(t *testing.T) {
 	spender := &lockedSpender{fakeSpender: fakeSpender{decision: CreditDecision{Allowed: true}}}
 	h := &OSHandler{logger: zap.NewNop(), registry: func(context.Context) registry.Registry { return registry.Defaults() }, credits: spender}
 	h.SetVideo(media.NewJobs(rdb, "mftest-"+uuid.NewString()[:8], nil), nil,
-		media.NewAds(media.NewVoices(noKeys, nil, nil), media.NewAssembler(adStore{}, nil, nil)))
+		media.NewAds(media.NewVoices(noKeys, nil, nil), media.NewAssembler(adStore{}, nil, nil)), nil)
 
 	presenter := strings.Replace(adBody(uuid.NewString(), "Soft skin"), `"product_clip"`, `"presenter"`, 1)
 	if rec := adCall(h, presenter); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "presenter") {

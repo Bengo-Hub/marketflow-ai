@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -32,8 +31,9 @@ func (*GenerateLinks) Schema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"distrib_id": map[string]any{"type": "string", "description": "FBO distribID (e.g. 254200047984)"},
-			"store_code": map[string]any{"type": "string", "description": "FLP store code (e.g. KEN, USA, GBR)", "default": "KEN"},
-			"language":   map[string]any{"type": "string", "description": "FLP language code (e.g. en, fr, sw)", "default": "en"},
+			"store_code": map[string]any{"type": "string", "description": "FLP store code (e.g. KEN, USA, GBR); empty uses the country's store, else KEN"},
+			"country":    map[string]any{"type": "string", "description": "Tenant country, ISO alpha-2 (e.g. KE), used when store_code is empty"},
+			"language":   map[string]any{"type": "string", "description": "FLP language code (e.g. en, fr, sw); empty is en"},
 			"link_type":  map[string]any{"type": "string", "description": "product | shop | recruit | category | whatsapp | profile"},
 			"item_code":  map[string]any{"type": "string", "description": "Product item code (for link_type=product). E.g. '015', 'C9', '022'"},
 			"category":   map[string]any{"type": "string", "description": "Category name (for link_type=category). E.g. 'Drinks', 'Skin Care'"},
@@ -56,15 +56,16 @@ func (t *GenerateLinks) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 		Slug      string `json:"slug"`
 		Phone     string `json:"phone"`
 		Message   string `json:"message"`
+		Country   string `json:"country"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
-	if args.StoreCode == "" {
-		args.StoreCode = "KEN"
-	}
-	if args.Language == "" {
-		args.Language = "en"
+	// Forever links follow marketflow-api's flp.ForTenant rule (flp_links.go).
+	b, linked := flpForTenant(args.Slug, args.DistribID, args.StoreCode, args.Language, args.Country)
+	needsDistrib := map[string]bool{"product": true, "shop": true, "recruit": true, "category": true}
+	if needsDistrib[args.LinkType] && !linked {
+		return `{"error":"distrib_id is required for Forever links (call get_fbo_profile first)"}`, nil
 	}
 
 	var link string
@@ -73,36 +74,30 @@ func (t *GenerateLinks) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 		if args.ItemCode == "" {
 			return `{"error":"item_code is required for product links"}`, nil
 		}
-		link = fmt.Sprintf("https://shop.foreverliving.com/retail/entry/Shop.do?store=%s&language=%s&itemCode=%s&distribID=%s",
-			args.StoreCode, args.Language, args.ItemCode, args.DistribID)
+		link = b.ProductURL(args.ItemCode)
 	case "shop":
-		link = fmt.Sprintf("https://shop.foreverliving.com/retail/entry/Shop.do?store=%s&language=%s&distribID=%s",
-			args.StoreCode, args.Language, args.DistribID)
+		link = b.ShopURL()
 	case "recruit":
-		link = fmt.Sprintf("https://join.foreverliving.com/marketing/joinnow/applicationForm.do?action=display&store=%s&distribID=%s&menuoff=n&langID=%s",
-			args.StoreCode, args.DistribID, args.Language)
+		link = b.RecruitURL()
 	case "category":
 		if args.Category == "" {
 			return `{"error":"category is required for category links"}`, nil
 		}
-		link = fmt.Sprintf("https://shop.foreverliving.com/retail/entry/Shop.do?store=%s&language=%s&categoryName=%s&distribID=%s",
-			args.StoreCode, args.Language, args.Category, args.DistribID)
+		link = b.CategoryURL(args.Category)
 	case "whatsapp":
-		phone := args.Phone
-		if phone == "" {
+		if args.Phone == "" {
 			return `{"error":"phone is required for whatsapp links"}`, nil
 		}
 		msg := args.Message
 		if msg == "" {
 			msg = "Hi, I'm interested in your Forever Living products"
 		}
-		link = fmt.Sprintf("https://wa.me/%s?text=%s", phone, url.QueryEscape(msg))
+		link = whatsAppURL(args.Phone, msg)
 	case "profile":
-		slug := args.Slug
-		if slug == "" {
+		if args.Slug == "" {
 			return `{"error":"slug is required for profile links"}`, nil
 		}
-		link = fmt.Sprintf("https://marketflow.codevertexafrica.com/p/%s", slug)
+		link = flpLinks{Slug: args.Slug}.ProfileURL()
 	default:
 		return `{"error":"unknown link_type. Use: product, shop, recruit, category, whatsapp, or profile"}`, nil
 	}

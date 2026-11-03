@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -41,10 +42,17 @@ type MediaResult struct {
 	SourceURL    string  `json:"source_url,omitempty"` // a provider's link (expires)
 	Attempts     int     `json:"attempts,omitempty"`
 	CaptionLines int     `json:"caption_lines,omitempty"`
+	// Voice is the voice a video ad was read in; Scenes are its scenes for the scene cache.
+	Voice  string       `json:"voice,omitempty"`
+	Scenes []SceneCache `json:"scenes,omitempty"`
+	// Storyboard is a storyboard job's stills and actor.
+	Storyboard *StoryboardResult `json:"storyboard,omitempty"`
 }
 
 // Job is a job's state as callers see it.
 type Job struct {
+	// Kind is "render" for a motion poster or a video ad, "storyboard" for a storyboard.
+	Kind           string       `json:"kind,omitempty"`
 	Status         string       `json:"status"`
 	Result         *MediaResult `json:"result,omitempty"`
 	CreditsCharged int          `json:"credits_charged"`
@@ -81,8 +89,10 @@ var ErrJobsBusy = errors.New("media: too many videos in progress, try again shor
 
 const (
 	jobTTL       = 48 * time.Hour
-	jobBudget    = 15 * time.Minute
-	jobStaleness = 20 * time.Minute // a "running" job older than this was lost
+	// A presenter ad runs its scenes in parallel, each up to about 6 minutes, with a
+	// fallback route behind each one.
+	jobBudget    = 30 * time.Minute
+	jobStaleness = 35 * time.Minute // a "running" job older than this was lost
 	maxJobs      = 3                // per pod: each holds a temp dir and an ffmpeg run
 )
 
@@ -116,6 +126,21 @@ func (j *Jobs) WithNotify(fn func(versionID string, job Job)) *Jobs {
 func (j *Jobs) Ready() bool { return j != nil && j.redis != nil }
 
 func (j *Jobs) key(versionID string) string { return j.ns + ":mediajob:" + versionID }
+
+// Job ids: a version's render job is its version id; its storyboard job is
+// StoryboardJobID(version id), so the two never share a state or a charge key.
+const storyboardSuffix = ":storyboard"
+
+// StoryboardJobID is the job id of a version's storyboard.
+func StoryboardJobID(versionID string) string { return versionID + storyboardSuffix }
+
+// JobVersion splits a job id into its version id and kind.
+func JobVersion(jobID string) (versionID, kind string) {
+	if v, ok := strings.CutSuffix(jobID, storyboardSuffix); ok {
+		return v, "storyboard"
+	}
+	return jobID, "render"
+}
 
 // Get returns a job's state; ok=false when there is none. A running job past
 // its staleness is reported as failed (its pod stopped), so the caller retries.
@@ -153,7 +178,8 @@ func (j *Jobs) Reserve() (release func(), err error) {
 // caller reserved. onFail runs when work fails (the caller refunds there).
 func (j *Jobs) Start(versionID string, credits, attempt int, chargeKey string, release func(), onFail func(chargeKey string),
 	work func(ctx context.Context) (*MediaResult, error)) error {
-	state := storedJob{Job: Job{Status: JobRunning, CreditsCharged: credits, StartedAt: j.nowFn().UTC(), Attempt: attempt}, ChargeKey: chargeKey}
+	_, kind := JobVersion(versionID)
+	state := storedJob{Job: Job{Kind: kind, Status: JobRunning, CreditsCharged: credits, StartedAt: j.nowFn().UTC(), Attempt: attempt}, ChargeKey: chargeKey}
 	if err := j.put(context.Background(), versionID, state); err != nil {
 		release()
 		return err
@@ -183,6 +209,41 @@ func (j *Jobs) Start(versionID string, credits, attempt int, chargeKey string, r
 		}
 	}()
 	return nil
+}
+
+// RefundLost returns the charge of a job that will not be retried: one lost with its pod
+// (still "running" past its staleness, or failed without a refund). marketflow-api calls it
+// when it gives up on the version. A finished, refunded or uncharged job is left as it is,
+// and a job still within its time is refused (ok=false) so a live render is never refunded.
+func (j *Jobs) RefundLost(ctx context.Context, jobID string, refund func(chargeKey string) error) (Job, bool, error) {
+	raw, err := j.redis.Get(ctx, j.key(jobID)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return Job{}, false, nil
+	}
+	if err != nil {
+		return Job{}, false, err
+	}
+	var s storedJob
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return Job{}, false, err
+	}
+	switch {
+	case s.Status == JobDone, s.Refunded, s.ChargeKey == "":
+		return s.Job, true, nil
+	case s.Status == JobRunning && j.nowFn().Sub(s.StartedAt) <= jobStaleness:
+		return s.Job, false, nil
+	}
+	if err := refund(s.ChargeKey); err != nil {
+		return s.Job, false, err
+	}
+	s.Status, s.Refunded, s.CreditsCharged = JobFailed, true, 0
+	if s.Error == "" {
+		s.Error = "the video job stopped; nothing was charged"
+	}
+	if err := j.put(ctx, jobID, s); err != nil {
+		return s.Job, false, err
+	}
+	return s.Job, true, nil
 }
 
 // jobFailure is the message the owner sees; the charge was refunded.

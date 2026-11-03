@@ -46,6 +46,10 @@ type AdScene struct {
 	// Fit shows the whole frame over a blurred fill instead of cropping to cover:
 	// for landscape footage and screen recordings in a portrait ad.
 	Fit bool `json:"fit,omitempty"`
+	// AudioURL is the scene's own voice-over (one per scene, so a presenter's lips and the
+	// cut match the words exactly). The scenes' audio is laid end to end; a scene without
+	// it is silent under the music.
+	AudioURL string `json:"audio_url,omitempty"`
 }
 
 // AssembleRequest is a whole ad.
@@ -57,6 +61,9 @@ type AssembleRequest struct {
 	VoiceURL  string       // the full voice-over, optional
 	Words     []WordTiming // its timings, for captions
 	Captions  bool
+	// SceneCaptions are the script's on-screen captions, each shown over its scene near
+	// the top of the safe band.
+	SceneCaptions []CaptionLine
 	MusicURL  string   // optional bed
 	EndCard   *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
 	LogoURL   string   // fetched into EndCard.Logo when set
@@ -185,6 +192,20 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 			lines++
 		}
 	}
+	for i, l := range req.SceneCaptions {
+		if l.Start >= total || strings.TrimSpace(l.Text) == "" {
+			continue
+		}
+		img, err := ComposeSceneCaption(req.Format, l.Text)
+		if err != nil {
+			return nil, err
+		}
+		p := filepath.Join(dir, fmt.Sprintf("scap%d.png", i))
+		if err := writePNG(p, img); err != nil {
+			return nil, err
+		}
+		layers = append(layers, layer{p, l.Start, math.Min(l.End, total)})
+	}
 	if req.EndCard != nil {
 		card := *req.EndCard
 		if req.LogoURL != "" && card.Logo == nil && a.posts != nil {
@@ -212,29 +233,47 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 		layers = append(kept, layer{p, start, total})
 	}
 
-	// 3. Audio inputs.
-	args := []string{"-i", joined}
-	audioIn := []int{}
-	next := 1
-	for _, src := range []struct{ url, name string }{{req.VoiceURL, "voice"}, {req.MusicURL, "music"}} {
-		if src.url == "" {
-			audioIn = append(audioIn, -1)
-			continue
+	// 3. Audio: the voice (each scene's own, laid end to end, or one voice-over) and the
+	// music mixed into one track of the ad's length.
+	voicePath := ""
+	switch {
+	case sceneAudio(req.Scenes):
+		if voicePath, err = a.sceneVoice(ctx, dir, req.Scenes); err != nil {
+			return nil, fmt.Errorf("media: scene voice: %w", err)
 		}
-		p := filepath.Join(dir, src.name+".audio")
-		if err := downloadTo(ctx, a.fetch, src.url, p, maxAudioBytes, src.name); err != nil {
+	case req.VoiceURL != "":
+		voicePath = filepath.Join(dir, "voice.audio")
+		if err := downloadTo(ctx, a.fetch, req.VoiceURL, voicePath, maxAudioBytes, "voice"); err != nil {
 			return nil, err
 		}
-		args = append(args, "-i", p)
-		audioIn = append(audioIn, next)
-		next++
+	}
+	musicPath := ""
+	if req.MusicURL != "" {
+		musicPath = filepath.Join(dir, "music.audio")
+		if err := downloadTo(ctx, a.fetch, req.MusicURL, musicPath, maxAudioBytes, "music"); err != nil {
+			return nil, err
+		}
+	}
+	mixPath := ""
+	if voicePath != "" || musicPath != "" {
+		mixPath = filepath.Join(dir, "mix.wav")
+		if err := a.mix(ctx, voicePath, musicPath, mixPath, total); err != nil {
+			return nil, fmt.Errorf("media: mix audio: %w", err)
+		}
+	}
+
+	// 4. One filter graph: the layers over the video, and the mix brought to -14 LUFS by a
+	// two-pass loudnorm (measured first, then applied linearly). A mix that cannot be
+	// measured (silence) gets the one-pass filter.
+	args := []string{"-i", joined}
+	next := 1
+	if mixPath != "" {
+		args = append(args, "-i", mixPath)
+		next = 2
 	}
 	for _, l := range layers {
 		args = append(args, "-i", l.path)
 	}
-
-	// 4. One filter graph: layers over the video, voice and music mixed and
-	// brought to the social loudness target.
 	var graph []string
 	v := "[0:v]"
 	for i, l := range layers {
@@ -243,25 +282,18 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 		v = outLabel
 	}
 	graph = append(graph, v+"format=yuv420p[vout]")
-	voice, music := audioIn[0], audioIn[1]
-	hasAudio := voice >= 0 || music >= 0
-	// apad holds silence after a voice that ends before the scenes; -t below cuts
-	// the ad to the scenes' length.
-	const loud = "loudnorm=I=-14:TP=-1.5:LRA=11,apad"
-	switch {
-	case voice >= 0 && music >= 0:
-		graph = append(graph,
-			fmt.Sprintf("[%d:a]aresample=48000,volume=%.2f[m]", music, musicGain),
-			fmt.Sprintf("[%d:a]aresample=48000,apad[vo]", voice),
-			"[vo][m]amix=inputs=2:duration=shortest:dropout_transition=0:normalize=0,"+loud+"[aout]")
-	case voice >= 0:
-		graph = append(graph, fmt.Sprintf("[%d:a]aresample=48000,%s[aout]", voice, loud))
-	case music >= 0:
-		graph = append(graph, fmt.Sprintf("[%d:a]aresample=48000,volume=%.2f,%s[aout]", music, musicGain*3, loud))
+	if mixPath != "" {
+		loud := loudTarget
+		if m, err := a.measureLoudness(ctx, mixPath); err == nil {
+			loud = m.secondPass()
+		} else {
+			a.logger.Info("loudness not measured; one-pass loudnorm", zap.Error(err))
+		}
+		graph = append(graph, fmt.Sprintf("[1:a]%s,aresample=48000,apad[aout]", loud))
 	}
 	out := filepath.Join(dir, "ad.mp4")
 	args = append(args, "-filter_complex", strings.Join(graph, ";"), "-map", "[vout]")
-	if hasAudio {
+	if mixPath != "" {
 		args = append(args, "-map", "[aout]", "-c:a", "aac", "-b:a", "160k", "-ar", "48000")
 	} else {
 		args = append(args, "-an")

@@ -213,6 +213,18 @@ func (r Registry) Credits(key string) (int, error) {
 	return c, nil
 }
 
+// CreditsForUSD prices a media output from its provider cost with the same formula as a
+// registry output (FX, FX buffer, retry overhead, credit cost basis, media surcharge): a
+// video ad priced scene by scene from its live quotes. It is never below 1.
+func (r Registry) CreditsForUSD(usd float64) int {
+	s := r.Settings
+	if usd <= 0 || s.CreditCostBasis <= 0 {
+		return max(1, s.FixedSurcharge)
+	}
+	costKES := usd * s.FXRate * (1 + s.FXBuffer) * (1 + s.RetryOverhead)
+	return max(1, int(math.Ceil(costKES/s.CreditCostBasis-1e-9))+s.FixedSurcharge)
+}
+
 // SmallestBundle returns the cheapest bundle covering a shortfall, or the
 // largest when none does on its own.
 func (r Registry) SmallestBundle(shortfall int) (Bundle, bool) {

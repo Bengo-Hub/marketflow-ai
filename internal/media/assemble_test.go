@@ -60,26 +60,42 @@ func TestCaptionLines(t *testing.T) {
 	}
 }
 
-func TestComposeCaptionDrawsInTheLowerThird(t *testing.T) {
-	img, err := ComposeCaption("1080x1920", "Order shea butter today")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := img.Bounds()
-	if b.Dx() != 1080 || b.Dy() != 1920 {
-		t.Fatalf("size %v", b)
-	}
-	if _, _, _, a := img.At(540, 100).RGBA(); a != 0 {
-		t.Fatal("the top of the frame must stay clear")
-	}
-	opaque := 0
-	for y := 1920 * 55 / 100; y < 1920*72/100; y++ {
-		if _, _, _, a := img.At(540, y).RGBA(); a > 0 {
-			opaque++
+// Captions are white with a black outline, at most two lines, inside the 9:16 safe band:
+// spoken words end at 70% of the height, a scene caption starts at 20%.
+func TestCaptionsStayInTheSafeBand(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		draw   func(string, string) (*image.RGBA, error)
+		y0, y1 int
+	}{
+		{"spoken", ComposeCaption, 1920 * 50 / 100, 1920 * 70 / 100},
+		{"scene", ComposeSceneCaption, 1920 * 20 / 100, 1920 * 40 / 100},
+	} {
+		img, err := c.draw("1080x1920", "Order shea butter today and get free delivery across Kisumu town")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if opaque == 0 {
-		t.Fatal("no caption box above 72% of the height")
+		white, black := 0, 0
+		b := img.Bounds()
+		for y := 0; y < b.Dy(); y++ {
+			for x := 0; x < b.Dx(); x++ {
+				px := img.RGBAAt(x, y)
+				if px.A == 0 {
+					continue
+				}
+				if y < c.y0 || y >= c.y1+20 || x < 1080/6-20 || x > 1080*5/6+20 {
+					t.Fatalf("%s caption drawn outside the safe band at %d,%d", c.name, x, y)
+				}
+				if px.R > 240 && px.G > 240 && px.B > 240 {
+					white++
+				} else if px.R < 15 && px.G < 15 && px.B < 15 {
+					black++
+				}
+			}
+		}
+		if white == 0 || black == 0 {
+			t.Fatalf("%s caption: white %d, outline %d", c.name, white, black)
+		}
 	}
 }
 

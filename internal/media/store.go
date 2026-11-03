@@ -3,7 +3,10 @@ package media
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/Bengo-Hub/httpware/objectstore"
 	"github.com/google/uuid"
@@ -96,4 +99,58 @@ func (o ObjectStore) putVideo(ctx context.Context, tenantID uuid.UUID, folder, v
 		return "", "", 0, err
 	}
 	return key, o.S.URL(key), st.Size(), nil
+}
+
+// SceneFiles is what the scene cache needs from storage: a scene clip of its own, and
+// for a scene reused from an earlier version, a check that its file still exists and a
+// copy under the new version's name, so purging the old version never takes the new
+// version's files with it.
+type SceneFiles interface {
+	VideoStore
+	Exists(ctx context.Context, key string) bool
+	Copy(ctx context.Context, tenantID uuid.UUID, key, name string) (newKey, url string, err error)
+}
+
+// Exists implements SceneFiles; a lookup failure counts as missing (the scene is made again).
+func (o ObjectStore) Exists(ctx context.Context, key string) bool {
+	if o.S == nil || !o.S.Enabled() || key == "" {
+		return false
+	}
+	ok, err := o.S.Exists(ctx, key)
+	return err == nil && ok
+}
+
+// Copy implements SceneFiles: the file at key, which must be this tenant's, streamed to a
+// sibling key named name (same media type and folder, same extension).
+func (o ObjectStore) Copy(ctx context.Context, tenantID uuid.UUID, key, name string) (string, string, error) {
+	if o.S == nil || !o.S.Enabled() {
+		return "", "", fmt.Errorf("media: object storage is not configured")
+	}
+	if !strings.Contains(key, "/"+tenantID.String()+"/") || strings.Contains(name, "/") {
+		return "", "", fmt.Errorf("media: scene file is not this tenant's")
+	}
+	dst := path.Dir(key) + "/" + name + path.Ext(key)
+	if dst == key {
+		return key, o.S.URL(key), nil
+	}
+	r, size, ctype, err := o.S.Open(ctx, key)
+	if err != nil {
+		return "", "", err
+	}
+	defer r.Close()
+	if ctype == "" {
+		ctype = map[string]string{".mp4": "video/mp4", ".mp3": "audio/mpeg", ".jpg": "image/jpeg"}[path.Ext(key)]
+	}
+	if size < 0 {
+		data, err := io.ReadAll(io.LimitReader(r, maxSceneBytes))
+		if err != nil {
+			return "", "", err
+		}
+		if err := o.S.Put(ctx, dst, data, ctype); err != nil {
+			return "", "", err
+		}
+	} else if err := o.S.PutStream(ctx, dst, r, size, ctype); err != nil {
+		return "", "", err
+	}
+	return dst, o.S.URL(dst), nil
 }

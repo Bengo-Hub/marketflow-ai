@@ -134,6 +134,35 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error)
 		return nil, err
 	}
 
+	raw := filepath.Join(dir, "raw.mp4")
+	src, rt, attempts, err := c.Animate(ctx, req, raw)
+	if err != nil {
+		return nil, err
+	}
+	out := filepath.Join(dir, "clip.mp4")
+	if err := c.overlay(ctx, raw, overlayPath, out, size.X, size.Y, req.Seconds); err != nil {
+		return nil, fmt.Errorf("media: text overlay: %w", err)
+	}
+	sum, err := fileSHA256(out)
+	if err != nil {
+		return nil, fmt.Errorf("media: hash clip: %w", err)
+	}
+	key, url, n, err := c.store.PutClip(ctx, req.TenantID, req.VersionID, out)
+	if err != nil {
+		return nil, fmt.Errorf("media: store clip: %w", err)
+	}
+	secs := float64(req.Seconds)
+	return &MediaResult{URL: url, Key: key, Bytes: n, Seconds: secs, Width: size.X, Height: size.Y, SHA256: sum,
+		Route: rt.Key, CostUSD: rt.Cost(secs), SourceURL: src, Attempts: attempts}, nil
+}
+
+// Animate animates req.SceneURL on the best route with fallbacks and saves the clip to
+// path, without any text: the motion poster lays its words on top, a video ad uses it as
+// a scene. It returns the provider's link, the route and how many routes were tried.
+func (c *Clips) Animate(ctx context.Context, req ClipRequest, path string) (string, Route, int, error) {
+	if req.Tier == "" {
+		req.Tier = TierStandard
+	}
 	secs := float64(req.Seconds)
 	routes := c.router.OrderFor(CapImageToVideo, req.Tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
 	var lastErr error
@@ -143,9 +172,8 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error)
 		}
 		actx, cancel := context.WithTimeout(ctx, rt.Timeout)
 		src, err := c.animate(actx, rt, req)
-		raw := filepath.Join(dir, "raw.mp4")
 		if err == nil {
-			err = c.save(actx, src, raw)
+			err = c.save(actx, src, path)
 		}
 		cancel()
 		if err != nil {
@@ -155,26 +183,12 @@ func (c *Clips) Make(ctx context.Context, req ClipRequest) (*MediaResult, error)
 			continue
 		}
 		c.router.Succeeded(rt.Key)
-
-		out := filepath.Join(dir, "clip.mp4")
-		if err := c.overlay(ctx, raw, overlayPath, out, size.X, size.Y, req.Seconds); err != nil {
-			return nil, fmt.Errorf("media: text overlay: %w", err)
-		}
-		sum, err := fileSHA256(out)
-		if err != nil {
-			return nil, fmt.Errorf("media: hash clip: %w", err)
-		}
-		key, url, n, err := c.store.PutClip(ctx, req.TenantID, req.VersionID, out)
-		if err != nil {
-			return nil, fmt.Errorf("media: store clip: %w", err)
-		}
-		return &MediaResult{URL: url, Key: key, Bytes: n, Seconds: float64(req.Seconds), Width: size.X, Height: size.Y, SHA256: sum,
-			Route: rt.Key, CostUSD: rt.Cost(secs), SourceURL: src, Attempts: i + 1}, nil
+		return src, rt, i + 1, nil
 	}
 	if lastErr == nil {
-		return nil, ErrNoRoute
+		return "", Route{}, 0, ErrNoRoute
 	}
-	return nil, fmt.Errorf("%w: %w", ErrNoRoute, lastErr)
+	return "", Route{}, 0, fmt.Errorf("%w: %w", ErrNoRoute, lastErr)
 }
 
 type videoOut struct {
