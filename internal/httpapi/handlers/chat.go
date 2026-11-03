@@ -230,6 +230,10 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		"session_id": sessionID.String(),
 		"result":     result,
 	}
+	// The widget opens the form prefilled; the visitor submits it to the owning service.
+	if form := rag.IntegrationForm(input.BusinessType, ai.Intent(result.Intent), input.Question); form != nil {
+		respEnvelope["form"] = form
+	}
 	json.NewEncoder(w).Encode(respEnvelope)
 }
 
@@ -389,14 +393,18 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 
 	// Send metadata first
 	if meta != nil {
-		metaJSON, _ := json.Marshal(map[string]any{
+		m := map[string]any{
 			// The client sends it back as session_id to keep the conversation.
 			"session_id": input.SessionID.String(),
 			"intent":     meta.Intent,
 			"confidence": meta.Confidence,
 			"sources":    meta.Sources,
 			"model":      meta.Model,
-		})
+		}
+		if form := rag.IntegrationForm(input.BusinessType, ai.Intent(meta.Intent), input.Question); form != nil {
+			m["form"] = form
+		}
+		metaJSON, _ := json.Marshal(m)
 		fmt.Fprintf(w, "data: {\"type\":\"meta\",\"data\":%s}\n\n", metaJSON)
 		flusher.Flush()
 	}

@@ -59,7 +59,10 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	// Skip caches when conversation history exists — the response must be
 	// generated in the context of the ongoing conversation, not recycled from
 	// a previous standalone session.
-	skipCache := len(input.History) > 0
+	// A message that already asks for an integration skips the caches before classifying;
+	// the integration intent found by the classifier is checked again below.
+	input.formTurn = IntegrationForm(input.BusinessType, "", input.Question) != nil
+	skipCache := len(input.History) > 0 || input.formTurn
 	if !skipCache {
 		if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
 			p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
@@ -70,6 +73,10 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 
 	// ── Classify: heuristic first, then cached, then the classifier model ─
 	intent, confidence, needsLiveInfo := p.classify(ctx, input.Question)
+	if !input.formTurn && IntegrationForm(input.BusinessType, intent, input.Question) != nil {
+		input.formTurn = true
+		skipCache = true
+	}
 
 	// ── Template intents (0ms, no LLM) ───────────────────────────────────
 	switch intent {
@@ -156,7 +163,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	// ── Knowledge base already answers it: no model ─────────────────────
 	// Action and live-data intents still go to the agent: a stored text cannot
 	// book a meeting or read today's orders.
-	if intent != ai.IntentTaskExecute && intent != ai.IntentDataQuery && intent != ai.IntentRecruitment {
+	if intent != ai.IntentTaskExecute && intent != ai.IntentDataQuery && intent != ai.IntentRecruitment && !input.formTurn {
 		if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok {
 			return &ChatResult{
 				Response: p.applyFilter(answer, input.BusinessType), RawResponse: answer,

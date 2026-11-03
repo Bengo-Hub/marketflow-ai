@@ -43,7 +43,8 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		return staticStream(result.Response), result, nil
 	}
 
-	skipCache := len(input.History) > 0
+	input.formTurn = IntegrationForm(input.BusinessType, intent, input.Question) != nil
+	skipCache := len(input.History) > 0 || input.formTurn
 	if !skipCache {
 		if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
 			return staticStream(p.applyFilter(resp, input.BusinessType)),
@@ -66,7 +67,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 			p.logger.Warn("KB search failed (stream)", zap.Error(err))
 		}
 	}
-	if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok {
+	if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok && !input.formTurn {
 		return staticStream(p.applyFilter(answer, input.BusinessType)),
 			&ChatResult{Intent: string(intent), Confidence: confidence, Sources: 1, Model: ModelKnowledgeBase}, nil
 	}

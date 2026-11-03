@@ -77,6 +77,9 @@ type ChatInput struct {
 	History      []ai.Message // previous messages in this session
 	BusinessType string       // "flp" | "codevertex" | "cafe" | "generic"
 	PublicMode   bool         // true for /public/chat — prefer cache/KB, avoid agent loops
+	// formTurn is set by the pipeline when the reply comes with a prefilled form: such a reply
+	// is written for this visitor's details, so it is neither read from nor written to the caches.
+	formTurn bool
 }
 
 // ChatResult contains the AI response and metadata.

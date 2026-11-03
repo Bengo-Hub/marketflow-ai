@@ -142,6 +142,11 @@ When answering about products or services, mention the specific platform URL, pr
 		b.WriteString(`
 Focus on Codevertex Africa Limited service capabilities, integration options, and how the Power Suite can solve the user's business problem. Mention relevant case studies or the Digitika Academy if training is relevant.
 `)
+	case ai.IntentIntegrationInterest:
+		b.WriteString(`
+INTEGRATION REQUESTS:
+A "Request an Integration" form opens below your reply, already filled with any details the user gave (integration type, who does the work, name, email, phone, company, notes). Do not say you cannot take the request, and do not send the user to the client portal or to email for it. In one or two sentences, say what the integration involves, ask them to check the form and tap Submit, and say our team follows up by email. If they have not said who will do the work, mention the choice: their own developers (no fee) or our team (a one-time fee applies).
+`)
 	}
 
 	appendKBContext(&b, chunks)

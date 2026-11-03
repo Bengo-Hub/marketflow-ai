@@ -105,7 +105,7 @@ func (p *Pipeline) applyFilter(raw, businessType string) string {
 // cache writes when the request has conversation history (session-specific responses
 // must not be recycled). Returns the compliance-filtered response for this request.
 func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
-	if len(input.History) == 0 {
+	if len(input.History) == 0 && !input.formTurn {
 		p.cache.setExact(ctx, input.TenantID, input.Question, raw)
 		p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, raw)
 	}

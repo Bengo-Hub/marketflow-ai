@@ -413,6 +413,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
+	publicForms := handlers.NewPublicFormsHandler(cfg.AI.AuthAPIURL, cfg.AI.TicketingURL, cfg.AI.MarketFlowAPIURL, logger)
 	crmAIHandler := handlers.NewCRMAIHandler(standardLLM, string(llm.Standard), cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
@@ -458,6 +459,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Route("/api/v1/public", func(r chi.Router) {
 		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100))
 		r.Post("/chat", chatHandler.Chat)
+		// The widget's in-chat forms, forwarded to the service that owns each record.
+		r.Post("/integration-requests", publicForms.IntegrationRequest)
+		r.Post("/otp/send", publicForms.SendCode)
+		r.Post("/otp/verify", publicForms.VerifyCode)
+		r.Post("/tickets", publicForms.Ticket)
+		r.Post("/leads", publicForms.Lead)
 		// Clear chat and delete a message; the session id is the credential, as for history.
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
