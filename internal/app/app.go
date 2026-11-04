@@ -538,6 +538,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)
 		r.Post("/credits/charge", osHandler.ChargeCredits)
+		r.Post("/credits/forecast", osHandler.ForecastCredits)
 		r.Post("/adintel/scan", adIntelHandler.Scan)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)

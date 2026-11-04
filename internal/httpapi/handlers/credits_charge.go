@@ -41,3 +41,41 @@ func (h *OSHandler) ChargeCredits(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, dec)
 }
+
+// ForecastCredits handles POST /api/v1/internal/credits/forecast (S2S, marketflow-api): what one
+// registry output costs now against the tenant's balance, and the smallest covering bundle when
+// short (Sprint 20). Nothing is spent. A balance that cannot be read reports -1 and enough, because
+// the charge itself still refuses a spend that does not fit.
+func (h *OSHandler) ForecastCredits(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID string `json:"tenant_id"`
+		Output   string `json:"output"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tid, err := uuid.Parse(req.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tenant_id is required")
+		return
+	}
+	reg := h.registry(r.Context())
+	price, err := reg.Credits(req.Output)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "unknown output")
+		return
+	}
+	q := creativeQuote{Count: 1, CreditsEach: price, CreditsNeeded: price, Balance: -1}
+	if h.credits != nil {
+		q.Balance = h.balance(r.Context(), tid)
+	}
+	q.Enough = q.Balance < 0 || q.Balance >= price
+	if !q.Enough {
+		q.Shortfall = price - q.Balance
+		if b, ok := reg.SmallestBundle(q.Shortfall); ok {
+			q.SuggestedBundle = &b
+		}
+	}
+	writeJSON(w, http.StatusOK, q)
+}
