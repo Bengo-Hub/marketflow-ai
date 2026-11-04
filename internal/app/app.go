@@ -18,6 +18,7 @@ import (
 	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/config"
+	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/assistgate"
 	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
@@ -384,6 +385,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
 	osHandler.WithGate(assistgate.New(decider))
+	// Competitor ad intel (Sprint 24): SerpApi from Platform, Providers adintel/serpapi.
+	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger)
 	// Social inbox intent tags (Sprint 22): typed judgments only, no tools.
 	inboxIntentHandler := handlers.NewInboxIntentHandler(decider, logger)
 	// Creative studio posters (Sprint 15). Finished posters go to the shared
@@ -535,6 +538,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)
 		r.Post("/credits/charge", osHandler.ChargeCredits)
+		r.Post("/adintel/scan", adIntelHandler.Scan)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)

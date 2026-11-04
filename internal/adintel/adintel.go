@@ -49,22 +49,27 @@ const (
 	RegionKenya = "2404"
 )
 
-// Searcher is the SerpApi client.
-type Searcher struct {
-	Base  string // https://serpapi.com
-	Key   string
-	HTTP  *http.Client
-	Redis *redis.Client
-	NS    string
+// Settings are the platform provider row adintel/serpapi on Platform, Providers.
+type Settings struct {
+	Key string
 	// PaidCap replaces the free 250 when the platform owner turned paid use on (0 = free only).
 	PaidCap int
 	// TenantShare is each tenant's searches a month (0 = DefaultTenantShare).
 	TenantShare int
-	now         func() time.Time
 }
 
-func NewSearcher(key string, rdb *redis.Client, namespace string) *Searcher {
-	return &Searcher{Base: "https://serpapi.com", Key: key, HTTP: &http.Client{Timeout: 30 * time.Second}, Redis: rdb, NS: namespace, now: time.Now}
+// Searcher is the SerpApi client.
+type Searcher struct {
+	Base     string // https://serpapi.com
+	HTTP     *http.Client
+	Redis    *redis.Client
+	NS       string
+	Settings func(ctx context.Context) Settings
+	now      func() time.Time
+}
+
+func NewSearcher(settings func(ctx context.Context) Settings, rdb *redis.Client, namespace string) *Searcher {
+	return &Searcher{Base: "https://serpapi.com", HTTP: &http.Client{Timeout: 30 * time.Second}, Redis: rdb, NS: namespace, Settings: settings, now: time.Now}
 }
 
 // Search returns the advertiser's or query's ads in a region, winners first. A cached answer
@@ -84,14 +89,15 @@ func (s *Searcher) Search(ctx context.Context, tenantID, query, region string) (
 			return ads, nil
 		}
 	}
-	if s.Key == "" {
+	cfg := s.Settings(ctx)
+	if cfg.Key == "" {
 		return nil, fmt.Errorf("competitor scans are not configured")
 	}
-	release, err := s.reserve(ctx, tenantID)
+	release, err := s.reserve(ctx, tenantID, cfg)
 	if err != nil {
 		return nil, err
 	}
-	ads, err := s.fetch(ctx, query, region)
+	ads, err := s.fetch(ctx, cfg.Key, query, region)
 	if err != nil {
 		release() // an errored search is not counted by SerpApi, so it is given back here too
 		return nil, err
@@ -104,15 +110,15 @@ func (s *Searcher) Search(ctx context.Context, tenantID, query, region string) (
 
 // reserve takes one search from the month's platform pool and the tenant's share, atomically per
 // counter; release gives both back.
-func (s *Searcher) reserve(ctx context.Context, tenantID string) (func(), error) {
+func (s *Searcher) reserve(ctx context.Context, tenantID string, cfg Settings) (func(), error) {
 	month := s.now().UTC().Format("2006-01")
 	pool := fmt.Sprintf("%s:adintel:serpapi:month:%s", s.NS, month)
 	mine := fmt.Sprintf("%s:adintel:serpapi:tenant:%s:%s", s.NS, tenantID, month)
 	limit := FreeMonthlySearches
-	if s.PaidCap > 0 {
-		limit = s.PaidCap
+	if cfg.PaidCap > 0 {
+		limit = cfg.PaidCap
 	}
-	share := s.TenantShare
+	share := cfg.TenantShare
 	if share <= 0 {
 		share = DefaultTenantShare
 	}
@@ -145,8 +151,8 @@ func (s *Searcher) reserve(ctx context.Context, tenantID string) (func(), error)
 }
 
 // fetch reads the first page only: one search, up to 40 ads, is enough to find the winners.
-func (s *Searcher) fetch(ctx context.Context, query, region string) ([]Ad, error) {
-	q := url.Values{"engine": {"google_ads_transparency_center"}, "region": {region}, "api_key": {s.Key}}
+func (s *Searcher) fetch(ctx context.Context, key, query, region string) ([]Ad, error) {
+	q := url.Values{"engine": {"google_ads_transparency_center"}, "region": {region}, "api_key": {key}}
 	if strings.HasPrefix(query, "AR") && !strings.ContainsAny(query, " .") {
 		q.Set("advertiser_id", query)
 	} else {

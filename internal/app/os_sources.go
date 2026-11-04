@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/registry"
@@ -103,4 +106,24 @@ func (s *registrySource) Get(ctx context.Context) registry.Registry {
 	s.current = next
 	s.mu.Unlock()
 	return next
+}
+
+// adIntelSettings reads the SerpApi row (adintel/serpapi) each call through the resolver's own
+// cache: api_key, paid_enabled with paid_monthly_cap, and tenant_share. Paid use counts only
+// when the platform owner switched it on; code never switches it on (owner rule, 2026-10-22).
+func adIntelSettings(resolver *providers.Resolver) func(ctx context.Context) adintel.Settings {
+	return func(ctx context.Context) adintel.Settings {
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		m, err := resolver.ResolveRaw(rctx, "adintel", "serpapi")
+		if err != nil {
+			return adintel.Settings{}
+		}
+		out := adintel.Settings{Key: m["api_key"]}
+		if strings.EqualFold(m["paid_enabled"], "true") {
+			out.PaidCap, _ = strconv.Atoi(m["paid_monthly_cap"])
+		}
+		out.TenantShare, _ = strconv.Atoi(m["tenant_share"])
+		return out
+	}
 }
