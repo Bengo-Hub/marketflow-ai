@@ -384,6 +384,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
 	osHandler.WithGate(assistgate.New(decider))
+	// Social inbox intent tags (Sprint 22): typed judgments only, no tools.
+	inboxIntentHandler := handlers.NewInboxIntentHandler(decider, logger)
 	// Creative studio posters (Sprint 15). Finished posters go to the shared
 	// object storage (OBJECT_STORAGE_*, or MEDIA_ROOT locally); without it the
 	// endpoint answers 503 rather than paying for an image it cannot keep.
@@ -531,6 +533,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
+		r.Post("/inbox/intent", inboxIntentHandler.Tag)
+		r.Post("/credits/charge", osHandler.ChargeCredits)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)
