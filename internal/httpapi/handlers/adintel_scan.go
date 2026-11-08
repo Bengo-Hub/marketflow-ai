@@ -1,11 +1,18 @@
 package handlers
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/adintel"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -13,7 +20,14 @@ import (
 type AdIntelHandler struct {
 	searcher   *adintel.Searcher
 	complaints *adintel.Complaints
+	credits    CreditSpender
 	logger     *zap.Logger
+}
+
+// WithCredits charges for fresh complaint reports; nil leaves them free (local development).
+func (h *AdIntelHandler) WithCredits(c CreditSpender) *AdIntelHandler {
+	h.credits = c
+	return h
 }
 
 func NewAdIntelHandler(s *adintel.Searcher, logger *zap.Logger) *AdIntelHandler {
@@ -43,7 +57,36 @@ func (h *AdIntelHandler) Complaints(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "tenant_id and query are required")
 		return
 	}
+	tid, err := uuid.Parse(req.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "tenant_id must be a UUID")
+		return
+	}
+	// A fresh report costs real searches, so it costs one credit; a cached one is free. The key
+	// is per tenant, query and month, so a retry within the month is never charged twice.
+	key := ""
+	if h.credits != nil && !h.complaints.Cached(r.Context(), req.Query, req.Country) {
+		key = fmt.Sprintf("complaints:%s:%s:%s", tid, time.Now().UTC().Format("2006-01"), complaintKey(req.Query, req.Country))
+		dec, err := h.credits.Spend(r.Context(), tid, complaintReportCredits, key)
+		if err != nil {
+			h.logger.Warn("complaint report credit check failed", zap.String("tenant", req.TenantID), zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable, "AI credits could not be checked right now, try again shortly")
+			return
+		}
+		if !dec.Allowed {
+			writeJSON(w, http.StatusPaymentRequired, map[string]any{"error": "AI credits are used up. Buy a bundle from your billing page to keep going."})
+			return
+		}
+	}
 	report, err := h.complaints.Report(r.Context(), req.TenantID, req.Query, req.Country)
+	if key != "" && (err != nil || len(report.Themes) == 0) {
+		// Nothing was produced, so nothing is owed.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		if rerr := h.credits.Refund(rctx, tid, key); rerr != nil {
+			h.logger.Warn("complaint report refund failed", zap.String("tenant", req.TenantID), zap.Error(rerr))
+		}
+		cancel()
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, report)
@@ -53,6 +96,14 @@ func (h *AdIntelHandler) Complaints(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("complaint report failed", zap.String("tenant", req.TenantID), zap.Error(err))
 		writeError(w, http.StatusBadGateway, "the complaint search failed; try again later")
 	}
+}
+
+// complaintReportCredits is the price of one fresh complaint report.
+const complaintReportCredits = 1
+
+func complaintKey(query, country string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(query)) + "|" + strings.ToLower(country)))
+	return hex.EncodeToString(sum[:8])
 }
 
 // maxScanQueries bounds one scan; a tenant's monthly share is far smaller anyway.

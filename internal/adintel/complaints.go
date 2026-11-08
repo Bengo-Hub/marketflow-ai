@@ -100,6 +100,23 @@ type lowReview struct {
 	Snippet string
 }
 
+func (c *Complaints) cacheKey(query, country string) string {
+	return fmt.Sprintf("%s:adintel:complaints:%s:%s", c.NS, country, strings.ToLower(strings.TrimSpace(query)))
+}
+
+// Cached reports whether a report is already held, so the caller charges only for a fresh one.
+func (c *Complaints) Cached(ctx context.Context, query, country string) bool {
+	n, err := c.Redis.Exists(ctx, c.cacheKey(query, normalCountry(country))).Result()
+	return err == nil && n > 0
+}
+
+func normalCountry(country string) string {
+	if country == "" {
+		return "ke"
+	}
+	return strings.ToLower(country)
+}
+
 // Report returns the complaint themes for a niche and place, for example "coding classes for kids
 // Kisumu" in Kenya. One fresh report costs up to 4 Serper searches from the pool and the tenant's
 // share; a cached one is free.
@@ -108,11 +125,8 @@ func (c *Complaints) Report(ctx context.Context, tenantID, query, country string
 	if query == "" || utf8.RuneCountInString(query) > 120 {
 		return ComplaintReport{}, fmt.Errorf("describe the business and town in up to 120 characters")
 	}
-	if country == "" {
-		country = "ke"
-	}
-	country = strings.ToLower(country)
-	cacheKey := fmt.Sprintf("%s:adintel:complaints:%s:%s", c.NS, country, strings.ToLower(query))
+	country = normalCountry(country)
+	cacheKey := c.cacheKey(query, country)
 	if b, err := c.Redis.Get(ctx, cacheKey).Bytes(); err == nil {
 		var r ComplaintReport
 		if json.Unmarshal(b, &r) == nil {

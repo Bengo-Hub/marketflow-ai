@@ -14,12 +14,12 @@ import (
 	"time"
 
 	authclient "github.com/Bengo-Hub/shared-auth-client"
+	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
-	"github.com/bengobox/marketflow-ai/internal/config"
-	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/assistgate"
+	"github.com/bengobox/marketflow-ai/internal/config"
 	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
@@ -388,7 +388,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// Competitor ad intel (Sprint 24): SerpApi from Platform, Providers adintel/serpapi.
 	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger).
 		// The Fix step: complaint themes from public reviews through Serper (adintel/serper).
-		WithComplaints(adintel.NewComplaints(complaintSettings(resolver), redisClient, cfg.Redis.Namespace, decider))
+		WithComplaints(adintel.NewComplaints(complaintSettings(resolver), redisClient, cfg.Redis.Namespace, decider)).
+		WithCredits(creditSpender)
 	// Social inbox intent tags (Sprint 22): typed judgments only, no tools.
 	inboxIntentHandler := handlers.NewInboxIntentHandler(decider, logger)
 	// Creative studio posters (Sprint 15). Finished posters go to the shared
