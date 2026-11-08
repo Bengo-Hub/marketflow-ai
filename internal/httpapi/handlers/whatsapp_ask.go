@@ -101,7 +101,7 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sink := &captureSink{}
-	h.runTurn(ctx, r, tenantID, askRequest{Text: req.Text}, runID, turnKey, sink)
+	h.runTurn(ctx, r, tenantID, askRequest{Text: req.Text, viaWhatsApp: true}, runID, turnKey, sink)
 	out.RunID = runID
 	if sink.failed != "" {
 		out.Reply = "Sorry, the marketing team could not finish that. Please try again, or open MarketFlow: " + link(req.PortalURL, req.TenantSlug, "/dashboard")

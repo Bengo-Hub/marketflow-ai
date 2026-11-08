@@ -120,6 +120,9 @@ type askRequest struct {
 	// Stream answers as server-sent events: one progress event per stage, then
 	// the same response as the JSON reply in a final "result" event.
 	Stream bool `json:"stream"`
+	// viaWhatsApp is set by the WhatsApp assistant, whose sender identity and role were
+	// verified upstream; it is never read from a request body.
+	viaWhatsApp bool
 }
 
 // askSink is where Ask writes its outcome: plain JSON, or a stream of events.
@@ -229,6 +232,9 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 // (Ask) and the WhatsApp assistant (WhatsAppAsk) share it, so a turn behaves the same on both.
 // turnKey is the credit spend to refund when nothing was produced ("" when nothing was charged).
 func (h *OSHandler) runTurn(ctx context.Context, r *http.Request, tenantID uuid.UUID, req askRequest, runID, turnKey string, sink askSink) {
+	if h.teamTurn(ctx, r, tenantID, req, runID, turnKey, sink) {
+		return
+	}
 	available := h.balance(ctx, tenantID)
 	meter := &llm.Meter{}
 	ctx = llm.WithMeter(ctx, meter)

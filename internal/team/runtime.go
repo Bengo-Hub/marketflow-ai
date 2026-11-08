@@ -37,6 +37,8 @@ const (
 	RouteChat    = "chat"
 	RouteQuote   = "quote"
 	RouteDone    = "done"
+	// RouteTeam is a team setup or org chart request, answered by the setup workflow (setup.go).
+	RouteTeam = "team"
 )
 
 // MemberOverride is a tenant's change to a default member (CustomAgent rows with
