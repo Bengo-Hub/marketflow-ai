@@ -54,7 +54,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind, Tier: req.Tier,
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
-		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, LogoURL: req.LogoURL,
+		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))

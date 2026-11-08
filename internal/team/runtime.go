@@ -57,6 +57,7 @@ type TenantContext struct {
 	Members          []MemberOverride `json:"members"`
 	Features         map[string]bool  `json:"features,omitempty"`
 	HasPlan          bool             `json:"has_plan"`
+	MarketSignals    *MarketSignals   `json:"market_signals,omitempty"`
 }
 
 // ContextSource loads the tenant context (marketflow-api owns the data).
@@ -480,6 +481,7 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 		user.WriteString(trimTo(tc.MarketingContext, 4000))
 		user.WriteString("\n\n")
 	}
+	user.WriteString(marketBlock(tc.MarketSignals, st.playbook.OutputContract))
 	if !spec.InjectionSuspected {
 		if kb := r.retrieve(ctx, tenantID, st, spec); kb != "" {
 			user.WriteString("KNOWLEDGE BASE (facts you may use):\n")

@@ -40,12 +40,23 @@ type Scene struct {
 	Caption   string `json:"caption"`
 }
 
+// Strategy records how a script used the market (Find, Flip, Fix): the winning pattern it follows,
+// what it changed for this audience, the complaint it answers, and a hypothesis a test can prove
+// wrong. All optional; empty when the tenant has no market signals yet.
+type Strategy struct {
+	Pattern    string `json:"pattern,omitempty"`
+	Flip       string `json:"flip,omitempty"`
+	Fix        string `json:"fix,omitempty"`
+	Hypothesis string `json:"hypothesis,omitempty"`
+}
+
 // VideoScript is the video_script contract.
 type VideoScript struct {
-	Format string   `json:"format"`
-	Hooks  []string `json:"hooks"`
-	Scenes []Scene  `json:"scenes"`
-	CTA    string   `json:"cta"`
+	Format   string    `json:"format"`
+	Hooks    []string  `json:"hooks"`
+	Scenes   []Scene   `json:"scenes"`
+	CTA      string    `json:"cta"`
+	Strategy *Strategy `json:"strategy,omitempty"`
 }
 
 // PosterBrief is the poster_brief contract.
@@ -118,7 +129,7 @@ type ReviewFindings struct {
 // contractShapes are the JSON shapes shown to the model.
 var contractShapes = map[string]string{
 	"ad_copy_batch":    `{"variants":[{"id":"v1","format":"","angle":"","hook":"","headline":"","primary_text":"","cta":"","hypothesis":"","source":""}]}`,
-	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":""}],"cta":""}`,
+	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":""}],"cta":"","strategy":{"pattern":"","flip":"","fix":"","hypothesis":""}}`,
 	"poster_brief":     `{"headline":"","subline":"","cta":"","layout":"","image_prompt":"","sizes":["1080x1080","1080x1350","1080x1920"]}`,
 	"social_posts":     `{"posts":[{"platform":"","hook":"","text":"","visual":""}]}`,
 	"content_calendar": `{"pillars":[""],"items":[{"day":"","platform":"","pillar":"","format":"","hook":"","cta":"","ad_candidate":false}]}`,
@@ -186,6 +197,14 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 		}
 		if total > 90 {
 			return nil, fmt.Errorf("video_script: %.0f s is too long", total)
+		}
+		if st := v.Strategy; st != nil {
+			if tooLong(st.Pattern, st.Flip, st.Fix, st.Hypothesis) {
+				return nil, fmt.Errorf("video_script: oversized strategy")
+			}
+			if *st == (Strategy{}) {
+				v.Strategy = nil
+			}
 		}
 		return json.Marshal(v)
 	case "poster_brief":

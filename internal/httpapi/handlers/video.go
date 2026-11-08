@@ -202,11 +202,13 @@ type adRequest struct {
 	FootageURLs []string            `json:"footage_urls"`
 	Accent      string              `json:"accent"`
 	LogoURL     string              `json:"logo_url"`
-	Headline    string              `json:"headline"`
-	Subline     string              `json:"subline"`
-	Price       string              `json:"price"`
-	CTA         string              `json:"cta"`
-	Charge      bool                `json:"charge"`
+	// MusicURL is the owner's licensed music bed (marketflow-api checks the confirmation).
+	MusicURL string `json:"music_url"`
+	Headline string `json:"headline"`
+	Subline  string `json:"subline"`
+	Price    string `json:"price"`
+	CTA      string `json:"cta"`
+	Charge   bool   `json:"charge"`
 	// Kind is the video type: template (default), presenter or presenter_premium.
 	Kind string `json:"kind"`
 	// ActorURL and Seed are the approved storyboard's actor (presenter types).

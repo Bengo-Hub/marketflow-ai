@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 
 	"golang.org/x/image/font"
@@ -96,9 +97,24 @@ func ComposeSceneCaption(format, text string) (*image.RGBA, error) {
 	return composeCaptionAt(format, text, sceneCaptionTop, true)
 }
 
+// noteTop places the AI disclosure between the spoken captions (which end at captionBottomY) and
+// the bottom of the safe band, so it stays readable without covering anything.
+const noteTop = 0.765
+
+// ComposeNote draws the AI disclosure: one short line, smaller than a caption, in the same white
+// outlined style so it reads on any background.
+func ComposeNote(format, text string) (*image.RGBA, error) {
+	return composeText(format, text, noteTop, true, 40)
+}
+
 // composeCaptionAt lays the text out within the safe band's width, shrinking it to fit
 // two lines, and anchors its block at y (the bottom edge, or the top edge when fromTop).
 func composeCaptionAt(format, text string, y float64, fromTop bool) (*image.RGBA, error) {
+	return composeText(format, text, y, fromTop, 16)
+}
+
+// composeText draws text at width/divisor points, shrinking to fit two lines in the safe band.
+func composeText(format, text string, y float64, fromTop bool, divisor float64) (*image.RGBA, error) {
 	size, ok := Formats[format]
 	if !ok {
 		return nil, fmt.Errorf("media: unknown format %q", format)
@@ -114,7 +130,8 @@ func composeCaptionAt(format, text string, y float64, fromTop bool) (*image.RGBA
 		return canvas, nil
 	}
 	maxW := int(float64(W) * safeBandWidth)
-	fontSize := float64(W) / 16
+	// The floor keeps small text readable on narrow formats and above the loop's lower bound.
+	fontSize := math.Max(float64(W)/divisor, 22)
 	var lines []string
 	var fc font.Face
 	for ; fontSize >= 20; fontSize *= 0.92 {

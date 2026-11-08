@@ -70,6 +70,8 @@ func TestCaptionsStayInTheSafeBand(t *testing.T) {
 	}{
 		{"spoken", ComposeCaption, 1920 * 50 / 100, 1920 * 70 / 100},
 		{"scene", ComposeSceneCaption, 1920 * 20 / 100, 1920 * 40 / 100},
+		// The AI note sits under the spoken words and above the safe band's bottom (81.25%).
+		{"ai note", ComposeNote, 1920 * 765 / 1000, 1920*8125/10000 - 20},
 	} {
 		img, err := c.draw("1080x1920", "Order shea butter today and get free delivery across Kisumu town")
 		if err != nil {
@@ -96,6 +98,17 @@ func TestCaptionsStayInTheSafeBand(t *testing.T) {
 		if white == 0 || black == 0 {
 			t.Fatalf("%s caption: white %d, outline %d", c.name, white, black)
 		}
+	}
+}
+
+// Every presenter ad carries the AI note in its language; a template ad of the owner's own photos
+// does not.
+func TestAINote(t *testing.T) {
+	if aiNote(AdPresenter, "en") != "AI-generated" || aiNote(AdPresenterPremium, "sw") != "Imetengenezwa kwa AI" {
+		t.Fatal("presenter ads carry the note in their language")
+	}
+	if aiNote(AdTemplate, "en") != "" || aiNote("", "en") != "" {
+		t.Fatal("template ads carry no note")
 	}
 }
 

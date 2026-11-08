@@ -109,6 +109,8 @@ type AdRequest struct {
 	Footage   []string // the owner's clips, http(s)
 	EndCard   Overlay
 	LogoURL   string
+	// MusicURL is an optional licensed music bed, mixed under the voice.
+	MusicURL string
 	// ActorURL is the approved actor still every presenter scene is lip-synced from, and
 	// Seed the seed recorded with it.
 	ActorURL string
@@ -170,6 +172,9 @@ func (a *Ads) Validate(req AdRequest) error {
 	}
 	if _, ok := Deliveries[req.Delivery]; req.Delivery != "" && !ok {
 		return &UserError{Msg: "delivery must be ad, ugc, kids, story or info"}
+	}
+	if req.MusicURL != "" && !strings.HasPrefix(req.MusicURL, "https://") {
+		return &UserError{Msg: "the music link must be https"}
 	}
 	switch req.Kind {
 	case "", AdTemplate:
@@ -526,7 +531,8 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	}
 	card := req.EndCard
 	res, err := a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
-		Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &card, LogoURL: req.LogoURL})
+		Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &card, LogoURL: req.LogoURL,
+		MusicURL: req.MusicURL, AINote: aiNote(req.Kind, req.Language)})
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +543,19 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		res.Scenes = append(res.Scenes, o.cache)
 	}
 	return res, nil
+}
+
+// aiNote is the on-screen label every ad with a synthetic person carries (ugc-video-ads.md, honesty
+// rule 3). Presenter ads use a generated actor and generated storyboard stills, so a synthetic
+// person can appear in any of their scenes; template ads show only the owner's own photos.
+func aiNote(kind, language string) string {
+	if !isPresenterKind(kind) {
+		return ""
+	}
+	if language == "sw" {
+		return "Imetengenezwa kwa AI"
+	}
+	return "AI-generated"
 }
 
 // routeSummary names the routes the ad used, for the version's record.

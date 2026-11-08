@@ -58,8 +58,13 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 
 	items := reviewItems(st)
 	ugc := st.Playbook == "ugc-video" || st.Playbook == "video-script"
+	refs := referenceTexts(tc.MarketSignals)
 	blocked := map[string]bool{}
 	for _, it := range items {
+		if copied, shared := copiedFrom(it.text, refs); copied {
+			blocked[it.id] = true
+			findings = append(findings, Finding{Quote: shared, Issue: "repeats the words of a reference ad", Severity: "high", Fix: "Keep the idea, write it in this business's own words."})
+		}
 		if _, b, reason := r.filter.CheckForTenant(it.text, tc.BusinessType); b {
 			blocked[it.id] = true
 			findings = append(findings, Finding{Quote: it.id, Issue: "compliance: " + reason, Severity: "high", Fix: "Remove the claim or replace it with a supported one."})

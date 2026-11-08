@@ -64,9 +64,12 @@ type AssembleRequest struct {
 	// SceneCaptions are the script's on-screen captions, each shown over its scene near
 	// the top of the safe band.
 	SceneCaptions []CaptionLine
-	MusicURL  string   // optional bed
-	EndCard   *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
-	LogoURL   string   // fetched into EndCard.Logo when set
+	MusicURL      string   // optional bed
+	EndCard       *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
+	LogoURL       string   // fetched into EndCard.Logo when set
+	// AINote, when set, is shown small for the whole ad, over the end card too: the disclosure
+	// required whenever a synthetic person appears.
+	AINote string
 }
 
 // AdStore keeps finished ads (httpware's video-drafts type).
@@ -231,6 +234,18 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 			}
 		}
 		layers = append(kept, layer{p, start, total})
+	}
+	// The disclosure goes last, so nothing is drawn over it.
+	if note := strings.TrimSpace(req.AINote); note != "" {
+		img, err := ComposeNote(req.Format, note)
+		if err != nil {
+			return nil, err
+		}
+		p := filepath.Join(dir, "ainote.png")
+		if err := writePNG(p, img); err != nil {
+			return nil, err
+		}
+		layers = append(layers, layer{p, 0, total})
 	}
 
 	// 3. Audio: the voice (each scene's own, laid end to end, or one voice-over) and the

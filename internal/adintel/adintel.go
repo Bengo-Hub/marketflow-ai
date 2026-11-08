@@ -37,8 +37,11 @@ type Ad struct {
 	StillRunning bool      `json:"still_running"`
 }
 
-// ErrQuota means the month's searches (platform or this tenant's share) are used.
+// ErrQuota means the platform's searches for the month are used, so nobody can search.
 var ErrQuota = errors.New("competitor scan quota used; it resumes on the 1st")
+
+// ErrTenantShare means this tenant used its own share for the month. Other tenants still search.
+var ErrTenantShare = errors.New("this business's competitor searches for the month are used; they resume on the 1st")
 
 // Limits.
 const (
@@ -141,7 +144,7 @@ func (s *Searcher) reserve(ctx context.Context, tenantID string, cfg Settings) (
 	if m > int64(share) {
 		s.Redis.Decr(ctx, pool)
 		s.Redis.Decr(ctx, mine)
-		return nil, ErrQuota
+		return nil, ErrTenantShare
 	}
 	return func() {
 		bg := context.WithoutCancel(ctx)

@@ -23,8 +23,10 @@ func NewAdIntelHandler(s *adintel.Searcher, logger *zap.Logger) *AdIntelHandler 
 const maxScanQueries = 10
 
 // Scan handles POST /api/v1/internal/adintel/scan {tenant_id, queries, region} (S2S, the weekly
-// job): each competitor's winners, top 10. A used quota stops the scan and says so; cached
-// answers are free.
+// job): each competitor's winners, top 10. Cached answers are free. A used platform pool stops the
+// scan with quota_used, which stops the job for every tenant. A used tenant share affects only this
+// tenant, with share_used: cached queries are still answered, and the others are left out of
+// results, so the job keeps their earlier winners.
 func (h *AdIntelHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TenantID string   `json:"tenant_id"`
@@ -46,12 +48,18 @@ func (h *AdIntelHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	out := struct {
 		Results   []result `json:"results"`
 		QuotaUsed bool     `json:"quota_used"`
-	}{}
+		ShareUsed bool     `json:"share_used,omitempty"`
+	}{Results: []result{}}
 	for _, q := range req.Queries {
 		ads, err := h.searcher.Search(r.Context(), req.TenantID, q, req.Region)
 		if errors.Is(err, adintel.ErrQuota) {
 			out.QuotaUsed = true
 			break
+		}
+		if errors.Is(err, adintel.ErrTenantShare) {
+			// Later queries may still be cached, which is free; uncached ones stop here too.
+			out.ShareUsed = true
+			continue
 		}
 		res := result{Query: q}
 		if err != nil {

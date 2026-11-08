@@ -38,6 +38,7 @@ func TestAdsValidate(t *testing.T) {
 		"too much voice":             func(r *AdRequest) { r.Scenes[0].Voiceover = strings.Repeat("a ", MaxAdVoiceChars) },
 		"local photo":                func(r *AdRequest) { r.Photos = []string{"file:///etc/passwd"} },
 		"format":                     func(r *AdRequest) { r.Format = "800x600" },
+		"music not https":            func(r *AdRequest) { r.MusicURL = "file:///etc/passwd" },
 	}
 	for name, mutate := range bad {
 		r := ok
