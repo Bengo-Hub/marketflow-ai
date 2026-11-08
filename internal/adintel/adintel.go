@@ -111,12 +111,9 @@ func (s *Searcher) Search(ctx context.Context, tenantID, query, region string) (
 	return ads, nil
 }
 
-// reserve takes one search from the month's platform pool and the tenant's share, atomically per
-// counter; release gives both back.
+// reserve takes one search from the month's platform pool and the tenant's share; release gives
+// both back.
 func (s *Searcher) reserve(ctx context.Context, tenantID string, cfg Settings) (func(), error) {
-	month := s.now().UTC().Format("2006-01")
-	pool := fmt.Sprintf("%s:adintel:serpapi:month:%s", s.NS, month)
-	mine := fmt.Sprintf("%s:adintel:serpapi:tenant:%s:%s", s.NS, tenantID, month)
 	limit := FreeMonthlySearches
 	if cfg.PaidCap > 0 {
 		limit = cfg.PaidCap
@@ -125,31 +122,43 @@ func (s *Searcher) reserve(ctx context.Context, tenantID string, cfg Settings) (
 	if share <= 0 {
 		share = DefaultTenantShare
 	}
+	return reserveQuota(ctx, s.Redis, s.NS, "serpapi", tenantID, s.now(), 1, limit, share)
+}
+
+// reserveQuota takes n units from a provider's monthly platform pool and the tenant's monthly
+// share, counted in Redis before any outbound call. Over the pool is ErrQuota (nobody can search);
+// over the share is ErrTenantShare (only this tenant stops). release gives the units back, for a
+// call that failed or was not made.
+func reserveQuota(ctx context.Context, rdb *redis.Client, ns, provider, tenantID string, now time.Time, n, limit, share int) (func(), error) {
+	month := now.UTC().Format("2006-01")
+	pool := fmt.Sprintf("%s:adintel:%s:month:%s", ns, provider, month)
+	mine := fmt.Sprintf("%s:adintel:%s:tenant:%s:%s", ns, provider, tenantID, month)
 	ttl := 40 * 24 * time.Hour
-	n, err := s.Redis.Incr(ctx, pool).Result()
+	units := int64(n)
+	used, err := rdb.IncrBy(ctx, pool, units).Result()
 	if err != nil {
 		return nil, err
 	}
-	s.Redis.Expire(ctx, pool, ttl)
-	if n > int64(limit) {
-		s.Redis.Decr(ctx, pool)
+	rdb.Expire(ctx, pool, ttl)
+	if used > int64(limit) {
+		rdb.DecrBy(ctx, pool, units)
 		return nil, ErrQuota
 	}
-	m, err := s.Redis.Incr(ctx, mine).Result()
+	own, err := rdb.IncrBy(ctx, mine, units).Result()
 	if err != nil {
-		s.Redis.Decr(ctx, pool)
+		rdb.DecrBy(ctx, pool, units)
 		return nil, err
 	}
-	s.Redis.Expire(ctx, mine, ttl)
-	if m > int64(share) {
-		s.Redis.Decr(ctx, pool)
-		s.Redis.Decr(ctx, mine)
+	rdb.Expire(ctx, mine, ttl)
+	if own > int64(share) {
+		rdb.DecrBy(ctx, pool, units)
+		rdb.DecrBy(ctx, mine, units)
 		return nil, ErrTenantShare
 	}
 	return func() {
 		bg := context.WithoutCancel(ctx)
-		s.Redis.Decr(bg, pool)
-		s.Redis.Decr(bg, mine)
+		rdb.DecrBy(bg, pool, units)
+		rdb.DecrBy(bg, mine, units)
 	}, nil
 }
 

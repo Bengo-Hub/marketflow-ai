@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +107,28 @@ func (s *registrySource) Get(ctx context.Context) registry.Registry {
 	s.current = next
 	s.mu.Unlock()
 	return next
+}
+
+// complaintSettings reads the Serper row (adintel/serper: api_key, monthly_cap, tenant_share)
+// through the resolver's cache, and falls back to MF_SERPER_API_KEY, the platform-config rule's
+// order (database first, then the environment).
+func complaintSettings(resolver *providers.Resolver) func(ctx context.Context) adintel.ComplaintSettings {
+	envKey := strings.TrimSpace(os.Getenv("MF_SERPER_API_KEY"))
+	return func(ctx context.Context) adintel.ComplaintSettings {
+		out := adintel.ComplaintSettings{Key: envKey}
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		m, err := resolver.ResolveRaw(rctx, "adintel", "serper")
+		if err != nil {
+			return out
+		}
+		if k := strings.TrimSpace(m["api_key"]); k != "" {
+			out.Key = k
+		}
+		out.MonthlyCap, _ = strconv.Atoi(m["monthly_cap"])
+		out.TenantShare, _ = strconv.Atoi(m["tenant_share"])
+		return out
+	}
 }
 
 // adIntelSettings reads the SerpApi row (adintel/serpapi) each call through the resolver's own

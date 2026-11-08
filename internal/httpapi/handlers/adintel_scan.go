@@ -9,14 +9,50 @@ import (
 	"go.uber.org/zap"
 )
 
-// AdIntelHandler serves the competitor scan (Sprint 24).
+// AdIntelHandler serves the competitor scan (Sprint 24) and the complaint report (Fix step).
 type AdIntelHandler struct {
-	searcher *adintel.Searcher
-	logger   *zap.Logger
+	searcher   *adintel.Searcher
+	complaints *adintel.Complaints
+	logger     *zap.Logger
 }
 
 func NewAdIntelHandler(s *adintel.Searcher, logger *zap.Logger) *AdIntelHandler {
 	return &AdIntelHandler{searcher: s, logger: logger.Named("adintel")}
+}
+
+// WithComplaints wires the Serper complaint report.
+func (h *AdIntelHandler) WithComplaints(c *adintel.Complaints) *AdIntelHandler {
+	h.complaints = c
+	return h
+}
+
+// Complaints handles POST /api/v1/internal/adintel/complaints {tenant_id, query, country} (S2S,
+// marketflow-api for the owner's request): complaint themes in the niche, for the owner to confirm
+// before any theme shapes an ad.
+func (h *AdIntelHandler) Complaints(w http.ResponseWriter, r *http.Request) {
+	if h.complaints == nil {
+		writeError(w, http.StatusServiceUnavailable, "complaint search is not configured")
+		return
+	}
+	var req struct {
+		TenantID string `json:"tenant_id"`
+		Query    string `json:"query"`
+		Country  string `json:"country"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || req.TenantID == "" {
+		writeError(w, http.StatusBadRequest, "tenant_id and query are required")
+		return
+	}
+	report, err := h.complaints.Report(r.Context(), req.TenantID, req.Query, req.Country)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, report)
+	case errors.Is(err, adintel.ErrQuota), errors.Is(err, adintel.ErrTenantShare):
+		writeError(w, http.StatusTooManyRequests, err.Error())
+	default:
+		h.logger.Warn("complaint report failed", zap.String("tenant", req.TenantID), zap.Error(err))
+		writeError(w, http.StatusBadGateway, "the complaint search failed; try again later")
+	}
 }
 
 // maxScanQueries bounds one scan; a tenant's monthly share is far smaller anyway.

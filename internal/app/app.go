@@ -386,7 +386,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
 	osHandler.WithGate(assistgate.New(decider))
 	// Competitor ad intel (Sprint 24): SerpApi from Platform, Providers adintel/serpapi.
-	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger)
+	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger).
+		// The Fix step: complaint themes from public reviews through Serper (adintel/serper).
+		WithComplaints(adintel.NewComplaints(complaintSettings(resolver), redisClient, cfg.Redis.Namespace, decider))
 	// Social inbox intent tags (Sprint 22): typed judgments only, no tools.
 	inboxIntentHandler := handlers.NewInboxIntentHandler(decider, logger)
 	// Creative studio posters (Sprint 15). Finished posters go to the shared
@@ -540,6 +542,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/credits/charge", osHandler.ChargeCredits)
 		r.Post("/credits/forecast", osHandler.ForecastCredits)
 		r.Post("/adintel/scan", adIntelHandler.Scan)
+		r.Post("/adintel/complaints", adIntelHandler.Complaints)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)
