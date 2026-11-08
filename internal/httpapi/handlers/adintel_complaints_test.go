@@ -53,7 +53,7 @@ func complaintHandler(t *testing.T, serperStatus int, emptyPlaces bool, sp Credi
 			return
 		}
 		if !emptyPlaces {
-			_, _ = w.Write([]byte(`{"places":[{"cid":"1","ratingCount":4}]}`))
+			_, _ = w.Write([]byte(`{"places":[{"cid":"1","ratingCount":4,"title":"Rival Bakery","website":"https://rival.example","rating":3.9},{"title":"No Reviews Yet","website":"javascript:alert(1)"}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"places":[]}`))
@@ -79,8 +79,16 @@ func TestComplaintsCharging(t *testing.T) {
 	tid := uuid.New()
 	sp := &complaintSpender{}
 	h := complaintHandler(t, http.StatusOK, false, sp)
-	if w := askComplaints(h, tid); w.Code != http.StatusOK || len(sp.spent) != 1 || len(sp.refunds) != 0 {
+	w := askComplaints(h, tid)
+	if w.Code != http.StatusOK || len(sp.spent) != 1 || len(sp.refunds) != 0 {
 		t.Fatalf("fresh report: %d spent %v", w.Code, sp.spent)
+	}
+	var rep adintel.ComplaintReport
+	if err := json.Unmarshal(w.Body.Bytes(), &rep); err != nil || len(rep.Places) != 2 {
+		t.Fatalf("places = %+v (%v)", rep.Places, err)
+	}
+	if rep.Places[0].Name != "Rival Bakery" || rep.Places[0].Website == "" || rep.Places[1].Website != "" {
+		t.Fatalf("a place or an unsafe website slipped through: %+v", rep.Places)
 	}
 	if w := askComplaints(h, tid); w.Code != http.StatusOK || len(sp.spent) != 1 {
 		t.Fatalf("a cached report is free: %d spent %v", w.Code, sp.spent)

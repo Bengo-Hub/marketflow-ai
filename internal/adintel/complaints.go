@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -76,8 +77,23 @@ type ComplaintReport struct {
 	Businesses int     `json:"businesses"`
 	Reviewed   int     `json:"low_reviews"`
 	Themes     []Theme `json:"themes"`
-	Cached     bool    `json:"cached,omitempty"`
+	// Places are the similar businesses the search found, offered to the owner as competitors.
+	// They come from the same Places call, so they cost nothing more. Business names are public;
+	// no reviewer detail is ever here.
+	Places []Place `json:"places,omitempty"`
+	Cached bool    `json:"cached,omitempty"`
 }
+
+// Place is one similar business on Google Maps.
+type Place struct {
+	Name    string  `json:"name"`
+	Website string  `json:"website,omitempty"`
+	Rating  float64 `json:"rating,omitempty"`
+	Reviews int     `json:"reviews,omitempty"`
+}
+
+// maxSuggestedPlaces bounds the competitor suggestions in one report.
+const maxSuggestedPlaces = 8
 
 // Complaints finds and sorts complaints.
 type Complaints struct {
@@ -150,7 +166,7 @@ func (c *Complaints) Report(ctx context.Context, tenantID, query, country string
 	if err != nil {
 		return ComplaintReport{}, err
 	}
-	places, err := c.places(ctx, cfg.Key, query, country)
+	places, found, err := c.places(ctx, cfg.Key, query, country)
 	if err != nil {
 		release()
 		return ComplaintReport{}, err
@@ -167,31 +183,43 @@ func (c *Complaints) Report(ctx context.Context, tenantID, query, country string
 			break
 		}
 	}
-	report := ComplaintReport{Query: query, Businesses: len(places), Reviewed: len(low), Themes: c.themes(ctx, low)}
+	report := ComplaintReport{Query: query, Businesses: len(places), Reviewed: len(low), Themes: c.themes(ctx, low), Places: found}
 	if b, err := json.Marshal(report); err == nil {
 		c.Redis.Set(ctx, cacheKey, b, complaintCacheTTL)
 	}
 	return report, nil
 }
 
-// places returns the cids of the top places that have reviews.
-func (c *Complaints) places(ctx context.Context, key, query, country string) ([]string, error) {
+// places returns the cids of the top places that have reviews, and the named businesses found,
+// for the owner to pick competitors from.
+func (c *Complaints) places(ctx context.Context, key, query, country string) ([]string, []Place, error) {
 	var out struct {
 		Places []struct {
-			CID         string `json:"cid"`
-			RatingCount int    `json:"ratingCount"`
+			Title       string  `json:"title"`
+			Website     string  `json:"website"`
+			Rating      float64 `json:"rating"`
+			CID         string  `json:"cid"`
+			RatingCount int     `json:"ratingCount"`
 		} `json:"places"`
 	}
 	if err := c.post(ctx, key, "/places", map[string]any{"q": query, "gl": country, "hl": "en"}, &out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var cids []string
+	var found []Place
 	for _, p := range out.Places {
 		if p.CID != "" && p.RatingCount > 0 && len(cids) < maxPlaces {
 			cids = append(cids, p.CID)
 		}
+		if name := clip(p.Title, 80); name != "" && len(found) < maxSuggestedPlaces {
+			pl := Place{Name: name, Rating: p.Rating, Reviews: p.RatingCount}
+			if u, err := url.Parse(p.Website); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+				pl.Website = p.Website
+			}
+			found = append(found, pl)
+		}
 	}
-	return cids, nil
+	return cids, found, nil
 }
 
 // reviews keeps the low ones, rating and text only.
