@@ -17,11 +17,15 @@ import (
 // (the turn's credit is refunded); a later review costs the normal turn (owner, 2026-11-08).
 // It reports whether it handled the request.
 func (h *OSHandler) teamTurn(ctx context.Context, r *http.Request, tenantID uuid.UUID, req askRequest, runID, turnKey string, sink askSink) bool {
-	if req.ApprovePlan || req.Playbook != "" || !team.IsTeamRequest(req.Text) {
+	if req.ApprovePlan || req.Playbook != "" {
 		return false
 	}
 	setupper, ok := h.source.(team.TeamSetupper)
 	if !ok {
+		return false
+	}
+	learner, _ := h.source.(team.PhraseLearner)
+	if isTeam, _ := h.runtime.TeamIntent(ctx, tenantID, req.Text, learner); !isTeam {
 		return false
 	}
 	sink.progress(team.Progress{Stage: "team", Member: "manager", Label: "Setting up your marketing team"})
