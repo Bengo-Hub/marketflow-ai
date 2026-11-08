@@ -446,10 +446,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
 	r := chi.NewRouter()
-	r.Use(chimiddleware.RequestID)
+	r.Use(httpware.RequestID)
 	// Never chi RealIP: it trusts client-sent True-Client-IP/X-Forwarded-For.
 	r.Use(ratelimit.TrustedRealIP)
-	r.Use(chimiddleware.Recoverer)
+	r.Use(httpware.Recover(logger))
 	// Longer for AI responses; streamed (SSE) answers end on their own or on disconnect.
 	r.Use(httpware.BypassForStreaming(chimiddleware.Timeout(120 * time.Second)))
 	// Platform apps and ALLOWED_ORIGINS get credentialed CORS. The embeddable chat widget runs on
@@ -462,7 +462,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		}
 	}
 	corsOrigins = append(corsOrigins, "*")
-	r.Use(httpware.CORS(httpware.StandardCORS(corsOrigins, "X-Widget-Mode", "X-Widget-Persona")))
+	r.Use(httpware.CORS(httpware.StandardCORS(corsOrigins, "X-Widget-Mode", "X-Widget-Persona", "X-OTP-Token")))
 
 	// Base URL redirects to Swagger docs
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
