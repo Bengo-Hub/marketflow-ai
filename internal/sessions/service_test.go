@@ -159,4 +159,17 @@ func TestRateTurn(t *testing.T) {
 	if fb != "down" || len(h) != 4 {
 		t.Fatalf("feedback %q, history %d", fb, len(h))
 	}
+
+	// An answer stored with what produced it gives that back, with the earlier rating.
+	if err := s.AppendMessages(ctx, a, sid, ai.Message{Role: "user", Content: "q2"}, ai.Message{Role: "assistant", Content: "a2"},
+		AnswerMeta{Route: "kb_direct", Intent: "faq"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RateTurn(ctx, a, sid, 2, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RateTurn(ctx, a, sid, 2, true)
+	if err != nil || got.Route != "kb_direct" || got.Intent != "faq" || got.Previous != "down" {
+		t.Fatalf("meta: %+v %v", got, err)
+	}
 }

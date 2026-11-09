@@ -163,7 +163,9 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	// ── Knowledge base already answers it: no model ─────────────────────
 	// Action and live-data intents still go to the agent: a stored text cannot
 	// book a meeting or read today's orders.
-	if intent != ai.IntentTaskExecute && intent != ai.IntentDataQuery && intent != ai.IntentRecruitment && !input.formTurn {
+	// The ratings can switch the direct route off for a question kind (retrieval_stats.go).
+	if intent != ai.IntentTaskExecute && intent != ai.IntentDataQuery && intent != ai.IntentRecruitment && !input.formTurn &&
+		p.routeTrusted(ctx, input.TenantID, string(intent), RouteKBDirect) {
 		if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok {
 			return &ChatResult{
 				Response: p.applyFilter(answer, input.BusinessType), RawResponse: answer,

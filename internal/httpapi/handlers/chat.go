@@ -79,6 +79,10 @@ func (h *ChatHandler) RateTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "the rating could not be saved, try again")
 		return
 	}
+	// Count the rating against the route that answered, so the retrieval learns (Sprint 25).
+	if h.pipeline != nil {
+		h.pipeline.RecordRating(r.Context(), tenantID, turn.Intent, turn.Route, turn.Previous, *in.Helpful)
+	}
 	if *in.Helpful && !turn.WasHelpful && h.suggestFAQ != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
@@ -284,6 +288,7 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		_ = h.sessions.AppendMessages(r.Context(), tenantID, sessionID,
 			ai.Message{Role: "user", Content: req.Question},
 			ai.Message{Role: "assistant", Content: savedAssistant},
+			sessions.AnswerMeta{Route: rag.RouteOf(result.Model), Intent: result.Intent},
 		)
 	}
 
@@ -478,7 +483,7 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 			settle()
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
-			h.persistStreamTurn(r.Context(), input, assembled.String(), persist)
+			h.persistStreamTurn(r.Context(), input, assembled.String(), persist, meta)
 			return
 		}
 		if delta.Content != "" {
@@ -494,18 +499,24 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 		}
 	}
 	// Channel closed without an explicit Done sentinel — still persist what we have.
-	h.persistStreamTurn(r.Context(), input, assembled.String(), persist)
+	h.persistStreamTurn(r.Context(), input, assembled.String(), persist, meta)
 }
 
 // persistStreamTurn appends the user question and the assembled streamed answer
-// to the session history. No-op for ephemeral (unknown-tenant) sessions.
-func (h *ChatHandler) persistStreamTurn(ctx context.Context, input rag.ChatInput, answer string, persist bool) {
+// to the session history. No-op for ephemeral (unknown-tenant) sessions. meta is read
+// now, after the stream guard may have marked a knowledge base fallback.
+func (h *ChatHandler) persistStreamTurn(ctx context.Context, input rag.ChatInput, answer string, persist bool, meta *rag.ChatResult) {
 	if !persist || h.sessions == nil || answer == "" {
 		return
+	}
+	var am sessions.AnswerMeta
+	if meta != nil {
+		am = sessions.AnswerMeta{Route: rag.RouteOf(meta.Model), Intent: meta.Intent}
 	}
 	_ = h.sessions.AppendMessages(ctx, input.TenantID, input.SessionID,
 		ai.Message{Role: "user", Content: input.Question},
 		ai.Message{Role: "assistant", Content: answer},
+		am,
 	)
 }
 

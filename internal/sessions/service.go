@@ -131,13 +131,30 @@ func (s *Service) LoadHistory(ctx context.Context, tenantID, sessionID uuid.UUID
 	return messages, nil
 }
 
-// AppendMessages adds user question and AI response to the session history.
-func (s *Service) AppendMessages(ctx context.Context, tenantID, sessionID uuid.UUID, userMsg, assistantMsg ai.Message) error {
+// AnswerMeta is what produced an answer, kept on it so a later rating can be counted against the
+// route and question kind (rag/retrieval_stats.go).
+type AnswerMeta struct {
+	Route  string
+	Intent string
+}
+
+// AppendMessages adds user question and AI response to the session history. meta, when given,
+// is stored on the answer.
+func (s *Service) AppendMessages(ctx context.Context, tenantID, sessionID uuid.UUID, userMsg, assistantMsg ai.Message, meta ...AnswerMeta) error {
 	now := time.Now()
 
+	answer := map[string]any{"role": assistantMsg.Role, "content": assistantMsg.Content, "timestamp": now.Format(time.RFC3339)}
+	if len(meta) > 0 {
+		if meta[0].Route != "" {
+			answer["route"] = meta[0].Route
+		}
+		if meta[0].Intent != "" {
+			answer["intent"] = meta[0].Intent
+		}
+	}
 	newMessages := []map[string]any{
 		{"role": userMsg.Role, "content": userMsg.Content, "timestamp": now.Format(time.RFC3339)},
-		{"role": assistantMsg.Role, "content": assistantMsg.Content, "timestamp": now.Format(time.RFC3339)},
+		answer,
 	}
 	newJSON, err := json.Marshal(newMessages)
 	if err != nil {
@@ -185,6 +202,10 @@ type RatedTurn struct {
 	// WasHelpful is true when the answer was already rated helpful before this rating, so the
 	// caller does not suggest it twice.
 	WasHelpful bool
+	// Previous is the earlier rating ("up", "down" or empty), so a changed rating moves one count.
+	Previous string
+	// Route and Intent are what produced the answer, when it was stored with them.
+	Route, Intent string
 }
 
 // RateTurn records helpful or not helpful on the n-th answer (0-based), on the answer itself
@@ -212,15 +233,17 @@ func (s *Service) RateTurn(ctx context.Context, tenantID, sessionID uuid.UUID, n
 		 SET messages = jsonb_set(c.messages, ARRAY[($1::int + 1)::text, 'feedback'], to_jsonb($4::text))
 		 FROM old
 		 WHERE c.id = $2 AND c.tenant_id = $3
-		 RETURNING c.messages->$1::int->>'content', c.messages->($1::int + 1)->>'content', old.prev`,
-		2*n, sessionID, tenantID, value).Scan(&out.Question, &out.Answer, &prev)
+		 RETURNING c.messages->$1::int->>'content', c.messages->($1::int + 1)->>'content', old.prev,
+		           COALESCE(c.messages->($1::int + 1)->>'route', ''), COALESCE(c.messages->($1::int + 1)->>'intent', '')`,
+		2*n, sessionID, tenantID, value).Scan(&out.Question, &out.Answer, &prev, &out.Route, &out.Intent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RatedTurn{}, ErrNoTurn
 	}
 	if err != nil {
 		return RatedTurn{}, fmt.Errorf("rate turn: %w", err)
 	}
-	out.WasHelpful = prev.Valid && prev.String == "up"
+	out.Previous = prev.String
+	out.WasHelpful = out.Previous == "up"
 	return out, nil
 }
 

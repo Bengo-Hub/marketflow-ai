@@ -67,9 +67,12 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 			p.logger.Warn("KB search failed (stream)", zap.Error(err))
 		}
 	}
-	if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok && !input.formTurn {
-		return staticStream(p.applyFilter(answer, input.BusinessType)),
-			&ChatResult{Intent: string(intent), Confidence: confidence, Sources: 1, Model: ModelKnowledgeBase}, nil
+	// The ratings can switch the direct route off for a question kind (retrieval_stats.go).
+	if !input.formTurn && p.routeTrusted(ctx, input.TenantID, string(intent), RouteKBDirect) {
+		if answer, ok := p.kbDirect(ctx, input, embedding, contextChunks); ok {
+			return staticStream(p.applyFilter(answer, input.BusinessType)),
+				&ChatResult{Intent: string(intent), Confidence: confidence, Sources: 1, Model: ModelKnowledgeBase}, nil
+		}
 	}
 
 	systemPrompt := p.buildSystemPrompt(input.BusinessType, intent, contextChunks)
