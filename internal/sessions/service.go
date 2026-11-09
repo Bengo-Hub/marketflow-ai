@@ -178,6 +178,52 @@ func (s *Service) ClearSession(ctx context.Context, tenantID, sessionID uuid.UUI
 // ErrNoTurn means the session (for this tenant) has no turn at that position.
 var ErrNoTurn = errors.New("no such turn")
 
+// RatedTurn is a turn after its answer was rated.
+type RatedTurn struct {
+	Question string
+	Answer   string
+	// WasHelpful is true when the answer was already rated helpful before this rating, so the
+	// caller does not suggest it twice.
+	WasHelpful bool
+}
+
+// RateTurn records helpful or not helpful on the n-th answer (0-based), on the answer itself
+// (`feedback`: "up" or "down"), so a rating needs no table of its own. The rating and the read of
+// the earlier one are one statement, so two taps at once cannot both see "not rated yet".
+func (s *Service) RateTurn(ctx context.Context, tenantID, sessionID uuid.UUID, n int, helpful bool) (RatedTurn, error) {
+	if n < 0 {
+		return RatedTurn{}, ErrNoTurn
+	}
+	value := "down"
+	if helpful {
+		value = "up"
+	}
+	var out RatedTurn
+	var prev sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`WITH old AS (
+		   SELECT messages->($1::int + 1)->>'feedback' AS prev
+		   FROM chat_sessions
+		   WHERE id = $2 AND tenant_id = $3 AND jsonb_array_length(messages) >= $1::int + 2
+		     AND messages->($1::int + 1)->>'role' = 'assistant'
+		   FOR UPDATE
+		 )
+		 UPDATE chat_sessions c
+		 SET messages = jsonb_set(c.messages, ARRAY[($1::int + 1)::text, 'feedback'], to_jsonb($4::text))
+		 FROM old
+		 WHERE c.id = $2 AND c.tenant_id = $3
+		 RETURNING c.messages->$1::int->>'content', c.messages->($1::int + 1)->>'content', old.prev`,
+		2*n, sessionID, tenantID, value).Scan(&out.Question, &out.Answer, &prev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RatedTurn{}, ErrNoTurn
+	}
+	if err != nil {
+		return RatedTurn{}, fmt.Errorf("rate turn: %w", err)
+	}
+	out.WasHelpful = prev.Valid && prev.String == "up"
+	return out, nil
+}
+
 // DeleteTurn removes the n-th question and answer (0-based) of a conversation.
 // AppendMessages always stores a turn as two consecutive messages, so turn n is
 // elements 2n and 2n+1; the length check and the removal are one statement.

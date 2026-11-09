@@ -172,6 +172,32 @@ func (s *APISource) Phrases(ctx context.Context, tenantID uuid.UUID, intent stri
 	return out.Phrases, nil
 }
 
+// SuggestFAQ hands a question and the answer someone rated helpful to marketflow-api, which keeps it
+// as an FAQ suggestion for the owner to approve (the knowledge base is marketflow-api's). Nothing
+// reaches Vera's answers until the owner approves it.
+func (s *APISource) SuggestFAQ(ctx context.Context, tenantID uuid.UUID, question, answer string) error {
+	if s == nil || s.BaseURL == "" || s.Key == "" {
+		return fmt.Errorf("faq suggestion: marketflow-api not configured")
+	}
+	body, _ := json.Marshal(map[string]string{"tenant_id": tenantID.String(), "question": question, "answer": answer})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.BaseURL, "/")+"/api/v1/internal/knowledge/faq-suggestions", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", s.Key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return fmt.Errorf("faq suggestion: %w", err)
+	}
+	resp.Body.Close()
+	// 422 is a question the store refuses (personal details, too short); nothing to retry.
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnprocessableEntity {
+		return fmt.Errorf("faq suggestion: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // RecordPhrase implements PhraseLearner and drops the tenant's cached list.
 func (s *APISource) RecordPhrase(ctx context.Context, tenantID uuid.UUID, intent, phrase string) error {
 	if s == nil || s.BaseURL == "" || s.Key == "" {

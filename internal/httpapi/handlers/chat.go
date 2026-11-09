@@ -26,6 +26,69 @@ type ChatHandler struct {
 	sessions *sessions.Service
 	credits  CreditSpender
 	logger   *zap.Logger
+	// suggestFAQ passes an answer rated helpful on as an FAQ suggestion; nil turns it off.
+	suggestFAQ func(ctx context.Context, tenantID uuid.UUID, question, answer string) error
+}
+
+// WithFAQSuggester turns answers rated helpful into FAQ suggestions for the owner.
+func (h *ChatHandler) WithFAQSuggester(f func(ctx context.Context, tenantID uuid.UUID, question, answer string) error) *ChatHandler {
+	h.suggestFAQ = f
+	return h
+}
+
+// RateTurn handles POST /api/v1/chat/sessions/{id}/turns/{n}/feedback {helpful} and its public
+// twin (the session id is the credential, as for history). The rating sits on the answer. The
+// first helpful rating of an answer is offered to the owner as an FAQ suggestion, after the reply.
+// @Summary Rate one of Vera's answers helpful or not helpful
+// @Tags Chat
+// @Accept json
+// @Param X-Tenant-ID header string true "Tenant slug or UUID"
+// @Param id path string true "Session UUID"
+// @Param n path int true "Turn index, 0-based"
+// @Success 204
+// @Failure 404 {object} map[string]string
+// @Router /chat/sessions/{id}/turns/{n}/feedback [post]
+func (h *ChatHandler) RateTurn(w http.ResponseWriter, r *http.Request) {
+	n, err := strconv.Atoi(chi.URLParam(r, "n"))
+	if err != nil || n < 0 {
+		writeError(w, http.StatusBadRequest, "turn must be a number from 0")
+		return
+	}
+	var in struct {
+		Helpful *bool `json:"helpful"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&in); err != nil || in.Helpful == nil {
+		writeError(w, http.StatusBadRequest, "helpful must be true or false")
+		return
+	}
+	tenantID, sessionID, persisted, ok := h.sessionTarget(w, r)
+	if !ok {
+		return
+	}
+	if !persisted {
+		writeError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	turn, err := h.sessions.RateTurn(r.Context(), tenantID, sessionID, n, *in.Helpful)
+	if errors.Is(err, sessions.ErrNoTurn) {
+		writeError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	if err != nil {
+		h.logger.Error("rate turn failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "the rating could not be saved, try again")
+		return
+	}
+	if *in.Helpful && !turn.WasHelpful && h.suggestFAQ != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+			defer cancel()
+			if err := h.suggestFAQ(ctx, tenantID, turn.Question, turn.Answer); err != nil {
+				h.logger.Warn("faq suggestion not kept", zap.String("tenant_id", tenantID.String()), zap.Error(err))
+			}
+		}()
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // NewChatHandler creates a new chat handler. credits may be nil (no billing configured, as in local

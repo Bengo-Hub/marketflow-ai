@@ -120,3 +120,43 @@ func TestDeleteTurnAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRateTurn(t *testing.T) {
+	db := openDB(t)
+	a, b := twoTenants(t, db)
+	s := NewService(db, zap.NewNop())
+	ctx := context.Background()
+	sid, err := s.CreateSession(ctx, a, "web_widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM chat_sessions WHERE id = $1`, sid) })
+	for _, q := range []string{"q0", "q1"} {
+		if err := s.AppendMessages(ctx, a, sid, ai.Message{Role: "user", Content: q}, ai.Message{Role: "assistant", Content: "a" + q[1:]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.RateTurn(ctx, b, sid, 0, true); !errors.Is(err, ErrNoTurn) {
+		t.Fatalf("another tenant rated: %v", err)
+	}
+	if _, err := s.RateTurn(ctx, a, sid, 2, true); !errors.Is(err, ErrNoTurn) {
+		t.Fatalf("out of range: %v", err)
+	}
+	first, err := s.RateTurn(ctx, a, sid, 1, true)
+	if err != nil || first.Question != "q1" || first.Answer != "a1" || first.WasHelpful {
+		t.Fatalf("first rating: %+v %v", first, err)
+	}
+	again, err := s.RateTurn(ctx, a, sid, 1, true)
+	if err != nil || !again.WasHelpful {
+		t.Fatalf("a second helpful must say it was already helpful: %+v %v", again, err)
+	}
+	if _, err := s.RateTurn(ctx, a, sid, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	var fb string
+	_ = db.QueryRow(`SELECT messages->3->>'feedback' FROM chat_sessions WHERE id = $1`, sid).Scan(&fb)
+	h, _ := s.LoadHistory(ctx, a, sid)
+	if fb != "down" || len(h) != 4 {
+		t.Fatalf("feedback %q, history %d", fb, len(h))
+	}
+}

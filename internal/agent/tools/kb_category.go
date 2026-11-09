@@ -44,6 +44,7 @@ func (t *GetProduct) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 		FROM knowledge_base_entries
 		WHERE (scope = 'platform' OR tenant_id = $1)
 		  AND category = 'product'
+		  AND `+liveEntry+`
 		  AND (metadata->>'product_code' ILIKE $2 OR title ILIKE $2)
 		ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
 		LIMIT 1`, tenantID, "%"+args.Code+"%")
@@ -59,6 +60,12 @@ func (t *GetProduct) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	})
 	return string(out), nil
 }
+
+// liveEntry leaves out entries Vera must not answer from: stale ones (the item is no longer for
+// sale, marketflow-api knowledge sync) and FAQ suggestions the owner has not approved, pending or
+// rejected (marketflow-api knowledge/faq.go). The vector searches skip them already, because none
+// has embeddings.
+const liveEntry = `COALESCE(metadata->>'stale', '') <> 'true' AND COALESCE(metadata->>'suggested', '') NOT IN ('true', 'rejected')`
 
 // GetFAQ returns FAQ entries filtered by keyword.
 type GetFAQ struct {
@@ -94,6 +101,7 @@ func (t *GetFAQ) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string
 		FROM knowledge_base_entries
 		WHERE (scope = 'platform' OR tenant_id = $1)
 		  AND category = 'faq'
+		  AND `+liveEntry+`
 		  AND title ILIKE $2
 		LIMIT 5`, tenantID, "%"+args.Keyword+"%")
 	if err != nil {

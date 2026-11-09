@@ -372,6 +372,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		BaseURL: cfg.AI.MarketFlowAPIURL, Key: cfg.App.InternalServiceKey,
 		Redis: redisClient, Namespace: cfg.Redis.Namespace,
 	}
+	// Answers rated helpful become FAQ suggestions the owner approves (Sprint 25).
+	chatHandler.WithFAQSuggester(osContext.SuggestFAQ)
 	teamRuntime := team.New(team.Config{
 		Library: lib, Opt: optimizer, Router: modelRouter, Decider: decider,
 		Registry: registrySource.Get, Tools: agentTools, Source: osContext, Logger: logger,
@@ -499,6 +501,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// Clear chat and delete a message; the session id is the credential, as for history.
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
+		r.Post("/chat/sessions/{id}/turns/{n}/feedback", chatHandler.RateTurn)
 	})
 
 	// Provider webhooks: no auth header, the Standard Webhooks signature is the credential.
@@ -512,6 +515,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/chat", chatHandler.Chat)
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
+		r.Post("/chat/sessions/{id}/turns/{n}/feedback", chatHandler.RateTurn)
 		r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
 		r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
 
