@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/bengobox/marketflow-ai/internal/agent"
@@ -47,6 +48,7 @@ type Pipeline struct {
 	embeddingModel string
 	embeddingDim   int
 	redisNamespace string
+	facts          func(ctx context.Context, tenantID uuid.UUID) string
 	cache          *cacheLayer
 	logger         *zap.Logger
 }
@@ -66,6 +68,9 @@ type Config struct {
 	EmbeddingDim   int
 	RedisNamespace string
 	Logger         *zap.Logger
+	// Facts returns what Vera may state as true about the business (facts.go); nil gives none,
+	// and the no-guessing rule still applies.
+	Facts func(ctx context.Context, tenantID uuid.UUID) string
 }
 
 // ChatInput represents a user chat message.
@@ -109,6 +114,7 @@ func NewPipeline(cfg Config) *Pipeline {
 		embeddingModel: cfg.EmbeddingModel,
 		embeddingDim:   cfg.EmbeddingDim,
 		redisNamespace: cfg.RedisNamespace,
+		facts:          cfg.Facts,
 		logger:         cfg.Logger.Named("rag"),
 	}
 	p.cache = newCacheLayer(cfg.Redis, cfg.RedisNamespace, p.logger)

@@ -307,6 +307,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 
 	// ── RAG Pipeline ──────────────────────────────────────────────────────
+	// marketflow-api's internal reads (OS context, learning, business facts), one client for all.
+	osContext := &team.APISource{
+		BaseURL: cfg.AI.MarketFlowAPIURL, Key: cfg.App.InternalServiceKey,
+		Redis: redisClient, Namespace: cfg.Redis.Namespace,
+	}
 	pipeline := rag.NewPipeline(rag.Config{
 		DB:             db,
 		Redis:          redisClient,
@@ -321,6 +326,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		EmbeddingDim:   cfg.AI.EmbeddingDim,
 		RedisNamespace: cfg.Redis.Namespace,
 		Logger:         logger,
+		// What Vera may state as true about the business, so she never invents a location.
+		Facts: osContext.BusinessFacts,
 	})
 
 	// ── Auth Middleware ────────────────────────────────────────────────────
@@ -368,10 +375,6 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		Library: lib, Decider: decider, Router: modelRouter,
 		Redis: redisClient, Namespace: cfg.Redis.Namespace, Logger: logger,
 	})
-	osContext := &team.APISource{
-		BaseURL: cfg.AI.MarketFlowAPIURL, Key: cfg.App.InternalServiceKey,
-		Redis: redisClient, Namespace: cfg.Redis.Namespace,
-	}
 	// Answers rated helpful become FAQ suggestions the owner approves (Sprint 25).
 	chatHandler.WithFAQSuggester(osContext.SuggestFAQ)
 	teamRuntime := team.New(team.Config{

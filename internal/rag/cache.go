@@ -35,9 +35,14 @@ func newCacheLayer(r *redis.Client, ns string, logger *zap.Logger) *cacheLayer {
 
 // ── L1: exact response cache ────────────────────────────────────────────
 
+// answerCacheVersion is part of every cached answer's key. Raise it when answers change in a way
+// old ones must not be served: v2 (2026-11-09) added business facts and the no-guessing rule, after
+// a cached answer invented a cafe's location. Old keys expire on their own TTL.
+const answerCacheVersion = "v2"
+
 func (c *cacheLayer) exactKey(tenantID uuid.UUID, question string) string {
 	h := sha256.Sum256([]byte(tenantID.String() + ":" + normalizeQ(question)))
-	return c.namespace + ":chat:exact:" + hex.EncodeToString(h[:16])
+	return c.namespace + ":chat:" + answerCacheVersion + ":exact:" + hex.EncodeToString(h[:16])
 }
 
 func (c *cacheLayer) getExact(ctx context.Context, tenantID uuid.UUID, q string) (string, bool) {
@@ -60,7 +65,7 @@ type semCacheEntry struct {
 }
 
 func (c *cacheLayer) semPrefix(tenantID uuid.UUID) string {
-	return c.namespace + ":chat:sem:" + tenantID.String() + ":"
+	return c.namespace + ":chat:" + answerCacheVersion + ":sem:" + tenantID.String() + ":"
 }
 
 func (c *cacheLayer) getSemantic(ctx context.Context, tenantID uuid.UUID, embedding []float32) (string, bool) {

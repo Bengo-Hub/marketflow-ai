@@ -75,7 +75,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		}
 	}
 
-	systemPrompt := p.buildSystemPrompt(input.BusinessType, intent, contextChunks)
+	systemPrompt := p.withFacts(ctx, input.TenantID, p.buildSystemPrompt(input.BusinessType, intent, contextChunks))
 	messages := make([]ai.Message, 0, len(input.History)+2)
 	messages = append(messages, ai.Message{Role: "system", Content: systemPrompt})
 	historyStart := 0
