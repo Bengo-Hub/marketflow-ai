@@ -105,3 +105,28 @@ func TestTemplates(t *testing.T) {
 		t.Fatalf("ads query found no ad-creative starter: %+v", ads)
 	}
 }
+
+// Sprint 23 L34: the Sales Rep books meetings and creates follow-up tasks, so it is allowed the
+// book_meeting and create_task tools as the sprint specifies.
+func TestSalesRepTools(t *testing.T) {
+	lib, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range lib.Members() {
+		if m.Key != "sales_rep" {
+			continue
+		}
+		have := map[string]bool{}
+		for _, tool := range m.Tools {
+			have[tool] = true
+		}
+		for _, want := range []string{"kb_search", "get_product", "book_meeting", "create_task"} {
+			if !have[want] {
+				t.Errorf("sales_rep lacks %s: %v", want, m.Tools)
+			}
+		}
+		return
+	}
+	t.Fatal("no sales_rep member")
+}

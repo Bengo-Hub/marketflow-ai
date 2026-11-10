@@ -80,7 +80,7 @@ members:
     description: Follows up new leads, answers questions from the catalog, books meetings and hands big deals to the owner.
     model_class: standard
     playbooks: [sales-enablement, offers]
-    tools: [kb_search, get_product, meeting_prep, get_contact_360]
+    tools: [kb_search, get_product, meeting_prep, get_contact_360, book_meeting, create_task]
     guardrails:
       - Hand the lead to the owner when they ask for a person or when the deal is above the owner's threshold.
 
