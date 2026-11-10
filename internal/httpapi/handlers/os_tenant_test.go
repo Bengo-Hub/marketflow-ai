@@ -54,7 +54,24 @@ func TestHeaderTenantAllowed(t *testing.T) {
 	if !headerTenantAllowed(reqWith(&authclient.Claims{IsService: true}, ""), other) {
 		t.Fatal("service callers act for any tenant")
 	}
-	if !headerTenantAllowed(reqWith(nil, ""), other) {
-		t.Fatal("unauthenticated (public widget) requests are not checked here")
+	if headerTenantAllowed(reqWith(nil, ""), other) {
+		t.Fatal("requests without claims are refused (the public widget path skips this check)")
+	}
+}
+
+// Security audit 2026-11-10: "superuser" is a role inside one tenant, not platform authority.
+// Only auth-api's is_platform_owner claim (or a service key) may name another tenant.
+func TestTenantSuperuserCannotActForAnotherTenant(t *testing.T) {
+	own, other := uuid.New(), uuid.New()
+	tenantSuper := &authclient.Claims{TenantID: own.String(), Roles: []string{"superuser"}}
+	if _, status, _ := tenantFromAuth(reqWith(tenantSuper, other.String())); status != http.StatusForbidden {
+		t.Fatalf("a tenant superuser naming another tenant must be 403, got %d", status)
+	}
+	if headerTenantAllowed(reqWith(tenantSuper, ""), other) {
+		t.Fatal("a tenant superuser must not use another tenant's header")
+	}
+	owner := &authclient.Claims{TenantID: own.String(), IsPlatformOwner: true}
+	if id, status, _ := tenantFromAuth(reqWith(owner, other.String())); status != 0 || id != other {
+		t.Fatalf("platform owner naming a tenant: %v %d", id, status)
 	}
 }

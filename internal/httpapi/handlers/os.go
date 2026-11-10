@@ -69,9 +69,10 @@ func NewOSHandler(cfg OSConfig) *OSHandler {
 
 const maxAskChars = 2000
 
-// privileged callers may act for a tenant they name: platform superusers and
-// service callers (platform API keys, whose claims carry the platform tenant).
-func privileged(c *authclient.Claims) bool { return c.IsSuperuser() || c.IsService }
+// privileged callers may act for a tenant they name: platform owners (auth-api's is_platform_owner
+// claim) and service callers. A "superuser" role is tenant-scoped and grants nothing here
+// (security audit 2026-11-10).
+func privileged(c *authclient.Claims) bool { return c.IsPlatformOwner || c.IsService }
 
 // tenantFromAuth returns the caller's tenant from the token. A user's
 // X-Tenant-ID must match their token; only privileged callers may name
@@ -100,10 +101,14 @@ func tenantFromAuth(r *http.Request) (uuid.UUID, int, string) {
 
 // headerTenantAllowed reports whether a resolved header tenant may be used by the
 // caller: always for privileged callers, otherwise only when it is the token's
-// own tenant. Requests without claims (the public widget) are not checked here.
+// own tenant. Requests without claims are refused: callers skip this check only on the
+// public widget path.
 func headerTenantAllowed(r *http.Request, resolved uuid.UUID) bool {
 	claims, ok := authclient.ClaimsFromContext(r.Context())
-	if !ok || privileged(claims) {
+	if !ok {
+		return false
+	}
+	if privileged(claims) {
 		return true
 	}
 	tid, err := claims.TenantUUID()
