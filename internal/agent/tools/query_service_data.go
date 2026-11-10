@@ -68,6 +68,23 @@ var resourcePaths = map[string]map[string]string{
 	},
 }
 
+// countsOnly lists resources whose records hold personal or payment details: Vera gets only
+// their total (owner, 2026-11-10: course enrollments as counts, filterable by course or status).
+var countsOnly = map[string]bool{"codevertex/enrollments": true}
+
+// totalOnly keeps the paginated total of a list response and drops the records.
+func totalOnly(v any) any {
+	if m, ok := v.(map[string]any); ok {
+		if t, ok := m["total"]; ok {
+			return map[string]any{"total": t}
+		}
+	}
+	if arr, ok := v.([]any); ok {
+		return map[string]any{"total": len(arr)}
+	}
+	return map[string]any{"total": nil}
+}
+
 // QueryServiceData is the agent tool that queries live data from any registered
 // Codevertex microservice using the shared INTERNAL_SERVICE_KEY.
 // Results are returned as JSON for the LLM to summarize into natural language.
@@ -307,6 +324,9 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 		}
 		params.Set(k, v)
 	}
+	if countsOnly[args.Service+"/"+args.Resource] {
+		params.Set("limit", "1") // only the total is kept, so fetch as little as possible
+	}
 
 	endpoint := target + "?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -338,6 +358,10 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 	var result any
 	if err := json.Unmarshal(body, &result); err != nil {
 		return string(body[:min(len(body), 2000)]), nil
+	}
+
+	if countsOnly[args.Service+"/"+args.Resource] {
+		result = totalOnly(result)
 	}
 
 	// If result is an array, cap at limit

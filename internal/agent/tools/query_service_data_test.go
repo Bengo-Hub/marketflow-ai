@@ -81,6 +81,32 @@ func TestDiscoveredRoutes(t *testing.T) {
 	}
 }
 
+// Owner 2026-11-10: course enrollments reach Vera as counts only, never student details or
+// their payments.
+func TestEnrollmentsAreCountsOnly(t *testing.T) {
+	var gotLimit, gotCourse string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit, gotCourse = r.URL.Query().Get("limit"), r.URL.Query().Get("courseId")
+		_, _ = w.Write([]byte(`{"total":42,"page":1,"pages":42,"items":[{"fullName":"Jane Doe","email":"jane@example.com","installments":[{"amount":5000}]}]}`))
+	}))
+	defer srv.Close()
+	old := serviceRegistry["codevertex"]
+	serviceRegistry["codevertex"] = srv.URL
+	defer func() { serviceRegistry["codevertex"] = old }()
+
+	q := NewQueryServiceData(QueryServiceDataConfig{ServiceKey: "k", Logger: zap.NewNop()})
+	out, err := q.Invoke(context.Background(), testTenant, `{"service":"codevertex","resource":"enrollments","filters":{"courseId":"c-1"},"limit":50}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Jane") || strings.Contains(out, "jane@") || strings.Contains(out, "5000") || !strings.Contains(out, `"total":42`) {
+		t.Fatalf("out = %s", out)
+	}
+	if gotLimit != "1" || gotCourse != "c-1" {
+		t.Fatalf("limit %q course %q", gotLimit, gotCourse)
+	}
+}
+
 // A huge response is never read whole.
 func TestResponseIsCapped(t *testing.T) {
 	big := strings.Repeat("x", 4<<20)
