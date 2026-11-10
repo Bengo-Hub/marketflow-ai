@@ -10,7 +10,7 @@ require (
 	github.com/Bengo-Hub/httpware v0.18.0
 	github.com/Bengo-Hub/shared-auth-client v0.4.1
 	github.com/Bengo-Hub/shared-events v0.11.0
-	github.com/Bengo-Hub/shared-ratelimit v0.2.1
+	github.com/Bengo-Hub/shared-ratelimit v0.3.1
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/caarlos0/env/v11 v11.3.1
 	github.com/go-chi/chi/v5 v5.4.0
