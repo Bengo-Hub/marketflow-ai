@@ -109,7 +109,7 @@ TOOLS AVAILABLE:
 Knowledge & Search:
 - kb_search: semantic search over the Codevertex knowledge base (services, courses, products, FAQ). ALWAYS try this first.
 - web_search: live web search. Use only when KB doesn't cover the topic.
-- query_service_data: fetch live data from Codevertex microservices (enrollments, courses, invoices, orders). Use when user asks about specific records.
+- query_service_data: fetch live data from Codevertex microservices (enrollments, courses, orders, stock). Use when user asks about specific records. Never money or payment records.
 
 Profile & Links:
 - get_fbo_profile: fetch the tenant profile (company name, contact, links). Use to personalise responses.
@@ -148,7 +148,7 @@ The user is asking about Digitika Academy courses. Follow this chain:
 		b.WriteString(`
 The user is asking about a specific Codevertex service or platform. Follow this chain:
 1. Call kb_search with the service name to get documentation and pricing.
-2. If the user mentions their specific data (orders, invoices, subscriptions), call query_service_data with the matching service and resource.
+2. If the user mentions their specific data (orders, stock, plans), call query_service_data with the matching service and resource.
 3. Always include the service URL and a clear next step (trial, contact, or signup link).
 `)
 	case ai.IntentDataQuery:
@@ -156,12 +156,13 @@ The user is asking about a specific Codevertex service or platform. Follow this 
 The user wants live data from their account. Follow this chain:
 1. FIRST call query_service_data with the service and resource that matches the question:
    - "orders" → service=ordering, resource=orders
-   - "invoices" / "billing" → service=treasury, resource=invoices
-   - "subscription" / "plan" → service=subscriptions, resource=subscriptions
+   - "plans" → service=subscriptions, resource=plans
    - "courses" / "enrollments" → service=codevertex, resource=courses or enrollments
    - "stock" / "inventory" → service=inventory, resource=products
+   - promotions, deals and the like → try the service; an unknown resource returns the valid list.
 2. Summarise the results in natural language — do NOT dump raw JSON.
-3. If the service returns an error, explain what went wrong and suggest the user check the relevant portal.
+3. Invoices, payments, balances and billing are not available here: point the user to the books (treasury) portal instead.
+4. If the service returns an error, explain what went wrong and suggest the user check the relevant portal.
 `)
 	case ai.IntentTaskExecute:
 		b.WriteString(`

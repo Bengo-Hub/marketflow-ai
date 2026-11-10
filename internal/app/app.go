@@ -172,6 +172,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			tools = append(tools, agenttools.NewQueryServiceData(agenttools.QueryServiceDataConfig{
 				ServiceKey: cfg.App.InternalServiceKey,
 				Logger:     logger,
+				// Routes the platform owner approved through endpoint discovery (Sprint 25).
+				APIBaseURL: cfg.AI.MarketFlowAPIURL,
+				APIKey:     cfg.AI.MarketFlowAPIKey,
 			}))
 			logger.Info("query_service_data tool enabled (codevertex, ordering, treasury, ...)")
 

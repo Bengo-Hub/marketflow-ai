@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +21,6 @@ import (
 var serviceRegistry = map[string]string{
 	"ordering":      "http://ordering-backend.ordering.svc.cluster.local:4000",
 	"inventory":     "http://inventory-api.inventory.svc.cluster.local:4000",
-	"finance":       "http://treasury-api.treasury.svc.cluster.local:4000",
 	"treasury":      "http://treasury-api.treasury.svc.cluster.local:4000",
 	"subscriptions": "http://subscription-api.subscriptions.svc.cluster.local:4000",
 	"pos":           "http://pos-api.pos.svc.cluster.local:4000",
@@ -28,11 +28,13 @@ var serviceRegistry = map[string]string{
 	"notifications": "http://notifications-api.notifications.svc.cluster.local:4000",
 	"marketflow":    "http://marketflow-api.marketflow.svc.cluster.local:4000",
 	// codevertex-website ClusterIP port is 80 (targetPort 3000 is the container port).
-	"codevertex":    "http://codevertex-website.codevertex.svc.cluster.local:80",
+	"codevertex": "http://codevertex-website.codevertex.svc.cluster.local:80",
 }
 
-// resourcePaths maps (service, resource) pairs to the specific internal API paths.
-// Only exposes read-safe endpoints — no mutation paths.
+// resourcePaths maps (service, resource) pairs to fixed internal read paths. Decision 61: no
+// mutations, and no reads of money (invoices, transactions, balances, subscriptions billing), auth,
+// users, payroll, HR, audit or logs. Further routes come from endpoint discovery once the platform
+// owner approves them (see discovered).
 var resourcePaths = map[string]map[string]string{
 	"ordering": {
 		"orders":   "/api/v1/internal/orders",
@@ -42,19 +44,8 @@ var resourcePaths = map[string]map[string]string{
 		"products": "/api/v1/internal/products",
 		"stock":    "/api/v1/internal/stock",
 	},
-	"finance": {
-		"invoices":     "/api/v1/internal/invoices",
-		"transactions": "/api/v1/internal/transactions",
-		"balance":      "/api/v1/internal/balance",
-	},
-	"treasury": {
-		"invoices":     "/api/v1/internal/invoices",
-		"transactions": "/api/v1/internal/transactions",
-		"balance":      "/api/v1/internal/balance",
-	},
 	"subscriptions": {
-		"plans":         "/api/v1/internal/plans",
-		"subscriptions": "/api/v1/internal/subscriptions",
+		"plans": "/api/v1/internal/plans",
 	},
 	"pos": {
 		"sessions": "/api/v1/internal/sessions",
@@ -63,9 +54,6 @@ var resourcePaths = map[string]map[string]string{
 	"logistics": {
 		"shipments": "/api/v1/internal/shipments",
 		"routes":    "/api/v1/internal/routes",
-	},
-	"notifications": {
-		"logs": "/api/v1/internal/notification-logs",
 	},
 	"marketflow": {
 		"leads":     "/api/v1/internal/leads",
@@ -88,28 +76,131 @@ var resourcePaths = map[string]map[string]string{
 // so cross-tenant data leakage is impossible even if the agent tries.
 type QueryServiceData struct {
 	serviceKey string
+	apiURL     string // marketflow-api, for the approved discovered routes
+	apiKey     string
 	http       *http.Client
 	logger     *zap.Logger
+	// allowedBases are the only hosts a discovered URL may point at (the service registry).
+	allowedBases []string
+
+	mu    sync.Mutex
+	cache map[uuid.UUID]discoveredSet
 }
 
 // QueryServiceDataConfig configures the tool.
 type QueryServiceDataConfig struct {
-	ServiceKey string // INTERNAL_SERVICE_KEY
+	ServiceKey string // INTERNAL_SERVICE_KEY, sent to the services
 	Logger     *zap.Logger
+	// APIBaseURL and APIKey reach marketflow-api's /internal/endpoints/tools; empty turns
+	// discovered routes off.
+	APIBaseURL string
+	APIKey     string
 }
 
 func NewQueryServiceData(cfg QueryServiceDataConfig) *QueryServiceData {
-	return &QueryServiceData{
-		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 20 * time.Second},
-		logger:     cfg.Logger.Named("tool.query_service_data"),
+	bases := make([]string, 0, len(serviceRegistry))
+	for _, b := range serviceRegistry {
+		bases = append(bases, b)
 	}
+	return &QueryServiceData{
+		serviceKey:   cfg.ServiceKey,
+		apiURL:       strings.TrimSuffix(cfg.APIBaseURL, "/"),
+		apiKey:       cfg.APIKey,
+		http:         &http.Client{Timeout: 20 * time.Second},
+		logger:       cfg.Logger.Named("tool.query_service_data"),
+		allowedBases: bases,
+		cache:        map[uuid.UUID]discoveredSet{},
+	}
+}
+
+// discoveredTool is one approved route from endpoint discovery, tenant already in its URL.
+type discoveredTool struct {
+	Service  string   `json:"service"`
+	Resource string   `json:"resource"`
+	URL      string   `json:"url"`
+	Params   []string `json:"params"`
+}
+
+type discoveredSet struct {
+	tools []discoveredTool
+	at    time.Time
+}
+
+const discoveredTTL = 10 * time.Minute
+
+// maxResponseBytes bounds one service response read; the LLM sees at most 8 KB of it anyway.
+const maxResponseBytes = 1 << 20
+
+// discovered returns the tenant's approved routes, cached for a few minutes. A failed fetch
+// returns none, so the fixed resources keep working.
+func (t *QueryServiceData) discovered(ctx context.Context, tenantID uuid.UUID) []discoveredTool {
+	if t.apiURL == "" || t.apiKey == "" {
+		return nil
+	}
+	t.mu.Lock()
+	if s, ok := t.cache[tenantID]; ok && time.Since(s.at) < discoveredTTL {
+		t.mu.Unlock()
+		return s.tools
+	}
+	t.mu.Unlock()
+	u := t.apiURL + "/api/v1/internal/endpoints/tools?" + url.Values{"tenant_id": {tenantID.String()}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("X-API-Key", t.apiKey)
+	resp, err := t.http.Do(req)
+	if err != nil {
+		t.logger.Warn("discovered tools fetch failed", zap.Error(err))
+		return nil
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Tools []discoveredTool `json:"tools"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&body) != nil {
+		t.logger.Warn("discovered tools fetch failed", zap.Int("status", resp.StatusCode))
+		return nil
+	}
+	t.mu.Lock()
+	t.cache[tenantID] = discoveredSet{tools: body.Tools, at: time.Now()}
+	t.mu.Unlock()
+	return body.Tools
+}
+
+// allowedURL reports whether a discovered URL points at one of the known services.
+func (t *QueryServiceData) allowedURL(u string) bool {
+	for _, b := range t.allowedBases {
+		if strings.HasPrefix(u, strings.TrimSuffix(b, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// fillParams puts the agent's values into a discovered URL's {params}. A value may not carry a
+// slash or "..", so it can never reach another route.
+func fillParams(raw string, names []string, values map[string]string) (string, error) {
+	for _, n := range names {
+		v := strings.TrimSpace(values[n])
+		if v == "" {
+			return "", fmt.Errorf("param %q is required", n)
+		}
+		if strings.ContainsAny(v, `/\`) || strings.Contains(v, "..") {
+			return "", fmt.Errorf("param %q has an invalid value", n)
+		}
+		raw = strings.ReplaceAll(raw, "{"+n+"}", url.PathEscape(v))
+	}
+	if strings.Contains(raw, "{") {
+		return "", fmt.Errorf("route needs params it was not given")
+	}
+	return raw, nil
 }
 
 func (*QueryServiceData) Name() string { return "query_service_data" }
 
 func (*QueryServiceData) Description() string {
-	return "Queries real-time data from a Codevertex microservice (ordering, inventory, finance, treasury, subscriptions, pos, logistics, notifications, marketflow, codevertex). Use when the user asks about their orders, invoices, enrollments, courses, stock levels, subscriptions, or any live data. Always specify 'service' and 'resource'. Apply filters to narrow results. Tenant data is automatically scoped — no cross-tenant access."
+	return "Reads live marketing data from a Codevertex service (ordering, inventory, pos, logistics, subscriptions plans, marketflow, codevertex courses, plus any routes the platform approved). Use for orders, products, stock, promotions, deals, delivery zones, courses and similar. Always give 'service' and 'resource'; an unknown resource returns the valid list, and a resource that needs path values says which to pass in 'params'. Read only, scoped to this business. Money, payments, users, staff and logs are never available."
 }
 
 func (*QueryServiceData) Schema() map[string]any {
@@ -130,8 +221,13 @@ func (*QueryServiceData) Schema() map[string]any {
 				"description": "Resource type to fetch (e.g. 'orders', 'invoices', 'products', 'subscriptions')",
 			},
 			"filters": map[string]any{
-				"type":        "object",
-				"description": "Optional key-value filters (e.g. {\"status\": \"pending\", \"limit\": 10})",
+				"type":                 "object",
+				"description":          "Optional key-value filters (e.g. {\"status\": \"pending\", \"limit\": 10})",
+				"additionalProperties": map[string]any{"type": "string"},
+			},
+			"params": map[string]any{
+				"type":                 "object",
+				"description":          "Path values a resource needs, named in its error message (e.g. {\"itemId\": \"42\"})",
 				"additionalProperties": map[string]any{"type": "string"},
 			},
 			"limit": map[string]any{
@@ -153,6 +249,7 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 		Service  string            `json:"service"`
 		Resource string            `json:"resource"`
 		Filters  map[string]string `json:"filters"`
+		Params   map[string]string `json:"params"`
 		Limit    int               `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -170,14 +267,33 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 		return "", fmt.Errorf("unknown service %q; valid: %s", args.Service, strings.Join(keys(serviceRegistry), ", "))
 	}
 
-	paths, ok := resourcePaths[args.Service]
-	if !ok {
-		return "", fmt.Errorf("no resources configured for service %q", args.Service)
-	}
-	path, ok := paths[args.Resource]
-	if !ok {
-		return "", fmt.Errorf("unknown resource %q for service %q; valid: %s",
-			args.Resource, args.Service, strings.Join(keys(paths), ", "))
+	// A fixed resource first, then the routes the platform owner approved through discovery.
+	target := ""
+	if path, ok := resourcePaths[args.Service][args.Resource]; ok {
+		target = baseURL + path
+	} else {
+		valid := keys(resourcePaths[args.Service])
+		for _, d := range t.discovered(ctx, tenantID) {
+			if d.Service != args.Service {
+				continue
+			}
+			valid = append(valid, d.Resource)
+			if d.Resource != args.Resource {
+				continue
+			}
+			if !t.allowedURL(d.URL) {
+				return "", fmt.Errorf("resource %q points outside the known services", args.Resource)
+			}
+			filled, err := fillParams(d.URL, d.Params, args.Params)
+			if err != nil {
+				return "", fmt.Errorf("%s/%s: %w (needs params: %s)", args.Service, args.Resource, err, strings.Join(d.Params, ", "))
+			}
+			target = filled
+			break
+		}
+		if target == "" {
+			return "", fmt.Errorf("unknown resource %q for service %q; valid: %s", args.Resource, args.Service, strings.Join(valid, ", "))
+		}
 	}
 
 	// Build query params — tenant scoping is always enforced
@@ -192,12 +308,13 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 		params.Set(k, v)
 	}
 
-	endpoint := baseURL + path + "?" + params.Encode()
+	endpoint := target + "?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("X-API-Key", t.serviceKey)
+	req.Header.Set("X-Tenant-ID", tenantID.String())
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := t.http.Do(req)
@@ -206,7 +323,7 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if resp.StatusCode >= 300 {
 		t.logger.Warn("query_service_data api error",
 			zap.String("service", args.Service),
