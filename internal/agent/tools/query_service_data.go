@@ -318,8 +318,8 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 	params.Set("tenant_id", tenantID.String())
 	params.Set("limit", fmt.Sprintf("%d", args.Limit))
 	for k, v := range args.Filters {
-		// Skip any attempt to override tenant_id from filters
-		if strings.EqualFold(k, "tenant_id") {
+		// Only plain, non-scoping keys from the model (audit MF #8).
+		if !safeFilterKey(k) {
 			continue
 		}
 		params.Set(k, v)

@@ -74,7 +74,7 @@ func (t *MovePipelineStage) Invoke(ctx context.Context, tenantID uuid.UUID, args
 	}
 
 	payload, _ := json.Marshal(map[string]any{"stage_id": args.StageID})
-	url := fmt.Sprintf("%s/api/v1/deals/%s/move", t.apiBaseURL, args.DealID)
+	url := fmt.Sprintf("%s/api/v1/deals/%s/move", t.apiBaseURL, idPath(args.DealID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return "", err

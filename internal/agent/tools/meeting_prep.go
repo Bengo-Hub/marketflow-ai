@@ -176,7 +176,7 @@ Generate a concise pre-meeting briefing. Respond with valid JSON only (no markdo
 
 // fetch360 fetches the contact's 360 profile from marketflow-api.
 func (t *MeetingPrep) fetch360(ctx context.Context, tenantID uuid.UUID, contactID string) string {
-	url := fmt.Sprintf("%s/api/v1/contacts/%s/360", t.apiBaseURL, contactID)
+	url := fmt.Sprintf("%s/api/v1/contacts/%s/360", t.apiBaseURL, idPath(contactID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "{}"

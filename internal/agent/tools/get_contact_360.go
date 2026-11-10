@@ -68,7 +68,7 @@ func (t *GetContact360) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON
 		return "", fmt.Errorf("contact_id is required")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/contacts/%s/360", t.apiBaseURL, args.ContactID)
+	url := fmt.Sprintf("%s/api/v1/contacts/%s/360", t.apiBaseURL, idPath(args.ContactID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err

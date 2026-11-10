@@ -496,7 +496,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// /p/{slug} and external sites uses this. Rate-limited per-IP (15/min)
 	// and per-tenant (100/min) to prevent flooding.
 	r.Route("/api/v1/public", func(r chi.Router) {
-		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100))
+		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100, cfg.App.PublicChatDailyLimit))
 		r.Post("/chat", chatHandler.Chat)
 		// The widget's in-chat forms, forwarded to the service that owns each record.
 		r.Post("/integration-requests", publicForms.IntegrationRequest)
@@ -527,7 +527,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 		// Marketing OS. Tenant comes from the token; a mismatched X-Tenant-ID is refused.
 		r.Route("/os", func(r chi.Router) {
-			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), 30, 120))
+			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), 30, 120, 0))
 			r.Post("/ask", osHandler.Ask)
 			r.Post("/optimize", osHandler.Optimize)
 			r.Post("/plan/quote", osHandler.Quote)

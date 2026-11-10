@@ -69,7 +69,7 @@ func (t *ScoreLead) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON str
 		return "", fmt.Errorf("lead_id is required")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/leads/%s/rescore", t.apiBaseURL, args.LeadID)
+	url := fmt.Sprintf("%s/api/v1/leads/%s/rescore", t.apiBaseURL, idPath(args.LeadID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return "", err

@@ -158,7 +158,7 @@ Analyze and respond with valid JSON only (no markdown, no extra text):
 }
 
 func (t *AnalyzeDeal) fetchDeal(ctx context.Context, tenantID uuid.UUID, dealID string) string {
-	url := fmt.Sprintf("%s/api/v1/deals/%s", t.apiBaseURL, dealID)
+	url := fmt.Sprintf("%s/api/v1/deals/%s", t.apiBaseURL, idPath(dealID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "{}"
@@ -178,7 +178,7 @@ func (t *AnalyzeDeal) fetchDeal(ctx context.Context, tenantID uuid.UUID, dealID 
 }
 
 func (t *AnalyzeDeal) fetchTimeline(ctx context.Context, tenantID uuid.UUID, dealID string) string {
-	url := fmt.Sprintf("%s/api/v1/deals/%s/timeline", t.apiBaseURL, dealID)
+	url := fmt.Sprintf("%s/api/v1/deals/%s/timeline", t.apiBaseURL, idPath(dealID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "[]"

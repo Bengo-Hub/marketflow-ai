@@ -90,7 +90,7 @@ func (t *EnrichContact) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON
 	}
 	payload, _ := json.Marshal(patchBody)
 
-	url := fmt.Sprintf("%s/api/v1/contacts/%s", t.apiBaseURL, args.ContactID)
+	url := fmt.Sprintf("%s/api/v1/contacts/%s", t.apiBaseURL, idPath(args.ContactID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
 	if err != nil {
 		return "", err
@@ -128,7 +128,7 @@ func (t *EnrichContact) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON
 
 // buildDefaultQuery fetches the contact's name and company to build a search query.
 func (t *EnrichContact) buildDefaultQuery(ctx context.Context, tenantID uuid.UUID, contactID string) string {
-	url := fmt.Sprintf("%s/api/v1/contacts/%s", t.apiBaseURL, contactID)
+	url := fmt.Sprintf("%s/api/v1/contacts/%s", t.apiBaseURL, idPath(contactID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return contactID

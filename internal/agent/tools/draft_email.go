@@ -184,7 +184,7 @@ func (t *DraftEmail) fetch360(ctx context.Context, tenantID uuid.UUID, entityTyp
 	if entityType == "lead" {
 		segment = "leads"
 	}
-	url := fmt.Sprintf("%s/api/v1/%s/%s/360", t.apiBaseURL, segment, entityID)
+	url := fmt.Sprintf("%s/api/v1/%s/%s/360", t.apiBaseURL, segment, idPath(entityID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "{}"
