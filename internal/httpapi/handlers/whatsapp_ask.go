@@ -6,13 +6,47 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/assistgate"
 	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/team"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// WithSessions keeps WhatsApp assistant turns in chat_sessions (Sprint 17 #49).
+func (h *OSHandler) WithSessions(s *sessions.Service) *OSHandler {
+	h.sessions = s
+	return h
+}
+
+// whatsAppSessionNS scopes the assistant's per-user, per-day conversation ids.
+var whatsAppSessionNS = uuid.MustParse("3c1f8e2a-7d4b-4a9e-8f05-2b6d9c1e4a73")
+
+// whatsAppSessionID is one user's WhatsApp conversation with the assistant on one UTC day.
+func whatsAppSessionID(tenantID, userID string, at time.Time) uuid.UUID {
+	return uuid.NewSHA1(whatsAppSessionNS, []byte(tenantID+"/"+userID+"/"+at.UTC().Format("2006-01-02")))
+}
+
+// recordWhatsApp saves one answered turn. A failure is logged and never blocks the reply.
+func (h *OSHandler) recordWhatsApp(ctx context.Context, tenantID uuid.UUID, userID, question, reply, route string) {
+	if h.sessions == nil || reply == "" {
+		return
+	}
+	sid := whatsAppSessionID(tenantID.String(), userID, time.Now())
+	if _, err := h.sessions.CreateSessionWithID(ctx, tenantID, sid, "whatsapp"); err != nil {
+		h.logger.Debug("whatsapp transcript: session not created", zap.Error(err))
+		return
+	}
+	if err := h.sessions.AppendMessages(ctx, tenantID, sid,
+		ai.Message{Role: "user", Content: question}, ai.Message{Role: "assistant", Content: reply},
+		sessions.AnswerMeta{Route: route}); err != nil {
+		h.logger.Debug("whatsapp transcript: turn not saved", zap.Error(err))
+	}
+}
 
 // WithGate turns on the WhatsApp assistant route.
 func (h *OSHandler) WithGate(g *assistgate.Gate) *OSHandler {
@@ -112,6 +146,7 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		out.Route = sink.out.Result.Route
 	}
 	out.Reply = whatsAppReply(sink.out, link(req.PortalURL, req.TenantSlug, "/marketing"))
+	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
 	writeJSON(w, http.StatusOK, out)
 }
 

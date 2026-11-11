@@ -392,7 +392,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		osHandler.SetMeetingPrep(meetingPrep)
 	}
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
-	osHandler.WithGate(assistgate.New(decider))
+	osHandler.WithGate(assistgate.New(decider)).WithSessions(sessionService)
 	// Competitor ad intel (Sprint 24): SerpApi from Platform, Providers adintel/serpapi.
 	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger).
 		// The Fix step: complaint themes from public reviews through Serper (adintel/serper).

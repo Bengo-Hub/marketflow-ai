@@ -20,6 +20,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/registry"
+	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/team"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -45,7 +46,8 @@ type OSHandler struct {
 	clips       *media.Clips
 	ads         *media.Ads
 	storyboards *media.Storyboards
-	gate        *assistgate.Gate // the WhatsApp assistant gate (whatsapp_ask.go)
+	gate        *assistgate.Gate  // the WhatsApp assistant gate (whatsapp_ask.go)
+	sessions    *sessions.Service // WhatsApp assistant transcripts (whatsapp_ask.go)
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).
