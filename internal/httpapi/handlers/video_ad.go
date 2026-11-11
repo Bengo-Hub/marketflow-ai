@@ -345,3 +345,53 @@ func HiggsfieldWebhook(secrets func(ctx context.Context) []string, box media.Pus
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// FalWebhook handles POST /api/v1/webhooks/fal: a finished fal job (owner's push-first rule,
+// 2026-11-11). The ED25519 signature is checked against fal's published keys (refetched once when
+// a key is unknown), then the delivery goes to the push box for whichever pod waits on it. A bad
+// signature or body is a 400; a storage failure is a 503 so fal retries, and polling covers the
+// job meanwhile.
+func FalWebhook(keys *media.FalKeys, box media.PushBox, logger *zap.Logger) http.HandlerFunc {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "body too large")
+			return
+		}
+		if keys == nil || box == nil {
+			writeError(w, http.StatusServiceUnavailable, "webhooks are not configured")
+			return
+		}
+		reqID, userID := r.Header.Get("X-Fal-Webhook-Request-Id"), r.Header.Get("X-Fal-Webhook-User-Id")
+		ts, sig := r.Header.Get("X-Fal-Webhook-Timestamp"), r.Header.Get("X-Fal-Webhook-Signature")
+		list, err := keys.Get(r.Context(), false)
+		if err == nil {
+			err = media.VerifyFalWebhook(list, reqID, userID, ts, sig, body, time.Now())
+		}
+		if err != nil {
+			// fal may have rotated its keys: refetch once before refusing.
+			if fresh, ferr := keys.Get(r.Context(), true); ferr == nil {
+				err = media.VerifyFalWebhook(fresh, reqID, userID, ts, sig, body, time.Now())
+			}
+		}
+		if err != nil {
+			logger.Warn("fal webhook refused", zap.Error(err))
+			writeError(w, http.StatusBadRequest, "invalid signature")
+			return
+		}
+		id := media.FalDeliveryRequestID(body)
+		if id == "" || id != reqID {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if err := box.Put(r.Context(), id, body); err != nil {
+			logger.Warn("fal webhook not stored; polling will pick the job up", zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable, "try again")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

@@ -52,14 +52,23 @@ func SetHiggsfieldPush(callbackURL string, box PushBox, enabled func(ctx context
 
 // pushing reports whether a Higgsfield job submitted now should ask for a webhook.
 func pushing(ctx context.Context, provider string) bool {
-	return provider == "higgsfield" && hfWebhookURL != "" && hfPushBox != nil && hfPushOn != nil && hfPushOn(ctx)
+	switch provider {
+	case "higgsfield":
+		return hfWebhookURL != "" && hfPushBox != nil && hfPushOn != nil && hfPushOn(ctx)
+	case "fal":
+		return falWebhookURL != "" && hfPushBox != nil
+	}
+	return false
 }
 
 // withWebhook adds the callback to a submit URL.
-func withWebhook(submit string) string {
+func withWebhook(submit, provider string) string {
 	sep := "?"
 	if strings.Contains(submit, "?") {
 		sep = "&"
+	}
+	if provider == "fal" {
+		return submit + sep + "fal_webhook=" + url.QueryEscape(falWebhookURL)
 	}
 	return submit + sep + "hf_webhook=" + url.QueryEscape(hfWebhookURL)
 }

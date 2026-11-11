@@ -465,7 +465,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	if base := publicBaseURL(); base != "" && hfBox != nil {
 		media.SetHiggsfieldPush(base+"/api/v1/webhooks/higgsfield", hfBox,
 			func(ctx context.Context) bool { return len(hfSecrets(ctx)) > 0 })
+		// fal pushes finished jobs too (ED25519-signed, keys from fal's JWKS); polling is the fallback.
+		media.SetFalPush(base+"/api/v1/webhooks/fal", hfBox)
 	}
+	falKeys := &media.FalKeys{}
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
 	publicForms := handlers.NewPublicFormsHandler(cfg.AI.AuthAPIURL, cfg.AI.TicketingURL, cfg.AI.MarketFlowAPIURL, logger)
@@ -528,6 +531,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// Provider webhooks: no auth header, the Standard Webhooks signature is the credential.
 	r.Post("/api/v1/webhooks/higgsfield", handlers.HiggsfieldWebhook(hfSecrets, hfBox, logger))
+	r.Post("/api/v1/webhooks/fal", handlers.FalWebhook(falKeys, hfBox, logger))
 
 	// Authenticated chat + CRM AI — JWT or platform X-API-Key.
 	r.Route("/api/v1", func(r chi.Router) {

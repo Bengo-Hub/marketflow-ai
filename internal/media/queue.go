@@ -73,7 +73,7 @@ func (c *queueClient) run(ctx context.Context, j queueJob, input, out any) error
 	submit := j.submit
 	push := pushing(ctx, j.provider)
 	if push {
-		submit = withWebhook(submit)
+		submit = withWebhook(submit, j.provider)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, submit, bytes.NewReader(body))
 	if err != nil {
@@ -109,7 +109,17 @@ func (c *queueClient) run(ctx context.Context, j queueJob, input, out any) error
 		case <-time.After(wait):
 		}
 		var status []byte
-		if pushed, ok := pushedStatus(ctx, push, accepted.RequestID); ok {
+		if pushed, ok := pushedStatus(ctx, push, accepted.RequestID); ok && j.provider == "fal" {
+			// A verified fal delivery carries the model output itself (falpush.go).
+			_, good, payload, msg := parseFalDelivery(pushed)
+			if !good {
+				return &errJobFailed{provider: j.provider, status: "failed", detail: msg}
+			}
+			if err := json.Unmarshal(payload, out); err != nil {
+				return fmt.Errorf("%s: decode result: %w", j.provider, err)
+			}
+			return nil
+		} else if ok {
 			status = pushed
 		} else {
 			if push && time.Now().Before(nextPoll) {
