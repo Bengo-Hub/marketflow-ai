@@ -38,7 +38,8 @@ type Bundle struct {
 	PriceKES float64 `json:"price_kes"`
 }
 
-// Settings are the cost-engine inputs.
+// Settings are the cost-engine inputs. FXRate here is only the fallback: the live KES per USD
+// comes from treasury-api (internal/fxrate), the platform's one source of exchange rates.
 type Settings struct {
 	FXRate          float64 `json:"fx_rate"`            // KES per USD
 	FXBuffer        float64 `json:"fx_buffer"`          // 0.05 = 5%

@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	sharedcache "github.com/Bengo-Hub/cache"
-	"github.com/Bengo-Hub/httpware"
-	"github.com/Bengo-Hub/httpware/objectstore"
-	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	sharedcache "github.com/Bengo-Hub/cache"
+	"github.com/Bengo-Hub/httpware"
+	"github.com/Bengo-Hub/httpware/objectstore"
+	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
 
 	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/bengobox/marketflow-ai/internal/adintel"
@@ -19,8 +20,10 @@ import (
 	agenttools "github.com/bengobox/marketflow-ai/internal/agent/tools"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/assistgate"
+	"github.com/bengobox/marketflow-ai/internal/chatallowance"
 	"github.com/bengobox/marketflow-ai/internal/config"
 	"github.com/bengobox/marketflow-ai/internal/decide"
+	"github.com/bengobox/marketflow-ai/internal/fxrate"
 	"github.com/bengobox/marketflow-ai/internal/httpapi"
 	"github.com/bengobox/marketflow-ai/internal/httpapi/handlers"
 	"github.com/bengobox/marketflow-ai/internal/library"
@@ -80,7 +83,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	resolver := providers.NewResolver(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, redisClient, &cfg.AI, cfg.Redis.Namespace, logger)
 	// Output registry (credit prices, FX): the OS, the creative endpoints and the
 	// agent's ad-cost tool all price from it.
-	registrySource := newRegistrySource(resolver, logger)
+	// Exchange rates come from treasury-api (centralised forex, refreshed daily there).
+	fxSource := fxrate.New(cfg.App.TreasuryURL, cfg.App.InternalServiceKey, cfg.App.PlatformTenantSlug, redisClient, cfg.Redis.Namespace)
+	registrySource := newRegistrySource(resolver, fxSource, logger)
 
 	// ── Model router ──────────────────────────────────────────────────────
 	// Every generative call names a class (nano, standard, premium, premium_plus);
@@ -364,7 +369,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	if cfg.Security.SubscriptionsURL != "" && cfg.Security.SubscriptionsKey != "" {
 		creditSpender = handlers.NewHTTPCreditSpender(cfg.Security.SubscriptionsURL, cfg.Security.SubscriptionsKey, logger)
 	}
-	chatHandler := handlers.NewChatHandler(pipeline, sessionService, creditSpender, logger)
+	chatHandler := handlers.NewChatHandler(pipeline, sessionService, creditSpender, logger).
+		// Owner, 2026-11-11: chat free up to a daily allowance, then 1 credit per 5 turns.
+		WithAllowance(chatallowance.New(redisClient, cfg.Redis.Namespace, chatallowance.DefaultFreePerDay, chatallowance.DefaultTurnsPerCredit))
 	// ── Marketing OS (Sprint 21): decide layer, library, optimiser, team ──
 	lib := library.MustLoad()
 	decider := decide.New(decide.Config{

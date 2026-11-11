@@ -10,6 +10,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/decide"
+	"github.com/bengobox/marketflow-ai/internal/fxrate"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/registry"
 	"go.uber.org/zap"
@@ -74,14 +75,17 @@ func typeSafeSource(resolver *providers.Resolver) decide.PrimarySource {
 type registrySource struct {
 	resolver *providers.Resolver
 	logger   *zap.Logger
+	// fx is treasury-api's USD to KES rate, the platform's one source of exchange rates; the
+	// registry's own FXRate is only the fallback when treasury has never answered.
+	fx *fxrate.Source
 
 	mu       sync.Mutex
 	current  registry.Registry
 	loadedAt time.Time
 }
 
-func newRegistrySource(resolver *providers.Resolver, logger *zap.Logger) *registrySource {
-	return &registrySource{resolver: resolver, logger: logger.Named("registry"), current: registry.Defaults()}
+func newRegistrySource(resolver *providers.Resolver, fx *fxrate.Source, logger *zap.Logger) *registrySource {
+	return &registrySource{resolver: resolver, fx: fx, logger: logger.Named("registry"), current: registry.Defaults()}
 }
 
 // Get returns the current registry.
@@ -102,6 +106,10 @@ func (s *registrySource) Get(ctx context.Context) registry.Registry {
 		} else {
 			s.logger.Warn("stored output registry is invalid, keeping defaults", zap.Error(merr))
 		}
+	}
+	// The exchange rate always comes from treasury when it has one (centralised forex).
+	if rate, ok := s.fx.KESPerUSD(ctx); ok {
+		next.Settings.FXRate = rate
 	}
 	s.mu.Lock()
 	s.current = next

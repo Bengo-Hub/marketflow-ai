@@ -26,11 +26,16 @@ type EventsConfig struct {
 }
 
 type AppConfig struct {
-	Environment        string `env:"APP_ENV" envDefault:"development"`
-	ServiceName        string `env:"APP_NAME" envDefault:"marketflow-ai"`
+	Environment string `env:"APP_ENV" envDefault:"development"`
+	ServiceName string `env:"APP_NAME" envDefault:"marketflow-ai"`
 	// PublicChatDailyLimit caps public (widget) chat per tenant per 24 hours (audit MF #10).
-	PublicChatDailyLimit int `env:"MF_PUBLIC_CHAT_DAILY_LIMIT" envDefault:"2000"`
-	InternalServiceKey string `env:"INTERNAL_SERVICE_KEY"` // shared S2S key, same name across all services
+	PublicChatDailyLimit int    `env:"MF_PUBLIC_CHAT_DAILY_LIMIT" envDefault:"2000"`
+	InternalServiceKey   string `env:"INTERNAL_SERVICE_KEY"` // shared S2S key, same name across all services
+	// TreasuryURL is treasury-api, the platform's one source of exchange rates (fetched daily
+	// from the configured forex provider). The credit engine reads USD to KES from it.
+	TreasuryURL string `env:"TREASURY_API_URL" envDefault:"https://booksapi.codevertexafrica.com"`
+	// PlatformTenantSlug is the tenant whose (platform-level) rates are read.
+	PlatformTenantSlug string `env:"MF_PLATFORM_TENANT_SLUG" envDefault:"codevertex"`
 }
 
 type HTTPConfig struct {
