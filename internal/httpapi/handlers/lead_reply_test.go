@@ -48,3 +48,14 @@ func TestLeadChatInputCarriesBusinessType(t *testing.T) {
 		t.Fatalf("lead chat input: %+v", in)
 	}
 }
+
+// An answer that makes one of the business's banned claims is never sent to the lead.
+func TestBannedAnswer(t *testing.T) {
+	claims := []string{"cures eczema"}
+	if bannedAnswer("Yes, our lotion Cures Eczema fast", claims) != "cures eczema" {
+		t.Fatal("banned claim found")
+	}
+	if bannedAnswer("It soothes dry skin", claims) != "" || bannedAnswer("anything", nil) != "" {
+		t.Fatal("no claim, no block")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
+	"github.com/bengobox/marketflow-ai/internal/team"
 )
 
 // Sprint 23 L25/L26 (away decision 25): a lead's WhatsApp reply after the instant follow-up is
@@ -30,6 +31,17 @@ type leadReplyRequest struct {
 	// BusinessType selects the compliance rules every reply passes (Sprint 23 L34); empty
 	// falls back to the pipeline's own guess.
 	BusinessType string `json:"business_type"`
+	// BannedClaims are the claims this business never makes (brand context); an answer that
+	// makes one is not sent and the lead goes to the owner.
+	BannedClaims []string `json:"banned_claims"`
+}
+
+// bannedAnswer reports the banned claim an answer makes, or "".
+func bannedAnswer(answer string, claims []string) string {
+	if len(claims) > 20 {
+		claims = claims[:20]
+	}
+	return team.MatchBanned(answer, claims)
 }
 
 // leadChatInput is the customer-safe pipeline input for one lead message.
@@ -142,6 +154,11 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("lead reply failed; handing to the owner", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		h.refund(r, tenantID, chargeKey)
 		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: handoffReply, Handoff: true, HandoffReason: "the assistant could not answer"})
+		return
+	}
+	if claim := bannedAnswer(result.Response, req.BannedClaims); claim != "" {
+		h.logger.Info("lead reply made a banned claim; handing to the owner", zap.String("tenant_id", tenantID.String()))
+		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: handoffReply, Handoff: true, HandoffReason: "the answer touched a claim the business never makes"})
 		return
 	}
 	if h.sessions != nil {

@@ -45,12 +45,17 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 		return nil, nil
 	}
 	var findings []Finding
+	banned := BannedClaims(tc.MarketingContext)
 	if !outward[st.Contract] {
 		if st.Text != "" {
 			if _, blocked, reason := r.filter.CheckForTenant(st.Text, tc.BusinessType); blocked {
 				findings = append(findings, Finding{Quote: "", Issue: "compliance: " + reason, Severity: "high", Fix: "Rewrite without the blocked claim."})
 				st.Text = ""
 				st.Error = "blocked by the compliance rules"
+			} else if claim := MatchBanned(st.Text, banned); claim != "" {
+				findings = append(findings, Finding{Quote: claim, Issue: "makes a claim this business never makes", Severity: "high", Fix: "Remove the claim; it is on the brand context's banned list."})
+				st.Text = ""
+				st.Error = "blocked by the business's banned claims"
 			}
 		}
 		return nil, findings
@@ -68,6 +73,10 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 		if _, b, reason := r.filter.CheckForTenant(it.text, tc.BusinessType); b {
 			blocked[it.id] = true
 			findings = append(findings, Finding{Quote: it.id, Issue: "compliance: " + reason, Severity: "high", Fix: "Remove the claim or replace it with a supported one."})
+		}
+		if claim := MatchBanned(it.text, banned); claim != "" {
+			blocked[it.id] = true
+			findings = append(findings, Finding{Quote: it.id, Issue: "makes a banned claim: " + claim, Severity: "high", Fix: "Remove the claim; it is on the brand context's banned list."})
 		}
 		if ugc {
 			if m := personalUse.FindString(it.speech); m != "" {
