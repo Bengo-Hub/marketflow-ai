@@ -549,6 +549,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
+		// A lead's WhatsApp reply after the instant follow-up (Sprint 23, customer-safe tools).
+		r.Post("/os/lead-reply", chatHandler.LeadReply)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)
 		r.Post("/credits/charge", osHandler.ChargeCredits)
 		r.Post("/credits/forecast", osHandler.ForecastCredits)
