@@ -537,6 +537,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), 30, 120, 0))
 			r.Post("/ask", osHandler.Ask)
 			r.Post("/optimize", osHandler.Optimize)
+			// "Generate with AI" for one profile or brand-context field (free model tier).
+			r.Post("/field-suggest", osHandler.FieldSuggest)
 			r.Post("/plan/quote", osHandler.Quote)
 			r.Get("/creative/quote", osHandler.CreativeQuote)
 			r.Get("/creative/voices", osHandler.CreativeVoices)
