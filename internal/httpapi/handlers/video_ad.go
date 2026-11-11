@@ -17,6 +17,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/registry"
+	"github.com/bengobox/marketflow-ai/internal/team"
 )
 
 // Video ads for marketflow-api's creative module: the storyboard, the quote, the render
@@ -70,6 +71,11 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	words.WriteString(strings.Join([]string{req.Headline, req.Subline, req.Price, req.CTA}, "\n"))
 	if _, blocked, reason := compliance.NewFilter().CheckForTenant(words.String(), h.businessType(r.Context(), tenantID)); blocked {
 		writeError(w, http.StatusUnprocessableEntity, "the script did not pass the compliance check: "+reason)
+		return req, areq, tenantID, false
+	}
+	// The business's own banned claims (brand context), enforced before anything is made.
+	if claim := team.MatchBanned(words.String(), h.bannedClaims(r.Context(), tenantID)); claim != "" {
+		writeError(w, http.StatusUnprocessableEntity, "the script makes a claim your brand context bans: \""+claim+"\". Edit the script and try again.")
 		return req, areq, tenantID, false
 	}
 	return req, areq, tenantID, true

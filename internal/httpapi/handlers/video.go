@@ -257,6 +257,18 @@ func (h *OSHandler) businessType(ctx context.Context, tenantID uuid.UUID) string
 	return tc.BusinessType
 }
 
+// bannedClaims is the business's banned claims list (brand context), or none.
+func (h *OSHandler) bannedClaims(ctx context.Context, tenantID uuid.UUID) []string {
+	if h.source == nil {
+		return nil
+	}
+	tc, err := h.source.Load(ctx, tenantID)
+	if err != nil {
+		return nil
+	}
+	return team.BannedClaims(tc.MarketingContext)
+}
+
 // JobStatus handles GET /api/v1/internal/creative/jobs/{version_id} (service
 // key): the fallback read for a job whose pushed result did not arrive.
 func (h *OSHandler) JobStatus(w http.ResponseWriter, r *http.Request) {
