@@ -312,8 +312,9 @@ func TestVoiceRejectsBadInput(t *testing.T) {
 	}
 }
 
-// VEED Fabric gets the confirmed shape; when it fails, Creatify Aurora at 480p
-// takes over, and the price is per whole second.
+// Creatify Boreal (owner bake-off 2026-11-11) gets our voice-over and the actor with no
+// on-screen text; when it fails, VEED Fabric at 720p takes over at its real 720p price, and
+// the price is per whole second.
 func TestPresenterShapesAndFallback(t *testing.T) {
 	f := newFakeProviders(t)
 	p := NewPresenters(keysFor("fal"), nil)
@@ -322,21 +323,23 @@ func TestPresenterShapesAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := f.inputs["veed/fabric-1.0"]
-	if res.Route != "fal/veed-fabric" || in["image_url"] != req.ImageURL || in["audio_url"] != req.AudioURL || in["resolution"] != "720p" {
-		t.Fatalf("fabric: %+v %v", res, in)
+	in := f.inputs["creatify/boreal"]
+	if res.Route != "fal/creatify-boreal" || in["image_url"] != req.ImageURL || in["audio_url"] != req.AudioURL || in["resolution"] != "720p" ||
+		in["duration"].(float64) != 8 || !strings.Contains(in["prompt"].(string), "[TEXT]\nNone") {
+		t.Fatalf("boreal: %+v %v", res, in)
 	}
-	if res.CostUSD < 0.639 || res.CostUSD > 0.641 || !strings.HasSuffix(res.URL, "/clip.mp4") {
-		t.Fatalf("fabric result: %+v", res)
+	if res.CostUSD < 0.079 || res.CostUSD > 0.081 || !strings.HasSuffix(res.URL, "/clip.mp4") {
+		t.Fatalf("boreal result: %+v", res)
 	}
 
-	f.failFalPath = "veed/"
+	f.failFalPath = "creatify/boreal"
 	res, err = NewPresenters(keysFor("fal"), nil).Make(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Route != "fal/creatify-aurora-480p" || f.inputs["fal-ai/creatify/aurora"]["resolution"] != "480p" || res.Attempts != 2 {
-		t.Fatalf("fallback: %+v %v", res, f.inputs["fal-ai/creatify/aurora"])
+	fab := f.inputs["veed/fabric-1.0"]
+	if res.Route != "fal/veed-fabric" || fab["resolution"] != "720p" || res.Attempts != 2 || res.CostUSD < 1.19 || res.CostUSD > 1.21 {
+		t.Fatalf("fallback: %+v %v", res, fab)
 	}
 	if _, err := p.Make(context.Background(), PresenterRequest{ImageURL: "file:///x", AudioURL: req.AudioURL, Seconds: 3}); err == nil {
 		t.Fatal("a non-http image must be refused")

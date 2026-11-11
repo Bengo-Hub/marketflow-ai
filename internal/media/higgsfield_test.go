@@ -116,7 +116,7 @@ func TestClipAndPresenterTierOrder(t *testing.T) {
 		return strings.Join(out, ",")
 	}
 	std := keys(NewRouter(ClipRoutes).OrderFor(CapImageToVideo, TierStandard, 5, nil))
-	if std != "higgsfield/hailuo-2.3-std,higgsfield/kling-v3-std,higgsfield/kling-v3-turbo,fal/grok-imagine-video,fal/kling-v3-pro" {
+	if std != "fal/hailuo-2.3-fast,higgsfield/hailuo-2.3-std,higgsfield/kling-v3-std,higgsfield/kling-v3-turbo,fal/grok-imagine-video,fal/kling-v3-pro" {
 		t.Fatalf("standard clips = %s", std)
 	}
 	if long := keys(NewRouter(ClipRoutes).OrderFor(CapImageToVideo, TierStandard, 12, nil)); strings.Contains(long, "hailuo") {
@@ -126,7 +126,7 @@ func TestClipAndPresenterTierOrder(t *testing.T) {
 		t.Fatalf("premium clips = %s", prem)
 	}
 	pstd := keys(NewRouter(PresenterRoutes).OrderFor(CapPresenter, TierStandard, 10, nil))
-	if !strings.HasPrefix(pstd, "fal/veed-fabric,higgsfield/seedance-2.5-480p,") || strings.Contains(pstd, "720p") {
+	if !strings.HasPrefix(pstd, "fal/creatify-boreal,fal/veed-fabric,higgsfield/seedance-2.5-480p") || strings.Contains(pstd, "720p") {
 		t.Fatalf("standard presenter = %s", pstd)
 	}
 	pprem := keys(NewRouter(PresenterRoutes).OrderFor(CapPresenter, TierPremium, 10, nil))
@@ -159,11 +159,11 @@ func TestPresenterSeedanceShape(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 
-	// With both keys the lowest tier runs VEED Fabric first and Seedance 2.5 480p when it fails.
-	f.failFalPath = "veed/"
+	// With both keys the lowest tier runs Creatify Boreal first and VEED Fabric when it fails.
+	f.failFalPath = "creatify/boreal"
 	res, err = NewPresenters(keysFor("fal", "higgsfield"), nil).Make(context.Background(), PresenterRequest{TenantID: uuid.New(), VersionID: "v2",
 		ImageURL: "https://cdn.example/actor.png", AudioURL: "https://cdn.example/voice.mp3", Seconds: 6})
-	if err != nil || res.Route != "higgsfield/seedance-2.5-480p" || res.Attempts != 2 {
+	if err != nil || res.Route != "fal/veed-fabric" || res.Attempts != 2 {
 		t.Fatalf("fallback = %+v %v", res, err)
 	}
 }
@@ -186,20 +186,26 @@ func TestBalanceGateSkipsALowProvider(t *testing.T) {
 		t.Fatal("a stale reading must not block")
 	}
 
-	// The clip router skips Higgsfield's dear routes when it is low.
+	// The clip router skips a provider's routes it cannot pay for when its balance is low:
+	// fal low skips the fal Hailuo 2.3 Fast default (0.19) for Higgsfield Hailuo (0.28).
 	prev := providerBalances
 	providerBalances = NewBalances()
 	t.Cleanup(func() { providerBalances = prev })
+	providerBalances.Set("fal", BalanceReading{Remaining: 0.10, Unit: "usd", LowMark: 5})
 	providerBalances.Set("higgsfield", BalanceReading{Remaining: 0.30, Unit: "usd", LowMark: 5})
 	c := NewClips(keysFor("higgsfield", "fal"), nil, nil, nil)
 	c.estimate = nil // route choice only; no estimate call
 	_, route, _ := c.Quote(context.Background(), TierStandard, 5)
 	if route != "higgsfield/hailuo-2.3-std" {
-		t.Fatalf("hailuo (0.28) still fits: %s", route)
+		t.Fatalf("with fal low, hailuo (0.28) on Higgsfield fits: %s", route)
 	}
 	providerBalances.Set("higgsfield", BalanceReading{Remaining: 0.10, Unit: "usd", LowMark: 5})
-	if _, route, _ = c.Quote(context.Background(), TierStandard, 5); route != "fal/grok-imagine-video" {
-		t.Fatalf("with 0.10 left Higgsfield is skipped: %s", route)
+	if _, route, _ = c.Quote(context.Background(), TierStandard, 5); route != "" {
+		t.Fatalf("with both providers at 0.10 no clip route can pay: %s", route)
+	}
+	providerBalances.Set("fal", BalanceReading{Remaining: 20, Unit: "usd", LowMark: 5})
+	if _, route, _ = c.Quote(context.Background(), TierStandard, 5); route != "fal/hailuo-2.3-fast" {
+		t.Fatalf("fal topped up: the fal Hailuo 2.3 Fast default again: %s", route)
 	}
 }
 

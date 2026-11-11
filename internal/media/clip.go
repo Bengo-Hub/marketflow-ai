@@ -29,6 +29,9 @@ const CapImageToVideo Capability = "image_to_video"
 // their docs prices. The standard tier starts on Hailuo 2.3 std, the least costly
 // route, then Kling 3.0 std and Kling 3.0 Turbo; premium is Seedance 2.0 at 720p.
 var ClipRoutes = []Route{
+	// Owner, 2026-11-11 (paid bake-off): Hailuo 2.3 Fast on fal is the default, USD 0.19 per
+	// 6 s (USD 0.32 per 10 s); it makes 6 or 10 s, cut to the asked length.
+	{Key: "fal/hailuo-2.3-fast", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.19, BaseSeconds: 6, MaxSeconds: 10, Quality: 3.5, PAYG: true, Timeout: 6 * time.Minute},
 	// USD 0.28 per 6 s clip; it makes 6 or 10 s, cut to the asked length.
 	{Key: "higgsfield/hailuo-2.3-std", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.28, BaseSeconds: 6, MaxSeconds: 10, Quality: 3.5, PAYG: true, Timeout: 6 * time.Minute},
 	// USD 0.476 a clip, billed the same for 5 and 7 s.
@@ -224,6 +227,12 @@ func (c *Clips) animate(ctx context.Context, rt Route, req ClipRequest) (string,
 func clipInput(rt Route, req ClipRequest) (string, map[string]any, error) {
 	prompt := clipPrompt(req.Prompt)
 	switch rt.Key {
+	case "fal/hailuo-2.3-fast":
+		d := "6"
+		if req.Seconds > 6 {
+			d = "10"
+		}
+		return "fal-ai/minimax/hailuo-2.3-fast/standard/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": d, "prompt_optimizer": false}, nil
 	case "higgsfield/hailuo-2.3-std":
 		// Hailuo makes 6 or 10 s; the overlay step cuts the clip to the asked length.
 		d := 6

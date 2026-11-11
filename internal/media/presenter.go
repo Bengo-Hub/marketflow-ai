@@ -21,8 +21,14 @@ const CapPresenter Capability = "presenter"
 // at 720p (about USD 0.46/s). Seedance takes the actor still as image_urls and the
 // scene's voice-over as audio_urls and lip-syncs to it. Creatify Aurora stays as a
 // further fallback.
+//
+// Owner, 2026-11-11 (paid bake-off, .claude/plans/marketflow-media-provider-review-2026-11-11.md):
+// Creatify Boreal on fal is the standard default (USD 0.01/s at 720p, our own ElevenLabs audio
+// kept, up to 20 s a scene; lip-sync and picture judged good). Fabric is priced at its real
+// 720p rate (USD 0.15/s); it was priced at the 480p rate while asking for 720p.
 var PresenterRoutes = []Route{
-	{Key: "fal/veed-fabric", Provider: "fal", Capability: CapPresenter, PriceUSD: 0.08, PerSecond: true, Quality: 4, PAYG: true, Timeout: 10 * time.Minute, MaxTier: TierStandard},
+	{Key: "fal/creatify-boreal", Provider: "fal", Capability: CapPresenter, PriceUSD: 0.01, PerSecond: true, MaxSeconds: borealMaxSeconds, Quality: 4, PAYG: true, Timeout: 10 * time.Minute, MaxTier: TierStandard},
+	{Key: "fal/veed-fabric", Provider: "fal", Capability: CapPresenter, PriceUSD: 0.15, PerSecond: true, Quality: 4, PAYG: true, Timeout: 10 * time.Minute, MaxTier: TierStandard},
 	{Key: "higgsfield/seedance-2.5-480p", Provider: "higgsfield", Capability: CapPresenter, PriceUSD: 0.2056, PerSecond: true, MaxSeconds: seedanceMaxSeconds, Quality: 4, PAYG: true, Timeout: 10 * time.Minute},
 	{Key: "higgsfield/seedance-2.5-720p", Provider: "higgsfield", Capability: CapPresenter, PriceUSD: 0.4622, PerSecond: true, MaxSeconds: seedanceMaxSeconds, Quality: 4.8, PAYG: true, Timeout: 10 * time.Minute, MinTier: TierPremium},
 	{Key: "fal/creatify-aurora-480p", Provider: "fal", Capability: CapPresenter, PriceUSD: 0.07, PerSecond: true, Quality: 3.5, PAYG: true, Timeout: 10 * time.Minute, Fallback: true},
@@ -34,6 +40,8 @@ var PresenterRoutes = []Route{
 const (
 	seedanceMinSeconds = 4
 	seedanceMaxSeconds = 15
+	// borealMaxSeconds is Boreal's longest clip; longer scenes go to the next route.
+	borealMaxSeconds = 20
 )
 
 // MaxPresenterSeconds bounds one presenter scene (a UGC scene is 5 to 15 s).
@@ -154,6 +162,13 @@ func (p *Presenters) run(ctx context.Context, rt Route, req PresenterRequest) (s
 		input map[string]any
 	)
 	switch rt.Key {
+	case "fal/creatify-boreal":
+		// Our voice-over is kept as the soundtrack; "auto" follows the actor image's frame.
+		job = falJob(key, "creatify/boreal")
+		input = map[string]any{
+			"prompt": borealPrompt(req.Prompt), "image_url": req.ImageURL, "audio_url": req.AudioURL,
+			"resolution": "720p", "aspect_ratio": "auto", "duration": math.Ceil(req.Seconds),
+		}
 	case "fal/veed-fabric":
 		job = falJob(key, "veed/fabric-1.0")
 		input = map[string]any{"image_url": req.ImageURL, "audio_url": req.AudioURL, "resolution": "720p"}
@@ -205,4 +220,14 @@ func presenterPrompt(p string) string {
 		base = p + ". " + base
 	}
 	return base + ". Same face, hair and clothes throughout. No text, no letters, no logos."
+}
+
+// borealPrompt is Boreal's sectioned direction: the visual from the scene, the supplied
+// voice-over as the speech, and no on-screen text (our compositor draws captions).
+func borealPrompt(p string) string {
+	visual := "The person in the reference image talks warmly to the camera, selfie-video style, natural small head movements and gestures, steady framing. Same face, hair and clothes throughout."
+	if p = strings.TrimSpace(p); p != "" {
+		visual = p + ". " + visual
+	}
+	return "[VISUAL]\n" + visual + "\n\n[SPEECH]\nUse the supplied audio.\n\n[SOUNDS]\nNone beyond the supplied audio.\n\n[TEXT]\nNone. No text, no letters, no logos."
 }

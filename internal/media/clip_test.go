@@ -40,7 +40,7 @@ func TestClipNeedsFFmpeg(t *testing.T) {
 	}
 }
 
-// The default route gets the confirmed Hailuo 2.3 std shape, and the stored clip
+// The default route gets the fal Hailuo 2.3 Fast shape, and the stored clip
 // is the format's size with the text layer burned in. Needs ffmpeg (CI image and
 // production have it; skipped elsewhere).
 func TestClipHailuoShapeAndOverlay(t *testing.T) {
@@ -73,7 +73,7 @@ func TestClipHailuoShapeAndOverlay(t *testing.T) {
 	if !strings.Contains(in["prompt"].(string), "No text") {
 		t.Fatalf("prompt must keep the frame free of text: %v", in["prompt"])
 	}
-	if res.Route != "higgsfield/hailuo-2.3-std" || res.CostUSD != 0.28 || res.Bytes == 0 {
+	if res.Route != "fal/hailuo-2.3-fast" || res.CostUSD != 0.19 || res.Bytes == 0 {
 		t.Fatalf("result = %+v", res)
 	}
 	// The stored clip is 1080x1350, 5 s, H.264.

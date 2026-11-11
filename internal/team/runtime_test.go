@@ -115,14 +115,15 @@ func TestMediaJobWaitsForPlanApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Route != RouteQuote || res.Plan == nil || res.Plan.Recommended.Credits != 191 || res.Plan.Recommended.Shortlist != 2 {
+	if res.Route != RouteQuote || res.Plan == nil || res.Plan.Recommended.Credits != 47 || res.Plan.Recommended.Shortlist != 2 {
 		t.Fatalf("quote = %+v plan=%+v", res.Route, res.Plan)
 	}
 	if len(f.systems) != 0 {
 		t.Fatal("model was called")
 	}
 	// Short on credits after approval: still a quote, with a bundle.
-	res, _ = rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "x", ApprovePlan: true, CreditsAvailable: 40})
+	// (5 credits: the cheaper Boreal presenter, 2026-11-11, fits a smaller plan into 40.)
+	res, _ = rt.Ask(context.Background(), Request{TenantID: uuid.New(), Text: "x", ApprovePlan: true, CreditsAvailable: 5})
 	if res.Route != RouteQuote || res.Plan.SuggestedBundle == nil {
 		t.Fatalf("short balance = %+v", res.Plan)
 	}

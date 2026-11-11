@@ -114,13 +114,15 @@ func Defaults() Registry {
 			PosterPremium: {Key: PosterPremium, Name: "Premium poster", Kind: "media", CostUSD: 0.15, Feature: "ai_static_ads"},
 			// Template video: photos with a push-in, voice, music and local ffmpeg assembly.
 			TemplateVideo: {Key: TemplateVideo, Name: "Template video ad, 30 s", Kind: "media", CostUSD: 0.38, Feature: "ai_video_template"},
-			// Motion poster 5 s: Hailuo 2.3 std (USD 0.28 per 6 s clip), then Kling 3.0 std (USD 0.476
-			// a clip), plus our ffmpeg text overlay. Premium is Seedance 2.0 at 720p (about USD 0.30/s).
-			MotionPoster:        {Key: MotionPoster, Name: "Motion poster, 5 s", Kind: "media", CostUSD: 0.48, Feature: "ai_video_template"},
+			// Motion poster 5 s: fal Hailuo 2.3 Fast (USD 0.19 per 6 s clip; owner bake-off 2026-11-11),
+			// then Higgsfield Hailuo 2.3 std (USD 0.28) and Kling 3.0 std, plus our ffmpeg text overlay.
+			// Premium is Seedance 2.0 at 720p (about USD 0.30/s).
+			MotionPoster:        {Key: MotionPoster, Name: "Motion poster, 5 s", Kind: "media", CostUSD: 0.20, Feature: "ai_video_template"},
 			MotionPosterPremium: {Key: MotionPosterPremium, Name: "Premium motion poster, 5 s", Kind: "media", CostUSD: 1.51, Feature: "ai_video_template"},
-			// Presenter 30 s: fal VEED Fabric at its docs price, then Seedance 2.5 reference-to-video at
-			// 480p (about USD 0.21/s) as the fallback, Hailuo B-roll and voice: USD 1.90 to 3.00.
-			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 3.00, Feature: "ai_video_presenter", NeedsStoryboard: true},
+			// Presenter 30 s: fal Creatify Boreal at USD 0.01/s with our ElevenLabs voice (owner bake-off
+			// 2026-11-11), two Hailuo 2.3 Fast product clips and the voice: about USD 0.40 to 0.70.
+			// Fabric (USD 0.15/s at 720p) and Seedance 2.5 at 480p are the fallbacks.
+			Presenter: {Key: Presenter, Name: "AI presenter ad, 30 s", Kind: "media", CostUSD: 0.70, Feature: "ai_video_presenter", NeedsStoryboard: true},
 			// Premium presenter 30 s: Seedance 2.5 at 720p (about USD 0.46/s), Kling 3.0 std B-roll, voice.
 			PresenterPremium: {Key: PresenterPremium, Name: "Premium presenter ad, 30 s", Kind: "media", CostUSD: 6.10, Feature: "ai_video_presenter_premium", NeedsStoryboard: true},
 			// Cinematic 20 s: Lite on Kling 3.0 std clips (about USD 1.90), Fast on Seedance 2.0 at
