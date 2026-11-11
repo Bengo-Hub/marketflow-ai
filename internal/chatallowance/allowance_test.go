@@ -46,3 +46,25 @@ func TestNeedsCreditWithoutRedis(t *testing.T) {
 		t.Fatal("a Redis error charges the turn")
 	}
 }
+
+// The free allowance follows the business's plan (subscriptions limit chat_turns_daily).
+func TestNeedsCreditPerPlan(t *testing.T) {
+	mr := miniredis.RunT(t)
+	a := New(redis.NewClient(&redis.Options{Addr: mr.Addr()}), "mf", 50, 5)
+	ctx := context.Background()
+	day := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	free, paid := uuid.New(), uuid.New()
+	// A free plan allowing 2 turns: the third costs a credit.
+	if a.NeedsCreditFor(ctx, free, day, 2) || a.NeedsCreditFor(ctx, free, day, 2) || !a.NeedsCreditFor(ctx, free, day, 2) {
+		t.Fatal("a plan's own allowance applies")
+	}
+	// No limit from the plan: the default allowance.
+	for i := 0; i < 50; i++ {
+		if a.NeedsCreditFor(ctx, paid, day, 0) {
+			t.Fatalf("turn %d is inside the default allowance", i+1)
+		}
+	}
+	if !a.NeedsCreditFor(ctx, paid, day, 0) {
+		t.Fatal("past the default allowance a turn costs a credit")
+	}
+}

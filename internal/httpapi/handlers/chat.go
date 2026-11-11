@@ -32,17 +32,27 @@ type ChatHandler struct {
 	// allowance makes chat free up to a daily allowance, then one credit per block of turns
 	// (owner, 2026-11-11); nil charges every turn.
 	allowance *chatallowance.Allowance
+	// planTurns is the business's free chat turns a day from its plan (nil or 0: the default).
+	planTurns func(ctx context.Context, tenantID uuid.UUID) int
 }
 
 // WithAllowance prices chat turns with the daily free allowance.
-func (h *ChatHandler) WithAllowance(a *chatallowance.Allowance) *ChatHandler {
+func (h *ChatHandler) WithAllowance(a *chatallowance.Allowance, planTurns func(ctx context.Context, tenantID uuid.UUID) int) *ChatHandler {
 	h.allowance = a
+	h.planTurns = planTurns
 	return h
 }
 
 // turnIsFree reports a turn inside the free allowance or an already paid block.
 func (h *ChatHandler) turnIsFree(ctx context.Context, tenantID uuid.UUID) bool {
-	return h.allowance != nil && !h.allowance.NeedsCredit(ctx, tenantID, time.Now())
+	if h.allowance == nil {
+		return false
+	}
+	free := 0
+	if h.planTurns != nil {
+		free = h.planTurns(ctx, tenantID)
+	}
+	return !h.allowance.NeedsCreditFor(ctx, tenantID, time.Now(), free)
 }
 
 // WithFAQSuggester turns answers rated helpful into FAQ suggestions for the owner.

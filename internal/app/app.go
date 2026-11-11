@@ -13,6 +13,7 @@ import (
 	"github.com/Bengo-Hub/httpware"
 	"github.com/Bengo-Hub/httpware/objectstore"
 	ratelimit "github.com/Bengo-Hub/shared-ratelimit"
+	"github.com/google/uuid"
 
 	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/bengobox/marketflow-ai/internal/adintel"
@@ -371,7 +372,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 	chatHandler := handlers.NewChatHandler(pipeline, sessionService, creditSpender, logger).
 		// Owner, 2026-11-11: chat free up to a daily allowance, then 1 credit per 5 turns.
-		WithAllowance(chatallowance.New(redisClient, cfg.Redis.Namespace, chatallowance.DefaultFreePerDay, chatallowance.DefaultTurnsPerCredit))
+		WithAllowance(chatallowance.New(redisClient, cfg.Redis.Namespace, chatallowance.DefaultFreePerDay, chatallowance.DefaultTurnsPerCredit),
+			// The free turns a day follow the business's plan (chat_turns_daily), read from the
+			// cached tenant context; the default applies when the plan sets none.
+			func(ctx context.Context, tenantID uuid.UUID) int {
+				if tc, err := osContext.Load(ctx, tenantID); err == nil {
+					return tc.ChatTurnsDaily
+				}
+				return 0
+			})
 	// ── Marketing OS (Sprint 21): decide layer, library, optimiser, team ──
 	lib := library.MustLoad()
 	decider := decide.New(decide.Config{

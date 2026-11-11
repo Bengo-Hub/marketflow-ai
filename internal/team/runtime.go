@@ -60,6 +60,8 @@ type TenantContext struct {
 	Features         map[string]bool  `json:"features,omitempty"`
 	HasPlan          bool             `json:"has_plan"`
 	MarketSignals    *MarketSignals   `json:"market_signals,omitempty"`
+	// ChatTurnsDaily is the plan's free chat turns a day (0: the default allowance).
+	ChatTurnsDaily int `json:"chat_turns_daily,omitempty"`
 }
 
 // ContextSource loads the tenant context (marketflow-api owns the data).
