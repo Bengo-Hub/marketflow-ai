@@ -84,7 +84,7 @@ func TestPlanBiggerBudgetVideoAndShortfall(t *testing.T) {
 		t.Fatalf("renders = %d shortlist = %d", p.MaxRenders, p.Recommended.Shortlist)
 	}
 	// copy 1 + video 12 + launch 10 = 23 > 20.
-	if p.Recommended.Credits != 23 || p.Shortfall != 3 || p.SuggestedBundle == nil || p.SuggestedBundle.Units != 100 {
+	if p.Recommended.Credits != 23 || p.Shortfall != 3 || p.SuggestedBundle == nil || p.SuggestedBundle.Units != 60 { // the smallest bundle that covers it (2026-11-11 bundles)
 		t.Fatalf("quote = %+v shortfall=%d bundle=%+v", p.Recommended, p.Shortfall, p.SuggestedBundle)
 	}
 	if p.Alternatives[0].Tier != Poster {

@@ -132,9 +132,14 @@ func Defaults() Registry {
 			CinematicStandard: {Key: CinematicStandard, Name: "Cinematic ad 20 s (Standard)", Kind: "media", CostUSD: 9.25, Feature: "ai_video_cinematic_premium", NeedsStoryboard: true},
 			LaunchFee:         {Key: LaunchFee, Name: "Paid launch (clients without a plan)", Kind: "fee", Credits: 10},
 		},
+		// The AI credit bundles subscriptions-api sells (billing/credit_services.go, 2026-11-11);
+		// only used to suggest a bundle on a short balance. Checkout always prices from
+		// subscriptions-api. Follow-up: read this list from its credits catalog instead.
 		Bundles: []Bundle{
-			{Code: "bundle_100", Units: 100, PriceKES: 1000},
-			{Code: "bundle_500", Units: 500, PriceKES: 4000},
+			{Code: "bundle_60", Units: 60, PriceKES: 750},
+			{Code: "bundle_150", Units: 150, PriceKES: 1750},
+			{Code: "bundle_400", Units: 400, PriceKES: 4400},
+			{Code: "bundle_1000", Units: 1000, PriceKES: 10000},
 		},
 	}
 }
