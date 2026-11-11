@@ -27,6 +27,17 @@ type leadReplyRequest struct {
 	Text       string `json:"text"`
 	// HandoffValue is the business's hand-off amount (0: amounts never hand off).
 	HandoffValue float64 `json:"handoff_value"`
+	// BusinessType selects the compliance rules every reply passes (Sprint 23 L34); empty
+	// falls back to the pipeline's own guess.
+	BusinessType string `json:"business_type"`
+}
+
+// leadChatInput is the customer-safe pipeline input for one lead message.
+func leadChatInput(req leadReplyRequest, tenantID, sid uuid.UUID, history []ai.Message) rag.ChatInput {
+	return rag.ChatInput{
+		TenantID: tenantID, TenantSlug: req.TenantSlug, SessionID: sid, Question: req.Text,
+		History: history, PublicMode: true, BusinessType: req.BusinessType,
+	}
 }
 
 // LeadReplyResponse is what marketflow-worker sends back on WhatsApp.
@@ -126,10 +137,7 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 			_, _ = h.sessions.CreateSessionWithID(ctx, tenantID, sid, "whatsapp_lead")
 		}
 	}
-	result, err := h.pipeline.Chat(ctx, rag.ChatInput{
-		TenantID: tenantID, TenantSlug: req.TenantSlug, SessionID: sid, Question: req.Text,
-		History: history, PublicMode: true,
-	})
+	result, err := h.pipeline.Chat(ctx, leadChatInput(req, tenantID, sid, history))
 	if err != nil || result == nil || strings.TrimSpace(result.Response) == "" {
 		h.logger.Warn("lead reply failed; handing to the owner", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		h.refund(r, tenantID, chargeKey)

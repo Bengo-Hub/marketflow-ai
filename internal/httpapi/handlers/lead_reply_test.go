@@ -1,6 +1,10 @@
 package handlers
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 // Sprint 23 L26: a lead who asks for a person, or names a budget at or above the business's
 // hand-off value, goes to the owner and the bot stops.
@@ -33,5 +37,14 @@ func TestLeadSessionIDIsStable(t *testing.T) {
 	a := leadSessionID("t1", "l1")
 	if a != leadSessionID("t1", "l1") || a == leadSessionID("t1", "l2") || a == leadSessionID("t2", "l1") {
 		t.Fatal("one session per tenant and lead")
+	}
+}
+
+// Sprint 23 L34: every lead reply passes the business's own compliance rules, so the pipeline is
+// given the tenant's business type instead of guessing it from the lead's words.
+func TestLeadChatInputCarriesBusinessType(t *testing.T) {
+	in := leadChatInput(leadReplyRequest{TenantSlug: "shop", Text: "does it cure diabetes?", BusinessType: "flp"}, uuid.New(), uuid.New(), nil)
+	if in.BusinessType != "flp" || !in.PublicMode || in.Question != "does it cure diabetes?" || in.TenantSlug != "shop" {
+		t.Fatalf("lead chat input: %+v", in)
 	}
 }
