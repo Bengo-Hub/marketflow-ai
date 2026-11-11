@@ -126,10 +126,10 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	// One credit per answered message; without credits the owner takes over, so the lead is
-	// never left unanswered.
+	// Free inside the daily chat allowance, then one credit per block of turns; without credits
+	// the owner takes over, so the lead is never left unanswered.
 	chargeKey := ""
-	if h.credits != nil {
+	if h.credits != nil && !h.turnIsFree(ctx, tenantID) {
 		key := "lead-reply:" + uuid.NewString()
 		dec, err := h.credits.Spend(ctx, tenantID, 1, key)
 		if err != nil || !dec.Allowed {

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/chatallowance"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
@@ -28,6 +29,20 @@ type ChatHandler struct {
 	logger   *zap.Logger
 	// suggestFAQ passes an answer rated helpful on as an FAQ suggestion; nil turns it off.
 	suggestFAQ func(ctx context.Context, tenantID uuid.UUID, question, answer string) error
+	// allowance makes chat free up to a daily allowance, then one credit per block of turns
+	// (owner, 2026-11-11); nil charges every turn.
+	allowance *chatallowance.Allowance
+}
+
+// WithAllowance prices chat turns with the daily free allowance.
+func (h *ChatHandler) WithAllowance(a *chatallowance.Allowance) *ChatHandler {
+	h.allowance = a
+	return h
+}
+
+// turnIsFree reports a turn inside the free allowance or an already paid block.
+func (h *ChatHandler) turnIsFree(ctx context.Context, tenantID uuid.UUID) bool {
+	return h.allowance != nil && !h.allowance.NeedsCredit(ctx, tenantID, time.Now())
 }
 
 // WithFAQSuggester turns answers rated helpful into FAQ suggestions for the owner.
@@ -111,7 +126,7 @@ func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, credits Cred
 // Only a tenant that resolved to a real tenant row is billed: a slug the platform could not
 // resolve has nobody to charge, and the shared platform tenant answers as exempt.
 func (h *ChatHandler) chargeMessage(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, billable bool) (string, bool) {
-	if h.credits == nil || !billable {
+	if h.credits == nil || !billable || h.turnIsFree(r.Context(), tenantID) {
 		return "", true
 	}
 	key := "chat:" + uuid.NewString()
