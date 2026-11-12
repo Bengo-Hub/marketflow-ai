@@ -544,6 +544,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		if authMiddleware != nil {
 			r.Use(authMiddleware.RequireAuth)
 		}
+		// Restricted roles (the app reviewer) never reach AI chat or make media.
+		r.Use(mw.DenyRestrictedRoles(cfg.Security.RestrictedRoles))
 		r.Post("/chat", chatHandler.Chat)
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)

@@ -73,6 +73,9 @@ type SecurityConfig struct {
 	JWTAudience   string `env:"MF_SECURITY_JWT_AUDIENCE" envDefault:"codevertex"`
 	RequireJWT    bool   `env:"MF_SECURITY_REQUIRE_JWT" envDefault:"true"`
 	EncryptionKey string `env:"MF_SECURITY_ENCRYPTION_KEY"`
+	// RestrictedRoles are SSO roles that may not use AI chat or make media when they are the
+	// caller's only roles (the Meta App Review account). Empty switches the guard off.
+	RestrictedRoles []string `env:"MF_SECURITY_RESTRICTED_ROLES" envSeparator:"," envDefault:"marketflow_reviewer"`
 	// AuthServiceURL points at auth-api for platform X-API-Key validation
 	// (same server that exposes JWKS). Kept separate because JWKS sits at
 	// /.well-known/jwks.json while the key-introspection endpoint is at /api/v1/keys/validate.
