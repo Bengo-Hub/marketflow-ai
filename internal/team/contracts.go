@@ -38,7 +38,13 @@ type Scene struct {
 	Visual    string `json:"visual"`
 	Voiceover string `json:"voiceover"`
 	Caption   string `json:"caption"`
+	// SFX is an optional short sound cue for the scene ("soft whoosh"), used only where it
+	// helps; plans with sound effects render it (media audio ladder).
+	SFX string `json:"sfx,omitempty"`
 }
+
+// maxSFX caps a sound cue; a longer one is dropped rather than failing the script.
+const maxSFX = 60
 
 // Strategy records how a script used the market (Find, Flip, Fix): the winning pattern it follows,
 // what it changed for this audience, the complaint it answers, and a hypothesis a test can prove
@@ -57,6 +63,8 @@ type VideoScript struct {
 	Scenes   []Scene   `json:"scenes"`
 	CTA      string    `json:"cta"`
 	Strategy *Strategy `json:"strategy,omitempty"`
+	// Mood is an optional few words on the music's feel ("warm, hopeful, builds to the offer").
+	Mood string `json:"mood,omitempty"`
 }
 
 // PosterBrief is the poster_brief contract.
@@ -129,7 +137,7 @@ type ReviewFindings struct {
 // contractShapes are the JSON shapes shown to the model.
 var contractShapes = map[string]string{
 	"ad_copy_batch":    `{"variants":[{"id":"v1","format":"","angle":"","hook":"","headline":"","primary_text":"","cta":"","hypothesis":"","source":""}]}`,
-	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":""}],"cta":"","strategy":{"pattern":"","flip":"","fix":"","hypothesis":""}}`,
+	"video_script":     `{"format":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":"","sfx":""}],"cta":"","mood":"","strategy":{"pattern":"","flip":"","fix":"","hypothesis":""}}`,
 	"poster_brief":     `{"headline":"","subline":"","cta":"","layout":"","image_prompt":"","sizes":["1080x1080","1080x1350","1080x1920"]}`,
 	"social_posts":     `{"posts":[{"platform":"","hook":"","text":"","visual":""}]}`,
 	"content_calendar": `{"pillars":[""],"items":[{"day":"","platform":"","pillar":"","format":"","hook":"","cta":"","ad_candidate":false}]}`,
@@ -193,10 +201,18 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 			if s.ID == "" {
 				v.Scenes[i].ID = fmt.Sprintf("s%d", i+1)
 			}
+			if cue := strings.TrimSpace(s.SFX); len(cue) > maxSFX {
+				v.Scenes[i].SFX = ""
+			} else {
+				v.Scenes[i].SFX = cue
+			}
 			total += s.DurationS
 		}
 		if total > 90 {
 			return nil, fmt.Errorf("video_script: %.0f s is too long", total)
+		}
+		if v.Mood = strings.TrimSpace(v.Mood); len(v.Mood) > 120 {
+			v.Mood = ""
 		}
 		if st := v.Strategy; st != nil {
 			if tooLong(st.Pattern, st.Flip, st.Fix, st.Hypothesis) {

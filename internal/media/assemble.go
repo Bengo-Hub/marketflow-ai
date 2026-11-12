@@ -64,9 +64,12 @@ type AssembleRequest struct {
 	// SceneCaptions are the script's on-screen captions, each shown over its scene near
 	// the top of the safe band.
 	SceneCaptions []CaptionLine
-	MusicURL      string   // optional bed
-	EndCard       *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
-	LogoURL       string   // fetched into EndCard.Logo when set
+	MusicURL      string // optional bed
+	// Mix is the voice clean up, the sound cues and the music ducking; the zero value is the
+	// plain mix.
+	Mix     AudioMix
+	EndCard *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
+	LogoURL string   // fetched into EndCard.Logo when set
 	// AINote, when set, is shown small for the whole ad, over the end card too: the disclosure
 	// required whenever a synthetic person appears.
 	AINote string
@@ -253,7 +256,7 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 	voicePath := ""
 	switch {
 	case sceneAudio(req.Scenes):
-		if voicePath, err = a.sceneVoice(ctx, dir, req.Scenes); err != nil {
+		if voicePath, err = a.sceneVoice(ctx, dir, req.Scenes, req.Mix.VoiceFilter); err != nil {
 			return nil, fmt.Errorf("media: scene voice: %w", err)
 		}
 	case req.VoiceURL != "":
@@ -269,10 +272,23 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 			return nil, err
 		}
 	}
+	// A cue that cannot be fetched is left out; it never fails the ad.
+	var cues []placedCue
+	for i, c := range req.Mix.SFX {
+		if c.At >= total {
+			continue
+		}
+		p := filepath.Join(dir, fmt.Sprintf("sfx%d.audio", i))
+		if err := downloadTo(ctx, a.fetch, c.URL, p, maxAudioBytes, fmt.Sprintf("sound cue %d", i+1)); err != nil {
+			a.logger.Warn("sound cue left out", zap.Error(err))
+			continue
+		}
+		cues = append(cues, placedCue{path: p, at: c.At})
+	}
 	mixPath := ""
-	if voicePath != "" || musicPath != "" {
+	if voicePath != "" || musicPath != "" || len(cues) > 0 {
 		mixPath = filepath.Join(dir, "mix.wav")
-		if err := a.mix(ctx, voicePath, musicPath, mixPath, total); err != nil {
+		if err := a.mix(ctx, voicePath, musicPath, cues, req.Mix, mixPath, total); err != nil {
 			return nil, fmt.Errorf("media: mix audio: %w", err)
 		}
 	}
@@ -390,4 +406,10 @@ func (a *Assembler) run(ctx context.Context, args ...string) error {
 		return fmt.Errorf("%w: %s", err, truncate(string(b), 400))
 	}
 	return nil
+}
+
+// TryAudioFilter runs an audio filter chain over a moment of silence and reports whether
+// this ffmpeg accepts it (every filter present, every option valid).
+func (a *Assembler) TryAudioFilter(ctx context.Context, chain string) error {
+	return a.run(ctx, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "0.2", "-af", chain, "-f", "null", "-")
 }

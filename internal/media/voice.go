@@ -27,9 +27,12 @@ const CapVoice Capability = "voice"
 // paid plan: the free plan's output may not be used commercially.
 var VoiceRoutes = []Route{
 	{Key: "elevenlabs/eleven-v4-turbo", Provider: "elevenlabs", Capability: CapVoice, PriceUSD: 0.04, Quality: 4, Timeout: time.Minute},
-	{Key: "fal/elevenlabs-v3", Provider: "fal", Capability: CapVoice, PriceUSD: 0.10, Quality: 4, PAYG: true, Timeout: 90 * time.Second, Fallback: true},
+	{Key: falVoiceRoute, Provider: "fal", Capability: CapVoice, PriceUSD: 0.10, Quality: 4, PAYG: true, Timeout: 90 * time.Second, Fallback: true},
 	{Key: "elevenlabs/eleven-v4", Provider: "elevenlabs", Capability: CapVoice, PriceUSD: 0.08, Quality: 4.8, Timeout: time.Minute, MinTier: TierPremium},
 }
+
+// falVoiceRoute is fal's ElevenLabs route, which reads premade voices only (falVoiceFor).
+const falVoiceRoute = "fal/elevenlabs-v3"
 
 // MaxVoiceChars bounds one voice-over (a 60 s ad is about 900 characters).
 const MaxVoiceChars = 3000
@@ -82,17 +85,20 @@ type WordTiming struct {
 
 // VoiceResult is the stored voice-over.
 type VoiceResult struct {
-	URL        string       `json:"url"`
-	Key        string       `json:"key"`
-	Bytes      int          `json:"bytes"`
-	Seconds    float64      `json:"seconds"`
-	Words      []WordTiming `json:"words"`
-	Exact      bool         `json:"exact_timings"` // false when the timings are estimated
-	Voice      string       `json:"voice"`         // the voice that read it
-	Characters int          `json:"characters"`
-	Route      string       `json:"route"`
-	CostUSD    float64      `json:"cost_usd"`
-	Attempts   int          `json:"attempts"`
+	URL     string       `json:"url"`
+	Key     string       `json:"key"`
+	Bytes   int          `json:"bytes"`
+	Seconds float64      `json:"seconds"`
+	Words   []WordTiming `json:"words"`
+	Exact   bool         `json:"exact_timings"` // false when the timings are estimated
+	Voice   string       `json:"voice"`         // the voice that read it
+	// SubstitutedFor names the chosen voice when another read it instead: fal's route
+	// cannot use the account's library voices, so a premade voice stands in.
+	SubstitutedFor string  `json:"substituted_for,omitempty"`
+	Characters     int     `json:"characters"`
+	Route          string  `json:"route"`
+	CostUSD        float64 `json:"cost_usd"`
+	Attempts       int     `json:"attempts"`
 	// Audio is the stored file's bytes, for the re-alignment of estimated timings.
 	Audio []byte `json:"-"`
 }
@@ -109,7 +115,9 @@ type Voices struct {
 	http     *http.Client
 	library  *voiceLibrary
 	defaults []string // DefaultVoices unless set
-	logger   *zap.Logger
+	// overrides change deliveries' settings (MF_VOICE_DELIVERY_SETTINGS).
+	overrides map[string]DeliveryOverride
+	logger    *zap.Logger
 
 	mu    sync.Mutex
 	plans map[string]planEntry // ElevenLabs plan per key
@@ -117,11 +125,25 @@ type Voices struct {
 
 type planEntry struct {
 	paid bool
-	at   time.Time
+	// known is false when the lookup failed; such an entry is retried after planRetry.
+	known bool
+	at    time.Time
 }
 
 // planTTL: a plan changes when the owner upgrades, rarely.
 const planTTL = time.Hour
+
+// planRetry is how long a failed plan lookup stands before it is tried again. A failure is
+// not a free plan: holding it for the full hour sent every voice to fal's stock voices.
+var planRetry = time.Minute
+
+// fresh reports whether the entry still answers for the plan.
+func (e planEntry) fresh(now time.Time) bool {
+	if e.known {
+		return now.Sub(e.at) < planTTL
+	}
+	return now.Sub(e.at) < planRetry
+}
 
 // NewVoices builds the voice pipeline.
 func NewVoices(keys KeySource, store AudioStore, logger *zap.Logger) *Voices {
@@ -147,6 +169,22 @@ func (v *Voices) WithDefaults(list []string) *Voices {
 		v.defaults = list
 	}
 	return v
+}
+
+// WithDeliveryOverrides sets per-delivery setting overrides; nil keeps the defaults.
+func (v *Voices) WithDeliveryOverrides(o map[string]DeliveryOverride) *Voices {
+	v.overrides = o
+	return v
+}
+
+// Delivery is the named delivery (the ad delivery for "" or an unknown key) with its
+// configured overrides.
+func (v *Voices) Delivery(key string) Delivery {
+	d := DeliveryFor(key)
+	if o, ok := v.overrides[d.Key]; ok {
+		d = o.apply(d)
+	}
+	return d
 }
 
 // List returns the voices the studio offers: the account's (collection first),
@@ -226,8 +264,14 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 		if err != nil {
 			return nil, fmt.Errorf("media: store voice: %w", err)
 		}
-		return &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Voice: used,
-			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1, Audio: audio}, nil
+		res := &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Voice: used,
+			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1, Audio: audio}
+		if chosen, ok := pickVoice(collection, v.choice(req), req.Language, ""); ok && rt.Key == falVoiceRoute && chosen.Name != used {
+			res.SubstitutedFor = chosen.Name
+			v.logger.Warn("voice substituted: the direct ElevenLabs route was not available and fal cannot use library voices",
+				zap.String("chosen", chosen.Name), zap.String("read_by", used), zap.String("version_id", req.VersionID))
+		}
+		return res, nil
 	}
 	if lastErr == nil {
 		return nil, ErrNoRoute
@@ -256,33 +300,53 @@ func (v *Voices) covered(rt Route, chars float64) bool {
 	return providerBalances.Allows(rt.Provider, rt.PriceUSD*chars/1000)
 }
 
-// paidPlan reads the ElevenLabs subscription tier, cached per key. An unknown
-// plan counts as free, so a lookup failure never produces non-commercial audio.
+// paidPlan reads the ElevenLabs subscription tier, cached per key. An unknown plan is not
+// used for the direct route, so a lookup failure never produces non-commercial audio; the
+// failure is logged with its reason and looked up again after planRetry, since the fallback
+// route can only read stock voices.
 func (v *Voices) paidPlan(ctx context.Context, key string) bool {
 	v.mu.Lock()
 	e, ok := v.plans[key]
 	v.mu.Unlock()
-	if ok && time.Since(e.at) < planTTL {
+	if ok && e.fresh(time.Now()) {
 		return e.paid
 	}
-	paid := false
+	paid, known, reason := false, false, ""
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, elevenBase+"/v1/user/subscription", nil)
-	if err == nil {
+	if err != nil {
+		reason = err.Error()
+	} else {
 		req.Header.Set("xi-api-key", key)
-		if resp, err := v.http.Do(req); err == nil {
+		resp, err := v.http.Do(req)
+		switch {
+		case err != nil:
+			reason = err.Error()
+		default:
 			var sub struct {
 				Tier string `json:"tier"`
 			}
-			if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&sub) == nil {
-				paid = sub.Tier != "" && sub.Tier != "free"
+			switch {
+			case resp.StatusCode != http.StatusOK:
+				reason = fmt.Sprintf("status %d (the key may lack user read permission)", resp.StatusCode)
+			case json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&sub) != nil || sub.Tier == "":
+				reason = "no tier in the reply"
+			default:
+				known, paid = true, sub.Tier != "free"
+				if !paid {
+					reason = "the account is on the free plan"
+				}
 			}
 			resp.Body.Close()
 		}
 	}
+	if !paid && v.logger != nil {
+		v.logger.Warn("ElevenLabs direct voice route skipped; the fallback reads stock voices only",
+			zap.String("reason", reason), zap.Bool("plan_known", known))
+	}
 	v.mu.Lock()
-	v.plans[key] = planEntry{paid: paid, at: time.Now()}
+	v.plans[key] = planEntry{paid: paid, known: known, at: time.Now()}
 	v.mu.Unlock()
 	return paid
 }
@@ -303,10 +367,10 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 		}
 		audio, words, err := v.eleven(ctx, key, model, voice.ID, req)
 		return audio, words, err == nil, voice.Name, err
-	case "fal/elevenlabs-v3":
+	case falVoiceRoute:
 		voice, _ := pickVoice(collection, v.choice(req), req.Language, "")
 		name := falVoiceFor(voice)
-		d := DeliveryFor(req.Delivery)
+		d := v.Delivery(req.Delivery)
 		var out struct {
 			Audio struct {
 				URL string `json:"url"`
@@ -321,7 +385,7 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 		if out.Audio.URL == "" {
 			return nil, nil, false, "", &errJobFailed{provider: "fal", status: "completed", detail: "no audio in the result"}
 		}
-		audio, err := v.download(ctx, out.Audio.URL)
+		audio, err := fetchAudio(ctx, v.http, out.Audio.URL, "voice")
 		return audio, nil, false, name, err
 	}
 	return nil, nil, false, "", fmt.Errorf("media: no builder for route %s", rt.Key)
@@ -329,7 +393,7 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 
 // choice is a request's voice choice.
 func (v *Voices) choice(req VoiceRequest) VoiceChoice {
-	return VoiceChoice{Name: req.Voice, Delivery: DeliveryFor(req.Delivery), Prefs: req.Prefs, Defaults: v.defaults}
+	return VoiceChoice{Name: req.Voice, Delivery: v.Delivery(req.Delivery), Prefs: req.Prefs, Defaults: v.defaults}
 }
 
 // directed opens the text with the delivery's direction tag, unless the text
@@ -345,7 +409,7 @@ func directed(d Delivery, text string) string {
 // time of every character, grouped here into words. The delivery sets the
 // voice settings and the opening direction tag.
 func (v *Voices) eleven(ctx context.Context, key, model, voiceID string, req VoiceRequest) ([]byte, []WordTiming, error) {
-	d := DeliveryFor(req.Delivery)
+	d := v.Delivery(req.Delivery)
 	body, _ := json.Marshal(map[string]any{"text": directed(d, req.Text), "model_id": model, "language_code": req.Language,
 		"voice_settings": d.Settings})
 	endpoint := elevenBase + "/v1/text-to-speech/" + url.PathEscape(voiceID) + "/with-timestamps?output_format=mp3_44100_128"
@@ -453,22 +517,23 @@ func mp3Seconds(audio []byte) float64 {
 	return float64(len(audio)) * 8 / 128000
 }
 
-func (v *Voices) download(ctx context.Context, url string) ([]byte, error) {
+// fetchAudio downloads a provider's audio output (voice, sound cue or music), up to 32 MB.
+func fetchAudio(ctx context.Context, client *http.Client, url, what string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := v.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("download voice: %w", err)
+		return nil, fmt.Errorf("download %s: %w", what, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download voice: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("download %s: status %d", what, resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAudioBytes))
 	if err != nil || len(data) == 0 {
-		return nil, fmt.Errorf("download voice: %v", err)
+		return nil, fmt.Errorf("download %s: %v", what, err)
 	}
 	return data, nil
 }

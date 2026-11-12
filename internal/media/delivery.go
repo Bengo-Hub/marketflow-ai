@@ -1,6 +1,9 @@
 package media
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -8,11 +11,13 @@ import (
 // A delivery is how a voice-over should sound for one kind of content, the way
 // ElevenLabs Studio sets a voice up per project: voice settings for the energy,
 // an opening direction tag that v4 and v3 models follow (and never read aloud),
-// and the voice traits that suit it. Ads and UGC want a livelier, less steady
-// read than an explainer: lower stability lets the model follow the direction,
-// some style adds expression, and a slightly faster pace keeps attention.
-// The values are tuned starting points (ElevenLabs prompting guide, 2026-10-27:
-// lower stability is more expressive, speed runs 0.7 to 1.2); change them here.
+// and the voice traits that suit it. UGC wants a livelier, less steady read
+// than an explainer. The ad read is steady and natural (owner, 2026-11-12: the
+// livelier read sounded obviously AI to people shown our ads): mid stability,
+// little style, normal speed, and speaker boost off because it brightens the
+// voice. The values are starting points (ElevenLabs prompting guide,
+// 2026-10-27: lower stability is more expressive, speed runs 0.7 to 1.2).
+// MF_VOICE_DELIVERY_SETTINGS overrides any of them (ParseDeliveryOverrides).
 
 // VoiceSettings are ElevenLabs' voice_settings.
 type VoiceSettings struct {
@@ -46,9 +51,9 @@ const (
 
 // Deliveries are the voice directions the studio offers.
 var Deliveries = map[string]Delivery{
-	DeliveryAd: {Key: DeliveryAd, Name: "Ad, upbeat and confident",
-		Settings:  VoiceSettings{Stability: 0.35, SimilarityBoost: 0.8, Style: 0.35, Speed: 1.05, SpeakerBoost: true},
-		Direction: "[Upbeat, confident, warm ad read]",
+	DeliveryAd: {Key: DeliveryAd, Name: "Ad, warm and natural",
+		Settings:  VoiceSettings{Stability: 0.5, SimilarityBoost: 0.75, Style: 0.15, Speed: 1.0, SpeakerBoost: false},
+		Direction: "[warm, natural, conversational]",
 		UseCases:  []string{"advertisement", "social_media", "conversational"},
 		Traits:    []string{"confident", "warm", "upbeat", "energetic", "professional", "casual"}},
 	DeliveryUGC: {Key: DeliveryUGC, Name: "UGC, casual and friendly",
@@ -79,6 +84,70 @@ func DeliveryFor(key string) Delivery {
 		return d
 	}
 	return Deliveries[DeliveryAd]
+}
+
+// DeliveryOverride changes some of a delivery's settings; unset fields keep the default.
+type DeliveryOverride struct {
+	Stability       *float64 `json:"stability,omitempty"`
+	SimilarityBoost *float64 `json:"similarity_boost,omitempty"`
+	Style           *float64 `json:"style,omitempty"`
+	Speed           *float64 `json:"speed,omitempty"`
+	SpeakerBoost    *bool    `json:"use_speaker_boost,omitempty"`
+	Direction       *string  `json:"direction,omitempty"`
+}
+
+// apply returns d with the override's fields set.
+func (o DeliveryOverride) apply(d Delivery) Delivery {
+	set := func(dst *float64, v *float64) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	set(&d.Settings.Stability, o.Stability)
+	set(&d.Settings.SimilarityBoost, o.SimilarityBoost)
+	set(&d.Settings.Style, o.Style)
+	set(&d.Settings.Speed, o.Speed)
+	if o.SpeakerBoost != nil {
+		d.Settings.SpeakerBoost = *o.SpeakerBoost
+	}
+	if o.Direction != nil {
+		d.Direction = strings.TrimSpace(*o.Direction)
+	}
+	return d
+}
+
+// ParseDeliveryOverrides reads {"ad":{"stability":0.5,...},"ugc":{...}}: known deliveries
+// only, stability, similarity and style within 0 to 1, speed within ElevenLabs' 0.7 to 1.2.
+func ParseDeliveryOverrides(raw string) (map[string]DeliveryOverride, error) {
+	// Each delivery is decoded strictly, so a misspelt field ("similarity" for
+	// "similarity_boost") is an error instead of a setting silently ignored.
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &rawMap); err != nil {
+		return nil, fmt.Errorf("delivery settings: %w", err)
+	}
+	m := make(map[string]DeliveryOverride, len(rawMap))
+	for key, body := range rawMap {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		var o DeliveryOverride
+		if err := dec.Decode(&o); err != nil {
+			return nil, fmt.Errorf("delivery settings: %s: %w", key, err)
+		}
+		m[key] = o
+	}
+	unit := func(v *float64) bool { return v == nil || (*v >= 0 && *v <= 1) }
+	for key, o := range m {
+		if _, ok := Deliveries[key]; !ok {
+			return nil, fmt.Errorf("delivery settings: unknown delivery %q", key)
+		}
+		if !unit(o.Stability) || !unit(o.SimilarityBoost) || !unit(o.Style) {
+			return nil, fmt.Errorf("delivery settings: %s: stability, similarity_boost and style are 0 to 1", key)
+		}
+		if o.Speed != nil && (*o.Speed < 0.7 || *o.Speed > 1.2) {
+			return nil, fmt.Errorf("delivery settings: %s: speed is 0.7 to 1.2", key)
+		}
+	}
+	return m, nil
 }
 
 // VoicePrefs narrow the choice of voice; empty fields do not count.

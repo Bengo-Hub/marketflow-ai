@@ -233,6 +233,18 @@ func (r Registry) CreditsForUSD(usd float64) int {
 	return max(1, int(math.Ceil(costKES/s.CreditCostBasis-1e-9))+s.FixedSurcharge)
 }
 
+// CostCredits prices a provider cost with the same formula as CreditsForUSD but without the
+// per-render surcharge: for an add-on to a render already priced (its surcharge counted
+// once). Zero cost is zero credits; any cost is at least 1.
+func (r Registry) CostCredits(usd float64) int {
+	s := r.Settings
+	if usd <= 0 || s.CreditCostBasis <= 0 {
+		return 0
+	}
+	costKES := usd * s.FXRate * (1 + s.FXBuffer) * (1 + s.RetryOverhead)
+	return max(1, int(math.Ceil(costKES/s.CreditCostBasis-1e-9)))
+}
+
 // SmallestBundle returns the cheapest bundle covering a shortfall, or the
 // largest when none does on its own.
 func (r Registry) SmallestBundle(shortfall int) (Bundle, bool) {

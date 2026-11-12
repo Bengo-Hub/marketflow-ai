@@ -80,9 +80,12 @@ playbooks:
       - Give 3 alternative hooks.
       - Use the product photos the owner provides for image-to-video scenes; describe motion simply (slow push-in, rotate, hand reveal).
       - End with one call to action matching the objective (WhatsApp, call, visit, buy).
+      - Give the music a mood in a few words (warm, hopeful, builds to the offer) that fits the brand voice.
+      - Add a sound cue (sfx) only where it lifts a moment, such as a soft whoosh on a product reveal or a till ding on the price; most scenes have none, and never under a line the voice must carry.
     rules:
       - Vertical 9:16 with text inside the safe area; captions at most two lines.
       - Synthetic people are labelled AI-generated; never use a real public figure.
+      - Sound cues are short plain descriptions (at most 60 characters), never music, never speech.
     starters:
       - {title: "Turn my photos into a video ad", template: "Make a 30-second video ad for ${offering} from my product photos, in ${language}."}
 

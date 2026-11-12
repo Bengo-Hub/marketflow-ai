@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -56,6 +57,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
 		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
+		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood,
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
@@ -81,17 +83,96 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	return req, areq, tenantID, true
 }
 
+// audioLevel is the soundtrack level the tenant's plan features grant. When the plan cannot
+// be read the ad gets the voice-only level, the cheapest, so nobody is overcharged.
+func (h *OSHandler) audioLevel(ctx context.Context, tenantID uuid.UUID) string {
+	if h.ads == nil || h.source == nil {
+		return media.AudioVoice
+	}
+	tc, err := h.source.Load(ctx, tenantID)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("tenant plan not loaded; the ad gets the voice-only soundtrack", zap.String("tenant_id", tenantID.String()), zap.Error(err))
+		}
+		return media.AudioVoice
+	}
+	return h.ads.AudioLevel(tc.Features)
+}
+
 // adCredits prices an ad from its plan. A template ad is the registry's template price per
-// 30 s block of words still to voice (at least one block). A presenter ad is priced from
-// the provider cost of the scenes still to make (presenter and clip quotes, and the voice)
-// with the registry's credit formula, so an unchanged scene is never paid for twice.
+// 30 s block of words still to voice (at least one block), plus its sound cues and music
+// priced from their provider cost. A presenter ad is priced from the provider cost of
+// everything still to make (presenter and clip quotes, the voice, cues and music) with the
+// registry's credit formula, so an unchanged scene is never paid for twice.
 func adCredits(reg registry.Registry, plan media.AdPlan) (int, error) {
 	if plan.Kind == media.AdTemplate {
 		c, err := reg.Credits(registry.TemplateVideo)
 		blocks := max(1, (plan.VoiceChars+adBlockChars-1)/adBlockChars)
-		return c * blocks, err
+		credits := c * blocks
+		// The template price already holds the render's surcharge; the extras add cost only.
+		credits += reg.CostCredits(plan.SFXUSD + plan.MusicUSD)
+		return credits, err
 	}
 	return reg.CreditsForUSD(plan.CostUSD), nil
+}
+
+// audioExtraCredits is the part of an ad's quoted price that pays for its sound cues and
+// music. It is charged only after the render, for what was actually made.
+func audioExtraCredits(reg registry.Registry, plan media.AdPlan) int {
+	full, err1 := adCredits(reg, plan)
+	base, err2 := adCredits(reg, plan.WithoutAudioExtras())
+	if err1 != nil || err2 != nil {
+		return 0
+	}
+	return max(0, full-base)
+}
+
+// madeExtraCredits scales the quoted extras to the cost of the cues and music that were
+// made: nothing made, nothing charged, and never more than quoted.
+func madeExtraCredits(quoted int, quotedUSD, madeUSD float64) int {
+	if quoted <= 0 || quotedUSD <= 0 || madeUSD <= 0 {
+		return 0
+	}
+	return min(quoted, int(math.Ceil(float64(quoted)*madeUSD/quotedUSD-1e-9)))
+}
+
+// chargeAudioExtras charges the cues and music a finished ad holds and returns the credits
+// taken. The key is the render's own charge key plus ":audio", so a retry of the same charge
+// never pays twice, and a lost job's refund returns it with the render (media.AudioChargeKey).
+// The balance was checked for them before they were made (Ad), so a refusal here is rare; it
+// is logged and the ad is kept.
+func (h *OSHandler) chargeAudioExtras(tenantID uuid.UUID, versionID, renderKey string, units int) int {
+	if units <= 0 || h.credits == nil || renderKey == "" {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	dec, err := h.spend(ctx, tenantID, int64(units), media.AudioChargeKey(renderKey), "Video ad sound and music")
+	if err != nil || !dec.Allowed {
+		h.logger.Warn("video ad sound and music not charged", zap.String("version_id", versionID), zap.Int("credits", units), zap.Error(err))
+		return 0
+	}
+	if dec.Exempt {
+		return 0
+	}
+	return units
+}
+
+// affordableAudio lowers the soundtrack to a level without paid parts when the balance cannot
+// cover the full quote (render plus cues and music), so paid audio is never made unpaid. An
+// unknown or unlimited balance keeps the level; the render charge still guards the rest.
+func (h *OSHandler) affordableAudio(ctx context.Context, tenantID uuid.UUID, reg registry.Registry, plan media.AdPlan) (string, bool) {
+	if plan.SFXUSD+plan.MusicUSD <= 0 {
+		return plan.Audio, false
+	}
+	full, err := adCredits(reg, plan)
+	if err != nil {
+		return plan.Audio, false
+	}
+	if bal := h.balance(ctx, tenantID); bal >= 0 && bal < full {
+		return media.AudioWithoutPaidParts(plan.Audio), true
+	}
+	return plan.Audio, false
 }
 
 // adPlanBudget bounds the plan: cached estimates answer at once, a fresh one in 3 s.
@@ -134,9 +215,36 @@ func (h *OSHandler) Ad(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	price := func(reg registry.Registry) (int, error) { return adCredits(reg, plan) }
+	// Paid cues and music are made only when the balance covers the whole quote; otherwise the
+	// ad drops to the nearest level without them (it is never made with audio it cannot pay).
+	if req.Charge && h.credits != nil {
+		if level, lowered := h.affordableAudio(r.Context(), tenantID, h.registry(r.Context()), plan); lowered {
+			h.logger.Info("video ad sound lowered to fit the balance", zap.String("version_id", req.VersionID),
+				zap.String("from", plan.Audio), zap.String("to", level))
+			areq.Audio = level
+			if plan, ok = h.adPlan(w, r, areq); !ok {
+				return
+			}
+		}
+	}
+	// The render is charged up front without its sound cues and music; those are charged
+	// once made, so a cue or a score that fails costs nothing. Both use the same charge key.
+	prev, found, _ := h.jobs.Get(r.Context(), req.VersionID)
+	_, renderKey := media.NextCharge(req.VersionID, prev, found)
+	extras := 0
+	price := func(reg registry.Registry) (int, error) {
+		extras = audioExtraCredits(reg, plan)
+		return adCredits(reg, plan.WithoutAudioExtras())
+	}
 	h.startJob(w, r, tenantID, req.VersionID, req.Charge, price, "Video ad",
-		func(ctx context.Context) (*media.MediaResult, error) { return h.ads.Make(ctx, areq) })
+		func(ctx context.Context) (*media.MediaResult, error) {
+			res, err := h.ads.Make(ctx, areq)
+			if err == nil && res != nil && req.Charge {
+				res.AudioCredits = h.chargeAudioExtras(tenantID, req.VersionID, renderKey,
+					madeExtraCredits(extras, plan.SFXUSD+plan.MusicUSD, res.AudioUSD))
+			}
+			return res, err
+		})
 }
 
 // adQuote is what a video ad will cost, scene by scene, against the tenant's credits.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -34,6 +35,44 @@ type VideoScriptRequest struct {
 	Footage   int    // how many video clips the owner gave
 	// Presenter allows presenter scenes: an AI presenter talking to camera (presenter ads).
 	Presenter bool
+	// BrandPhotos is how many of the Photos (the last ones) are the business's brand images.
+	BrandPhotos int
+	// ActorNameStyle and ActorNames limit the names given to on-screen people (owner,
+	// 2026-11-12): only names from the list, or names in the style, never others.
+	ActorNameStyle string
+	ActorNames     []string
+}
+
+// actorNameStyles are the naming styles a business can choose, as the writer reads them.
+var actorNameStyles = map[string]string{
+	"kikuyu": "Kikuyu", "luo": "Luo", "kalenjin": "Kalenjin", "kamba": "Kamba", "maasai": "Maasai",
+	"swahili_coast": "Swahili coast", "neutral": "neutral, widely used Kenyan", "mixed": "a mix of Kenyan",
+}
+
+// actorNameRule tells the writer which names on-screen people may have. Names are cleaned to
+// letters, spaces, apostrophes, hyphens and dots before they reach the prompt.
+func actorNameRule(style string, names []string) string {
+	var clean []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || len(n) > 40 || strings.ContainsFunc(n, func(r rune) bool {
+			return !(unicode.IsLetter(r) || r == ' ' || r == '\'' || r == '-' || r == '.')
+		}) {
+			continue
+		}
+		clean = append(clean, n)
+		if len(clean) == 20 {
+			break
+		}
+	}
+	if len(clean) > 0 {
+		return fmt.Sprintf("If anyone on screen or in the voiceover is named, use only these names: %s. Never invent another name.\n",
+			strings.Join(clean, ", "))
+	}
+	if s, ok := actorNameStyles[strings.ToLower(strings.TrimSpace(style))]; ok {
+		return fmt.Sprintf("If anyone on screen or in the voiceover is named, give them %s names only.\n", s)
+	}
+	return ""
 }
 
 // VideoScriptResult is the reviewed script.
@@ -142,10 +181,17 @@ func scriptTask(in VideoScriptRequest) string {
 		b.WriteString("end_card is the last scene, with the call to action. There is no presenter and no person on screen.\n")
 	}
 	if in.Photos > 0 {
-		fmt.Fprintf(&b, "The owner gave %d product photos: set asset to 1 to %d to choose one per scene.\n", in.Photos, in.Photos)
+		fmt.Fprintf(&b, "The owner gave %d photos: set asset to 1 to %d to choose one per scene.\n", in.Photos, in.Photos)
+		if bp := min(max(in.BrandPhotos, 0), in.Photos); bp > 0 {
+			fmt.Fprintf(&b, "Photos %d to %d are pictures of the business itself (its place, people or look), not the product: "+
+				"use them for b_roll and the opening, and the others for product scenes.\n", in.Photos-bp+1, in.Photos)
+		}
 	}
+	b.WriteString(actorNameRule(in.ActorNameStyle, in.ActorNames))
 	fmt.Fprintf(&b, "The voiceover of each scene is what the narrator says during it. Keep all the voiceover together under %d characters "+
 		"so the ad fits %d seconds, and keep each caption to a few words.", in.Seconds*14, in.Seconds)
+	b.WriteString(" Set mood to a few words on how the background music should feel. Give a scene an sfx cue " +
+		"(at most 60 characters, a plain sound such as \"soft whoosh\") only where a sound lifts that moment; most scenes have none.")
 	return b.String()
 }
 

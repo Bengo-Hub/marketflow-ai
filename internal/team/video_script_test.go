@@ -30,7 +30,7 @@ func TestWriteVideoScriptForTheTemplate(t *testing.T) {
 	if s[0].Shot != "b_roll" || s[1].Asset != 0 || s[2].Asset != 2 || s[2].Shot != "end_card" {
 		t.Fatalf("scenes = %+v", s)
 	}
-	for _, want := range []string{"25-second", "Shea Butter Body Lotion", "Price KES 850", "no presenter", "2 product photos", "under 350 characters"} {
+	for _, want := range []string{"25-second", "Shea Butter Body Lotion", "Price KES 850", "no presenter", "2 photos", "under 350 characters"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("task lacks %q:\n%s", want, user)
 		}

@@ -45,6 +45,17 @@ type MediaResult struct {
 	// Voice is the voice a video ad was read in; Scenes are its scenes for the scene cache.
 	Voice  string       `json:"voice,omitempty"`
 	Scenes []SceneCache `json:"scenes,omitempty"`
+	// VoiceSubstitution names the chosen voice when a premade voice read the ad instead
+	// (only fal could read it, and fal cannot use library voices).
+	VoiceSubstitution string `json:"voice_substitution,omitempty"`
+	// AudioLevel is the soundtrack level; AudioUSD what the cues and music made here cost
+	// (failed ones cost nothing); MusicRoute the route of generated music, "" for none.
+	AudioLevel string  `json:"audio_level,omitempty"`
+	AudioUSD   float64 `json:"audio_cost_usd,omitempty"`
+	MusicRoute string  `json:"music_route,omitempty"`
+	// AudioCredits are the credits charged after the render for the cues and music made; the
+	// job's CreditsCharged includes them.
+	AudioCredits int `json:"audio_credits,omitempty"`
 	// Storyboard is a storyboard job's stills and actor.
 	Storyboard *StoryboardResult `json:"storyboard,omitempty"`
 }
@@ -88,7 +99,7 @@ func NextCharge(versionID string, prev Job, ok bool) (int, string) {
 var ErrJobsBusy = errors.New("media: too many videos in progress, try again shortly")
 
 const (
-	jobTTL       = 48 * time.Hour
+	jobTTL = 48 * time.Hour
 	// A presenter ad runs its scenes in parallel, each up to about 6 minutes, with a
 	// fallback route behind each one.
 	jobBudget    = 30 * time.Minute
@@ -197,6 +208,9 @@ func (j *Jobs) Start(versionID string, credits, attempt int, chargeKey string, r
 			state.Status, state.Error, state.CreditsCharged, state.Refunded = JobFailed, jobFailure(err), 0, true
 		} else {
 			state.Status, state.Result = JobDone, res
+			if res != nil {
+				state.CreditsCharged += res.AudioCredits
+			}
 		}
 		if perr := j.put(context.Background(), versionID, state); perr != nil {
 			j.logger.Error("media job state not saved", zap.String("version_id", versionID), zap.Error(perr))
@@ -235,6 +249,11 @@ func (j *Jobs) RefundLost(ctx context.Context, jobID string, refund func(chargeK
 	}
 	if err := refund(s.ChargeKey); err != nil {
 		return s.Job, false, err
+	}
+	// A job lost after its cues and music were charged returns them too. Usually nothing was
+	// charged under that key, so a failure here is only logged.
+	if err := refund(AudioChargeKey(s.ChargeKey)); err != nil {
+		j.logger.Info("no sound and music charge to refund", zap.String("job_id", jobID), zap.Error(err))
 	}
 	s.Status, s.Refunded, s.CreditsCharged = JobFailed, true, 0
 	if s.Error == "" {

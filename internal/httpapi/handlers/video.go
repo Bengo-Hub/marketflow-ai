@@ -119,6 +119,13 @@ type scriptRequest struct {
 	// presenter type lets the script use presenter scenes.
 	Kind   string `json:"kind"`
 	Charge bool   `json:"charge"`
+	// BrandPhotos is how many of the Photos (the last ones) are the business's own brand
+	// images rather than product photos.
+	BrandPhotos int `json:"brand_photos"`
+	// ActorNameStyle and ActorNames are the business's choice of names for on-screen people
+	// (owner, 2026-11-12): a naming style, an exact list, or both.
+	ActorNameStyle string   `json:"actor_name_style"`
+	ActorNames     []string `json:"actor_names"`
 }
 
 // Script handles POST /api/v1/internal/creative/script (service key): the
@@ -170,7 +177,8 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 	res, err := h.runtime.WriteVideoScript(r.Context(), team.VideoScriptRequest{TenantID: tenantID, Offering: req.Offering,
 		Facts: req.Facts, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
 		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage,
-		Presenter: req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium})
+		Presenter:   req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium,
+		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames})
 	if err != nil {
 		h.refundKey(tenantID, chargeKey)
 		if errors.Is(err, team.ErrScriptBlocked) {
@@ -204,6 +212,9 @@ type adRequest struct {
 	LogoURL     string              `json:"logo_url"`
 	// MusicURL is the owner's licensed music bed (marketflow-api checks the confirmation).
 	MusicURL string `json:"music_url"`
+	// Mood is the ad's feel for generated music at the score level, e.g. the script's
+	// strategy or tone ("warm, hopeful"); optional.
+	Mood     string `json:"mood"`
 	Headline string `json:"headline"`
 	Subline  string `json:"subline"`
 	Price    string `json:"price"`
@@ -239,7 +250,7 @@ func (h *OSHandler) CreativeVoices(w http.ResponseWriter, r *http.Request) {
 	}
 	deliveries := make([]media.Delivery, 0, len(media.Deliveries))
 	for _, k := range []string{media.DeliveryAd, media.DeliveryUGC, media.DeliveryKids, media.DeliveryStory, media.DeliveryInfo} {
-		deliveries = append(deliveries, media.Deliveries[k])
+		deliveries = append(deliveries, h.ads.Voices().Delivery(k)) // with the configured overrides
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"voices": h.ads.Voices().List(r.Context()), "deliveries": deliveries})
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -74,6 +75,9 @@ type ScriptScene struct {
 	Voiceover string  `json:"voiceover"`
 	Caption   string  `json:"caption"`
 	DurationS float64 `json:"duration_s"` // used only for a scene without voiceover
+	// SFX is an optional short sound cue at the scene's start ("soft whoosh"), rendered from
+	// the sfx audio level up.
+	SFX string `json:"sfx,omitempty"`
 }
 
 // SceneCache is one rendered scene kept for later versions of the ad: its voice-over and,
@@ -90,7 +94,16 @@ type SceneCache struct {
 	Route        string       `json:"route,omitempty"`
 	CostUSD      float64      `json:"cost_usd"`
 	Voice        string       `json:"voice,omitempty"`
-	Reused       bool         `json:"reused,omitempty"`
+	// VoiceSubstitutedFor names the chosen voice when a premade one read the scene instead.
+	VoiceSubstitutedFor string `json:"voice_substituted_for,omitempty"`
+	// The scene's sound cue, when one was made, and the cue text it was made from (a cue is
+	// reused only for the same text; the cue is not part of the scene's hash, so changing it
+	// never re-renders the scene's voice or video).
+	SFXText    string  `json:"sfx_text,omitempty"`
+	SFXURL     string  `json:"sfx_url,omitempty"`
+	SFXKey     string  `json:"sfx_key,omitempty"`
+	SFXCostUSD float64 `json:"sfx_cost_usd,omitempty"`
+	Reused     bool    `json:"reused,omitempty"`
 }
 
 // AdRequest is one video ad.
@@ -111,6 +124,11 @@ type AdRequest struct {
 	LogoURL   string
 	// MusicURL is an optional licensed music bed, mixed under the voice.
 	MusicURL string
+	// Audio is the soundtrack's level (AudioVoice, AudioSFX, AudioTrack, AudioScore), decided
+	// from the tenant's plan features (Ads.AudioLevel); "" is voice.
+	Audio string
+	// Mood describes the ad's feel for generated music ("warm, hopeful"); "" uses the delivery.
+	Mood string
 	// ActorURL is the approved actor still every presenter scene is lip-synced from, and
 	// Seed the seed recorded with it.
 	ActorURL string
@@ -128,13 +146,48 @@ type Ads struct {
 	presenters *Presenters
 	clips      *Clips
 	files      SceneFiles
+	sounds     *Sounds
+	audio      AudioConfig
 	logger     *zap.Logger
 }
 
-// NewAds builds the ad pipeline.
+// NewAds builds the ad pipeline with the default audio settings; sound cues and music use the
+// voices' keys and store.
 func NewAds(voices *Voices, asm *Assembler) *Ads {
-	return &Ads{voices: voices, asm: asm, logger: zap.NewNop()}
+	a := &Ads{voices: voices, asm: asm, audio: DefaultAudioConfig(), logger: zap.NewNop()}
+	if voices != nil {
+		a.sounds = NewSounds(voices.keys, voices.store, voices, nil) // WithLogger names its logger
+	}
+	return a
 }
+
+// WithAudio sets the audio settings (AudioConfigFromEnv): the ladder, the voice clean up, the
+// cue and music mix, the music model and the voice delivery overrides.
+func (a *Ads) WithAudio(cfg AudioConfig) *Ads {
+	// A clean up chain this ffmpeg cannot run (a filter missing from the build, a mistyped
+	// setting) would fail every ad, so it is tried once here and switched off if it fails.
+	if cfg.VoiceFilter != "" && a.asm.Ready() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := a.asm.TryAudioFilter(ctx, cfg.VoiceFilter)
+		cancel()
+		if err != nil {
+			a.logger.Warn("voice clean up filter does not run on this ffmpeg; it is off until fixed",
+				zap.String("filter", cfg.VoiceFilter), zap.Error(err))
+			cfg.VoiceFilter = ""
+		}
+	}
+	a.audio = cfg
+	if a.sounds != nil {
+		a.sounds.WithMusicModel(cfg.MusicModel)
+	}
+	if a.voices != nil {
+		a.voices.WithDeliveryOverrides(cfg.Deliveries)
+	}
+	return a
+}
+
+// AudioLevel is the soundtrack level a plan's features grant (AudioConfig.LevelFor).
+func (a *Ads) AudioLevel(features map[string]bool) string { return a.audio.LevelFor(features) }
 
 // WithPresenters attaches the presenter pipeline.
 func (a *Ads) WithPresenters(p *Presenters) *Ads { a.presenters = p; return a }
@@ -147,6 +200,9 @@ func (a *Ads) WithClips(c *Clips, files SceneFiles) *Ads { a.clips, a.files = c,
 func (a *Ads) WithLogger(l *zap.Logger) *Ads {
 	if l != nil {
 		a.logger = l.Named("media.ads")
+		if a.sounds != nil {
+			a.sounds.withLogger(l)
+		}
 	}
 	return a
 }
@@ -244,6 +300,9 @@ func (a *Ads) Validate(req AdRequest) error {
 		if s.Asset < 0 {
 			return &UserError{Msg: fmt.Sprintf("scene %d has an invalid asset number", i+1)}
 		}
+		if utf8.RuneCountInString(strings.TrimSpace(s.SFX)) > maxSFXChars {
+			return &UserError{Msg: fmt.Sprintf("scene %d: a sound cue is at most %d characters", i+1, maxSFXChars)}
+		}
 		chars += words
 	}
 	if chars == 0 || chars > MaxAdVoiceChars {
@@ -275,18 +334,31 @@ type ScenePlan struct {
 	Chars     int     `json:"chars"`
 	Route     string  `json:"route,omitempty"`
 	CostUSD   float64 `json:"cost_usd"`
-	Estimated bool    `json:"estimated"` // the price came from the provider's own estimate
+	Estimated bool    `json:"estimated"`         // the price came from the provider's own estimate
+	SFXUSD    float64 `json:"sfx_usd,omitempty"` // the scene's sound cue still to make
 	source    string
 }
 
 // AdPlan prices an ad scene by scene before anything is paid.
 type AdPlan struct {
 	Kind       string      `json:"kind"`
+	Audio      string      `json:"audio"` // the soundtrack level
 	Scenes     []ScenePlan `json:"scenes"`
 	VoiceChars int         `json:"voice_chars"` // characters still to be voiced
 	VoiceUSD   float64     `json:"voice_usd"`
-	CostUSD    float64     `json:"cost_usd"` // provider cost of the scenes still to make
+	SFXUSD     float64     `json:"sfx_usd"`   // sound cues still to make
+	MusicUSD   float64     `json:"music_usd"` // generated music (score level)
+	MusicRoute string      `json:"music_route,omitempty"`
+	CostUSD    float64     `json:"cost_usd"` // provider cost of everything still to make
 	Cached     int         `json:"cached_scenes"`
+}
+
+// WithoutAudioExtras is the plan without its sound cues and music: what is charged before the
+// render, since cues and music that fail are skipped and never charged.
+func (p AdPlan) WithoutAudioExtras() AdPlan {
+	p.CostUSD -= p.SFXUSD + p.MusicUSD
+	p.SFXUSD, p.MusicUSD = 0, 0
+	return p
 }
 
 // voiceUSDPer1000 is the dearest voice route's price, for the quote.
@@ -297,8 +369,9 @@ const voiceUSDPer1000 = 0.10
 // reading the provider's cached estimate, with the route price as the fallback). It
 // fails only when a paid scene has no route at all.
 func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
-	plan := AdPlan{Kind: kindOf(req.Kind)}
+	plan := AdPlan{Kind: kindOf(req.Kind), Audio: audioLevelOf(req.Audio)}
 	photo, clip := 0, 0
+	adSeconds := endCardTail
 	for _, s := range req.Scenes {
 		chars := utf8.RuneCountInString(strings.TrimSpace(stripTags(s.Voiceover)))
 		sp := ScenePlan{SceneID: s.ID, Shot: s.Shot, Chars: chars, Seconds: estimateSeconds(chars, s.DurationS)}
@@ -315,7 +388,7 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) {
 			sp.Work = WorkClip
 		}
-		sp.Hash = sceneHash(req, s, sp)
+		sp.Hash = sceneHash(req, s, sp, a.deliveryPrint(req.Delivery))
 		if c, ok := req.Cache[sp.Hash]; ok && a.cacheUsable(ctx, req, c, sp) {
 			sp.Cached = true
 			plan.Cached++
@@ -338,11 +411,64 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 			}
 			plan.CostUSD += sp.CostUSD
 		}
+		// A cue is made for a new scene, or for a reused one whose cue is missing.
+		if cue := sceneSFX(req, s); cue != "" && (!sp.Cached || !a.cachedCue(ctx, req.Cache[sp.Hash], cue)) {
+			sp.SFXUSD, _ = a.sounds.Quote(ctx, CapSFX, tierOf(req), a.audio.SFXSeconds)
+			plan.SFXUSD += sp.SFXUSD
+		}
+		adSeconds += sp.Seconds
 		plan.Scenes = append(plan.Scenes, sp)
 	}
+	if plan.Audio == AudioScore {
+		plan.MusicUSD, plan.MusicRoute = a.sounds.Quote(ctx, CapMusic, tierOf(req), adSeconds)
+	}
 	plan.VoiceUSD = float64(plan.VoiceChars) * voiceUSDPer1000 / 1000
-	plan.CostUSD += plan.VoiceUSD
+	plan.CostUSD += plan.VoiceUSD + plan.SFXUSD + plan.MusicUSD
 	return plan, nil
+}
+
+// sceneSFX is the scene's sound cue when the request's level renders cues, else "".
+func sceneSFX(req AdRequest, s ScriptScene) string {
+	if !audioAtLeast(req.Audio, AudioSFX) {
+		return ""
+	}
+	return strings.TrimSpace(s.SFX)
+}
+
+// stableSource is a scene source without its query: brand images arrive as presigned links
+// whose signature changes on every call, and the same picture must keep the same hash.
+func stableSource(src string) string {
+	if i := strings.IndexByte(src, '?'); i >= 0 {
+		return src[:i]
+	}
+	return src
+}
+
+// sceneCue is the cue the request renders for the scene with this id ("" when none).
+func sceneCue(req AdRequest, sceneID string) string {
+	for _, s := range req.Scenes {
+		if s.ID == sceneID {
+			return sceneSFX(req, s)
+		}
+	}
+	return ""
+}
+
+// cachedCue reports whether a cached scene holds a cue made from this text whose file still
+// exists.
+func (a *Ads) cachedCue(ctx context.Context, c SceneCache, cue string) bool {
+	return c.SFXKey != "" && c.SFXText == cue && a.files != nil && a.files.Exists(ctx, c.SFXKey)
+}
+
+// deliveryPrint fingerprints the voice settings a delivery resolves to (with overrides), so
+// a settings change makes new voices instead of reusing ones read the old way.
+func (a *Ads) deliveryPrint(key string) string {
+	if a.voices == nil {
+		return ""
+	}
+	b, _ := json.Marshal(a.voices.Delivery(key))
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:8])
 }
 
 func kindOf(k string) string {
@@ -375,13 +501,21 @@ func clipSeconds(seconds float64) int {
 }
 
 // sceneHash names everything that shapes a scene's files: change any of it and the scene
-// is made again. The end card and other scenes are not part of it.
-func sceneHash(req AdRequest, s ScriptScene, sp ScenePlan) string {
+// is made again. The end card and other scenes are not part of it. The audio level and the
+// cue count only from the sfx level up, so voice-only scenes keep the hashes they had.
+// The audio level and the sound cue are left out on purpose: they are mixed in at assembly,
+// so a plan change or a new cue never re-renders (and re-charges) the scene's voice or video.
+// deliveryPrint is the resolved voice settings' fingerprint, so retuned settings make new
+// voices.
+func sceneHash(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint string) string {
 	parts := map[string]any{
-		"kind": kindOf(req.Kind), "tier": tierOf(req), "shot": s.Shot, "work": sp.Work, "source": sp.source,
+		"kind": kindOf(req.Kind), "tier": tierOf(req), "shot": s.Shot, "work": sp.Work, "source": stableSource(sp.source),
 		"visual": strings.TrimSpace(s.Visual), "voiceover": strings.TrimSpace(s.Voiceover), "duration": s.DurationS,
 		"voice": req.Voice, "delivery": req.Delivery, "language": req.Language,
 		"gender": req.Prefs.Gender, "accent": req.Prefs.Accent, "seed": req.Seed,
+	}
+	if deliveryPrint != "" {
+		parts["delivery_settings"] = deliveryPrint
 	}
 	b, _ := json.Marshal(parts) // map keys are sorted, so the hash is stable
 	h := sha256.Sum256(b)
@@ -492,10 +626,34 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
+	// The sound cues and the music are made while the paid scenes render; they never fail
+	// the ad.
+	snd := a.startSounds(ctx, req, plan, outs, total)
 	if err := a.parallel(ctx, paid, func(i int) error {
 		return a.visualScene(ctx, req, plan.Scenes[i], req.Scenes[i], dir, &outs[i])
 	}); err != nil {
+		snd.wait()
 		return nil, err
+	}
+	snd.wait()
+	extra := 0.0 // what the cues and the music made here cost
+	for i, r := range snd.cues {
+		if r != nil {
+			outs[i].cache.SFXURL, outs[i].cache.SFXKey, outs[i].cache.SFXCostUSD = r.URL, r.Key, r.CostUSD
+			outs[i].cache.SFXText = sceneSFX(req, req.Scenes[i])
+			extra += r.CostUSD
+		}
+	}
+	level := audioLevelOf(req.Audio)
+	musicURL, musicRoute := req.MusicURL, ""
+	if snd.music != nil {
+		musicURL, musicRoute = snd.music.URL, snd.music.Route
+		extra += snd.music.CostUSD
+	}
+	mix := AudioMix{VoiceFilter: a.audio.VoiceFilter, SFXGain: a.audio.SFXGain}
+	if level == AudioScore && musicURL != "" {
+		d := a.audio.Ducking()
+		mix.Duck = &d
 	}
 
 	// 4. Assemble: each scene's own audio and the words shifted to its start.
@@ -524,6 +682,9 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		if c := strings.TrimSpace(s.Caption); c != "" {
 			sceneCaps = append(sceneCaps, CaptionLine{Text: c, Start: t, End: t + o.seconds})
 		}
+		if o.cache.SFXURL != "" && sceneSFX(req, s) != "" {
+			mix.SFX = append(mix.SFX, SFXCue{URL: o.cache.SFXURL, At: t})
+		}
 		if !o.cache.Reused {
 			cost += o.cache.CostUSD
 		}
@@ -532,17 +693,79 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	card := req.EndCard
 	res, err := a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
 		Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &card, LogoURL: req.LogoURL,
-		MusicURL: req.MusicURL, AINote: aiNote(req.Kind, req.Language)})
+		MusicURL: musicURL, Mix: mix, AINote: aiNote(req.Kind, req.Language)})
 	if err != nil {
 		return nil, err
 	}
-	res.CostUSD += cost
+	res.CostUSD += cost + extra
 	res.Voice = voice
 	res.Route = routeSummary(outs)
+	res.AudioLevel, res.AudioUSD, res.MusicRoute = level, extra, musicRoute
 	for _, o := range outs {
 		res.Scenes = append(res.Scenes, o.cache)
+		if res.VoiceSubstitution == "" && o.cache.VoiceSubstitutedFor != "" {
+			res.VoiceSubstitution = o.cache.VoiceSubstitutedFor
+		}
 	}
 	return res, nil
+}
+
+// adSounds are the cues and the music being made for one ad.
+type adSounds struct {
+	wg    sync.WaitGroup
+	cues  []*SoundResult // by scene, nil where none was made
+	music *SoundResult
+}
+
+func (s *adSounds) wait() { s.wg.Wait() }
+
+// startSounds makes, in the background, each scene's missing cue (sfx level up) and the
+// music (score level). A failure is logged and skipped: the ad goes on without that part,
+// and it is not charged.
+func (a *Ads) startSounds(ctx context.Context, req AdRequest, plan AdPlan, outs []sceneOut, total float64) *adSounds {
+	snd := &adSounds{cues: make([]*SoundResult, len(outs))}
+	if a.sounds == nil {
+		return snd
+	}
+	var todo []int
+	lengths := make([]float64, len(outs)) // read here: the paid scenes write outs meanwhile
+	for i, s := range req.Scenes {
+		lengths[i] = outs[i].seconds
+		if sceneSFX(req, s) != "" && outs[i].cache.SFXURL == "" {
+			todo = append(todo, i)
+		}
+	}
+	if len(todo) > 0 {
+		snd.wg.Add(1)
+		go func() {
+			defer snd.wg.Done()
+			_ = a.parallel(ctx, todo, func(i int) error {
+				sp := plan.Scenes[i]
+				r, err := a.sounds.Effect(ctx, SoundRequest{TenantID: req.TenantID, VersionID: req.VersionID, Name: sceneName(sp) + "-sfx",
+					Prompt: sceneSFX(req, req.Scenes[i]), Seconds: min(a.audio.SFXSeconds, lengths[i]), Tier: tierOf(req)})
+				if err != nil {
+					a.logger.Warn("sound cue skipped", zap.String("scene", sp.SceneID), zap.Error(err))
+					return nil
+				}
+				snd.cues[i] = r
+				return nil
+			})
+		}()
+	}
+	if audioLevelOf(req.Audio) == AudioScore {
+		snd.wg.Add(1)
+		go func() {
+			defer snd.wg.Done()
+			r, err := a.sounds.Music(ctx, SoundRequest{TenantID: req.TenantID, VersionID: req.VersionID, Name: "music",
+				Prompt: musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle), Seconds: total, Tier: tierOf(req)})
+			if err != nil {
+				a.logger.Warn("generated music failed; the ad uses the supplied track or none", zap.String("version_id", req.VersionID), zap.Error(err))
+				return
+			}
+			snd.music = r
+		}()
+	}
+	return snd
 }
 
 // aiNote is the on-screen label every ad with a synthetic person carries (ugc-video-ads.md, honesty
@@ -626,7 +849,7 @@ func (a *Ads) voiceScene(ctx context.Context, req AdRequest, sp ScenePlan, s Scr
 		}
 	}
 	out.cache = SceneCache{Hash: sp.Hash, SceneID: sp.SceneID, AudioURL: v.URL, AudioKey: v.Key, AudioSeconds: seconds,
-		Words: words, Voice: v.Voice, CostUSD: v.CostUSD, Route: v.Route}
+		Words: words, Voice: v.Voice, VoiceSubstitutedFor: v.SubstitutedFor, CostUSD: v.CostUSD, Route: v.Route}
 	return nil
 }
 
@@ -684,6 +907,18 @@ func (a *Ads) reuse(ctx context.Context, req AdRequest, c SceneCache, sp ScenePl
 			return c, err
 		}
 		c.VideoKey, c.VideoURL = k, u
+	}
+	// A cue made from other text, or one that cannot be copied, is made again (it is cheap);
+	// the scene is still reused.
+	if want := sceneCue(req, sp.SceneID); c.SFXKey != "" && c.SFXText != want {
+		c.SFXKey, c.SFXURL, c.SFXCostUSD, c.SFXText = "", "", 0, ""
+	}
+	if c.SFXKey != "" {
+		if k, u, err := a.files.Copy(ctx, req.TenantID, c.SFXKey, name+"-sfx"); err == nil {
+			c.SFXKey, c.SFXURL = k, u
+		} else {
+			c.SFXKey, c.SFXURL, c.SFXCostUSD = "", "", 0
+		}
 	}
 	c.SceneID, c.Reused = sp.SceneID, true
 	return c, nil

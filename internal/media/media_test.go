@@ -46,6 +46,8 @@ type fakeProviders struct {
 	failFal bool
 	scene   []byte
 	clip    []byte // served at /clip.mp4 (made with ffmpeg by the clip test)
+	// audio replaces the placeholder bytes at /voice.mp3 (a real MP3 for assembly tests).
+	audio []byte
 	// failFalPath fails only the fal submits whose path contains it.
 	failFalPath string
 	// calls counts submits per path.
@@ -78,6 +80,10 @@ func (f *fakeProviders) serve(w http.ResponseWriter, r *http.Request) {
 			"video": map[string]any{"url": f.srv.URL + "/clip.mp4"}, "audio": map[string]any{"url": f.srv.URL + "/voice.mp3"}})
 	case p == "/voice.mp3":
 		w.Header().Set("Content-Type", "audio/mpeg")
+		if f.audio != nil {
+			_, _ = w.Write(f.audio)
+			return
+		}
 		_, _ = w.Write(bytes.Repeat([]byte{0xff}, 32000)) // 2 s at 128 kbit/s
 	case strings.HasPrefix(p, "/fal/"):
 		f.record(r, strings.TrimPrefix(p, "/fal/"))

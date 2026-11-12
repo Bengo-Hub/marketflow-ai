@@ -75,13 +75,13 @@ func TestSceneHashFollowsTheScene(t *testing.T) {
 	req := AdRequest{Kind: AdPresenter, ActorURL: "https://x/a.jpg", Voice: "Yna", Language: "en"}
 	s := ScriptScene{ID: "s1", Shot: ShotPresenter, Voiceover: "Hello parents"}
 	sp := ScenePlan{Work: WorkPresenter, source: req.ActorURL}
-	h := sceneHash(req, s, sp)
-	if h != sceneHash(req, s, sp) {
+	h := sceneHash(req, s, sp, "")
+	if h != sceneHash(req, s, sp, "") {
 		t.Fatal("the hash is not stable")
 	}
 	req2 := req
 	req2.EndCard = Overlay{Headline: "changed"}
-	if sceneHash(req2, s, sp) != h {
+	if sceneHash(req2, s, sp, "") != h {
 		t.Fatal("the end card must not change a scene's hash")
 	}
 	for name, change := range map[string]func(*AdRequest, *ScriptScene){
@@ -92,7 +92,7 @@ func TestSceneHashFollowsTheScene(t *testing.T) {
 	} {
 		r, sc := req, s
 		change(&r, &sc)
-		if sceneHash(r, sc, sp) == h {
+		if sceneHash(r, sc, sp, "") == h {
 			t.Errorf("%s did not change the hash", name)
 		}
 	}

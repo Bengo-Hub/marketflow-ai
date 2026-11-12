@@ -447,9 +447,15 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES")))
 		// Presenter ads: the presenter routes, the clip routes for product and b-roll
 		// scenes, and the scene cache's files in the same store.
+		// Audio by plan (owner, 2026-11-12): voice clean up, sound cues, backing track and
+		// generated music, all from MF_AUDIO_* / MF_VOICE_* settings with defaults in code.
+		audioCfg, aerr := media.AudioConfigFromEnv(os.Getenv)
+		if aerr != nil {
+			logger.Warn("audio settings invalid; using defaults", zap.Error(aerr))
+		}
 		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger)).
 			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger)).
-			WithClips(clips, store).WithLogger(logger)
+			WithClips(clips, store).WithLogger(logger).WithAudio(audioCfg)
 		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger)
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.

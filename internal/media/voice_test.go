@@ -31,6 +31,13 @@ type fakeEleven struct {
 	seconds float64
 	// calls counts text-to-speech requests.
 	calls int
+	// subStatus makes the subscription lookup fail with this HTTP status (0: it works).
+	subStatus int
+	// music is served by POST /v1/music (nil: 404, so the fal route takes over);
+	// musicBody and musicQuery record the last request.
+	music      []byte
+	musicBody  map[string]any
+	musicQuery string
 }
 
 // ownerCollection mirrors part of the owner's codevertex-voices collection
@@ -54,6 +61,13 @@ func newFakeEleven(t *testing.T, tier string) *fakeEleven {
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/user/subscription":
+			f.mu.Lock()
+			status := f.subStatus
+			f.mu.Unlock()
+			if status != 0 {
+				http.Error(w, "missing permission", status)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"tier": f.tier, "character_limit": 10000})
 		case r.URL.Path == "/v1/voices/collections" && f.collection != nil:
 			_ = json.NewEncoder(w).Encode(map[string]any{"collections": []map[string]any{
@@ -67,6 +81,19 @@ func newFakeEleven(t *testing.T, tier string) *fakeEleven {
 				"labels": map[string]string{"language": "en", "accent": "kenyan", "gender": "male", "use_case": "advertisement", "descriptive": "warm"}}},
 				f.collection...)
 			_ = json.NewEncoder(w).Encode(map[string]any{"voices": all})
+		case r.URL.Path == "/v1/music" && r.Method == http.MethodPost:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.mu.Lock()
+			f.musicBody, f.musicQuery, f.key = body, r.URL.RawQuery, r.Header.Get("xi-api-key")
+			music := f.music
+			f.mu.Unlock()
+			if music == nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write(music)
 		case strings.HasSuffix(r.URL.Path, "/with-timestamps"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -200,7 +227,7 @@ func TestVoiceFreePlanUsesFal(t *testing.T) {
 	if err != nil || f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]["voice"] != "Alice" || res.Voice != "Alice" {
 		t.Fatalf("fal voice for Emily E.: %v %v %+v", err, f.inputs["fal-ai/elevenlabs/tts/eleven-v3"], res)
 	}
-	if in := f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]; in["stability"] != 0.35 || !strings.HasPrefix(in["text"].(string), "[") {
+	if in := f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]; in["stability"] != 0.5 || !strings.HasPrefix(in["text"].(string), "[") {
 		t.Fatalf("fal gets the delivery's stability and direction: %v", in)
 	}
 }
@@ -208,7 +235,8 @@ func TestVoiceFreePlanUsesFal(t *testing.T) {
 // With no voice named, the delivery picks from the whole account with the
 // collection and the default list preferred: Yna Agalo (the owner's default)
 // reads an ordinary ad, in English or Swahili (a v4 multilingual model), with
-// the ad delivery's settings and direction tag, which never reaches the timings.
+// the ad delivery's steady, natural settings (speaker boost off, it brightens the voice)
+// and its direction tag, which never reaches the timings.
 func TestVoiceDefaultAndDelivery(t *testing.T) {
 	newFakeProviders(t)
 	el := newFakeEleven(t, "creator")
@@ -223,7 +251,8 @@ func TestVoiceDefaultAndDelivery(t *testing.T) {
 			t.Fatalf("%s: voice %q, path %s", lang, res.Voice, el.path)
 		}
 		settings, _ := el.got["voice_settings"].(map[string]any)
-		if !strings.HasPrefix(el.got["text"].(string), Deliveries[DeliveryAd].Direction) || settings["stability"] != 0.35 || settings["speed"] != 1.05 {
+		if !strings.HasPrefix(el.got["text"].(string), "[warm, natural, conversational]") || settings["stability"] != 0.5 ||
+			settings["similarity_boost"] != 0.75 || settings["style"] != 0.15 || settings["speed"] != 1.0 || settings["use_speaker_boost"] != false {
 			t.Fatalf("ad delivery not sent: %v", el.got)
 		}
 		if len(res.Words) != 2 || res.Words[0].Text != "Karibu" {

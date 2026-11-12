@@ -27,9 +27,10 @@ func sceneAudio(scenes []AdScene) bool {
 	return false
 }
 
-// sceneVoice lays each scene's voice-over at the start of its scene, padded or cut to
-// the scene's length (silence for a scene without one), into one WAV.
-func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene) (string, error) {
+// sceneVoice lays each scene's voice-over at the start of its scene, cleaned by the filter
+// chain (AudioConfig.VoiceFilter; "" for none) and padded or cut to the scene's length
+// (silence for a scene without one), into one WAV.
+func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene, filter string) (string, error) {
 	var list strings.Builder
 	for i, s := range scenes {
 		piece := filepath.Join(dir, fmt.Sprintf("a%d.wav", i))
@@ -42,7 +43,7 @@ func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene
 			if err = downloadTo(ctx, a.fetch, s.AudioURL, raw, maxAudioBytes, fmt.Sprintf("scene %d voice", i+1)); err != nil {
 				return "", err
 			}
-			err = a.run(ctx, "-i", raw, "-af", "aresample=48000,apad,atrim=0:"+dur, "-ac", "2", "-c:a", "pcm_s16le", piece)
+			err = a.run(ctx, "-i", raw, "-af", voicePieceFilter(filter, dur), "-ac", "2", "-c:a", "pcm_s16le", piece)
 		}
 		if err != nil {
 			return "", fmt.Errorf("scene %d: %w", i+1, err)
@@ -60,25 +61,27 @@ func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene
 	return out, nil
 }
 
-// mix joins the voice and the music bed into one stereo WAV of the ad's length, before
-// loudness is measured. The bed sits under the voice.
-func (a *Assembler) mix(ctx context.Context, voice, music, out string, total float64) error {
-	var args, graph []string
-	switch {
-	case voice != "" && music != "":
-		args = []string{"-i", voice, "-i", music}
-		graph = []string{
-			fmt.Sprintf("[1:a]aresample=48000,volume=%.2f[m]", musicGain),
-			"[0:a]aresample=48000,apad[vo]",
-			"[vo][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
+// placedCue is a downloaded sound cue and its start in the ad.
+type placedCue struct {
+	path string
+	at   float64
+}
+
+// mix joins the voice, the music bed and the sound cues into one stereo WAV of the ad's
+// length, before loudness is measured (mixGraph builds the graph).
+func (a *Assembler) mix(ctx context.Context, voice, music string, cues []placedCue, m AudioMix, out string, total float64) error {
+	in := mixInputs{voice: voice != "", music: music != "", mix: m, total: total}
+	var args []string
+	for _, p := range []string{voice, music} {
+		if p != "" {
+			args = append(args, "-i", p)
 		}
-	case voice != "":
-		args = []string{"-i", voice}
-		graph = []string{"[0:a]aresample=48000,apad[a]"}
-	default:
-		args = []string{"-i", music}
-		graph = []string{fmt.Sprintf("[0:a]aresample=48000,volume=%.2f,apad[a]", musicGain*3)}
 	}
+	for _, c := range cues {
+		args = append(args, "-i", c.path)
+		in.sfx = append(in.sfx, c.at)
+	}
+	graph := mixGraph(in)
 	args = append(args, "-filter_complex", strings.Join(graph, ";"), "-map", "[a]", "-ac", "2",
 		"-t", strconv.FormatFloat(total, 'f', 3, 64), "-c:a", "pcm_s16le", out)
 	return a.run(ctx, args...)
