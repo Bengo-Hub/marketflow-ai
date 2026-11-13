@@ -96,6 +96,10 @@ func (h *OSHandler) audioLevel(ctx context.Context, tenantID uuid.UUID) string {
 		}
 		return media.AudioVoice
 	}
+	if tc.Exempt {
+		// The platform owner's own tenant (never a demo tenant) gets the top level.
+		return media.AudioScore
+	}
 	return h.ads.AudioLevel(tc.Features)
 }
 

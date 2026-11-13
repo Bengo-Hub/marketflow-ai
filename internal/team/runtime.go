@@ -59,6 +59,9 @@ type TenantContext struct {
 	Members          []MemberOverride `json:"members"`
 	Features         map[string]bool  `json:"features,omitempty"`
 	HasPlan          bool             `json:"has_plan"`
+	// Exempt is the platform owner's own tenant only (marketflow-api OSContext.Exempt; demo
+	// tenants are never exempt in AI work): it gets every plan level, such as the top sound level.
+	Exempt bool `json:"exempt,omitempty"`
 	MarketSignals    *MarketSignals   `json:"market_signals,omitempty"`
 	// ChatTurnsDaily is the plan's free chat turns a day (0: the default allowance).
 	ChatTurnsDaily int `json:"chat_turns_daily,omitempty"`

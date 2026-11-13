@@ -17,6 +17,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/media"
+	"github.com/bengobox/marketflow-ai/internal/osrun"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/registry"
@@ -48,6 +49,15 @@ type OSHandler struct {
 	storyboards *media.Storyboards
 	gate        *assistgate.Gate  // the WhatsApp assistant gate (whatsapp_ask.go)
 	sessions    *sessions.Service // WhatsApp assistant transcripts (whatsapp_ask.go)
+	// Quoted and approved media turns, WhatsApp approval codes and the Studio they are made
+	// in (make_media.go); nil turns the make-media step off.
+	runs   *osrun.Store
+	codes  *osrun.Codes
+	studio *studioClient
+	// mediaTimeout bounds the background work after a WhatsApp YES; spawn starts it (a
+	// goroutine; tests replace it to run the work when they choose).
+	mediaTimeout time.Duration
+	spawn        func(func())
 }
 
 // OSConfig configures an OSHandler. Credits may be nil (unmetered, local dev).
@@ -130,6 +140,9 @@ type askRequest struct {
 	// viaWhatsApp is set by the WhatsApp assistant, whose sender identity and role were
 	// verified upstream; it is never read from a request body.
 	viaWhatsApp bool
+	// userID, sender, tenantSlug and portalURL are kept with a media turn (osrun.Run): who
+	// asked, their verified WhatsApp number, and the portal links. Never read from a body.
+	userID, sender, tenantSlug, portalURL string
 }
 
 // askSink is where Ask writes its outcome: plain JSON, or a stream of events.
@@ -219,6 +232,10 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if c, ok := authclient.ClaimsFromContext(r.Context()); ok && c != nil {
+		req.userID = c.Subject
+	}
+
 	runID := uuid.NewString()
 	turnKey, ok := h.charge(w, r, tenantID, 1, "os:"+runID+":turn", "Marketing team request")
 	if !ok {
@@ -289,6 +306,7 @@ func (h *OSHandler) runTurn(ctx context.Context, r *http.Request, tenantID uuid.
 			}
 		}
 	}
+	h.keepRun(ctx, tenantID, req, runID, res)
 	sink.done(out)
 }
 

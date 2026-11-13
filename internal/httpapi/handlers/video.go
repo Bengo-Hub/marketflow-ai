@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	authclient "github.com/Bengo-Hub/shared-auth-client"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -253,6 +255,40 @@ func (h *OSHandler) CreativeVoices(w http.ResponseWriter, r *http.Request) {
 		deliveries = append(deliveries, h.ads.Voices().Delivery(k)) // with the configured overrides
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"voices": h.ads.Voices().List(r.Context()), "deliveries": deliveries})
+}
+
+// VoiceLibrary handles GET /api/v1/creative/voices/library (platform owner only): searches
+// ElevenLabs' shared voice library with the platform key (query: search, gender, accent,
+// language, use_case, page_size). A voice the owner likes is added to the account's collection
+// in ElevenLabs; then the voices list picks it up.
+func (h *OSHandler) VoiceLibrary(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authclient.ClaimsFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if !claims.IsPlatformOwner {
+		writeError(w, http.StatusForbidden, "only the platform owner can search the voice library")
+		return
+	}
+	if h.ads == nil || h.ads.Voices() == nil {
+		writeError(w, http.StatusServiceUnavailable, "video is not available on this server yet")
+		return
+	}
+	q := r.URL.Query()
+	size, _ := strconv.Atoi(q.Get("page_size"))
+	voices, err := h.ads.Voices().SearchLibrary(r.Context(), media.LibraryQuery{Search: q.Get("search"), Gender: q.Get("gender"),
+		Accent: q.Get("accent"), Language: q.Get("language"), UseCase: q.Get("use_case"), PageSize: size})
+	switch {
+	case errors.Is(err, media.ErrNoVoiceKey):
+		writeError(w, http.StatusServiceUnavailable, "save the ElevenLabs key on Platform > Providers first")
+		return
+	case err != nil:
+		h.logger.Warn("voice library search failed", zap.Error(err))
+		writeError(w, http.StatusBadGateway, "the voice library did not answer; try again")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"voices": voices})
 }
 
 // businessType reads the tenant's business type for the compliance rules; ""

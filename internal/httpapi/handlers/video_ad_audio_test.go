@@ -43,6 +43,14 @@ func TestAudioLevelFollowsPlanFeatures(t *testing.T) {
 			t.Errorf("features %v: level %q, want %q", c.features, got, c.want)
 		}
 	}
+	// The platform owner's tenant gets the top level whatever its features; a demo tenant is
+	// never marked exempt by marketflow-api, so it gets only what its plan's features give.
+	if got := level(fakeContextSource{tc: team.TenantContext{Exempt: true}}); got != media.AudioScore {
+		t.Errorf("platform owner: level %q, want score", got)
+	}
+	if got := level(fakeContextSource{tc: team.TenantContext{Features: map[string]bool{"ai_static_ads": true}}}); got != media.AudioVoice {
+		t.Errorf("free plan (as the demo tenant): level %q, want voice", got)
+	}
 	if got := level(fakeContextSource{err: errors.New("marketflow-api down")}); got != media.AudioVoice {
 		t.Errorf("unreadable plan: level %q, want voice", got)
 	}

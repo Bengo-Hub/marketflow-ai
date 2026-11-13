@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -78,10 +79,22 @@ type registrySource struct {
 	// fx is treasury-api's USD to KES rate, the platform's one source of exchange rates; the
 	// registry's own FXRate is only the fallback when treasury has never answered.
 	fx *fxrate.Source
+	// bundles reads the AI credit bundles on sale from subscriptions-api (the owner of them);
+	// nil or a failed read keeps the registry's own list as the fallback.
+	bundles func(ctx context.Context) ([]registry.Bundle, error)
 
 	mu       sync.Mutex
 	current  registry.Registry
 	loadedAt time.Time
+}
+
+// withBundles reads the bundles on sale from subscriptions-api's credits catalog.
+func (s *registrySource) withBundles(subscriptionsURL string) *registrySource {
+	hc := &http.Client{Timeout: 5 * time.Second}
+	s.bundles = func(ctx context.Context) ([]registry.Bundle, error) {
+		return registry.CatalogBundles(ctx, hc, subscriptionsURL)
+	}
+	return s
 }
 
 func newRegistrySource(resolver *providers.Resolver, fx *fxrate.Source, logger *zap.Logger) *registrySource {
@@ -110,6 +123,14 @@ func (s *registrySource) Get(ctx context.Context) registry.Registry {
 	// The exchange rate always comes from treasury when it has one (centralised forex).
 	if rate, ok := s.fx.KESPerUSD(ctx); ok {
 		next.Settings.FXRate = rate
+	}
+	// The bundles on sale always come from subscriptions-api when it answers.
+	if s.bundles != nil {
+		if b, err := s.bundles(ctx); err == nil {
+			next.Bundles = b
+		} else {
+			s.logger.Warn("credit bundles not read from subscriptions; using the registry's list", zap.Error(err))
+		}
 	}
 	s.mu.Lock()
 	s.current = next

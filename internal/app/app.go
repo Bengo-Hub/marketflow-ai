@@ -31,6 +31,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/media"
 	mw "github.com/bengobox/marketflow-ai/internal/middleware"
+	"github.com/bengobox/marketflow-ai/internal/osrun"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
@@ -86,7 +87,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// agent's ad-cost tool all price from it.
 	// Exchange rates come from treasury-api (centralised forex, refreshed daily there).
 	fxSource := fxrate.New(cfg.App.TreasuryURL, cfg.App.InternalServiceKey, cfg.App.PlatformTenantSlug, redisClient, cfg.Redis.Namespace)
-	registrySource := newRegistrySource(resolver, fxSource, logger)
+	// The AI credit bundles on sale come from subscriptions-api, which owns them.
+	registrySource := newRegistrySource(resolver, fxSource, logger).withBundles(cfg.Security.SubscriptionsURL)
 
 	// ── Model router ──────────────────────────────────────────────────────
 	// Every generative call names a class (nano, standard, premium, premium_plus);
@@ -411,6 +413,18 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	}
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
 	osHandler.WithGate(assistgate.New(decider)).WithSessions(sessionService)
+	// Kept media turns, WhatsApp approval codes and make-media (Sprint 15 #134/#138, Sprint 17):
+	// MF_OS_RUN_TTL, MF_OS_APPROVAL_CODE_TTL and MF_OS_APPROVAL_CODE_ATTEMPTS, defaults in osrun.
+	// Studio is marketflow-api's /api/v1/creative, called with the platform key for the tenant.
+	osRunCfg, osRunErr := osrun.ConfigFromEnv(os.Getenv)
+	if osRunErr != nil {
+		logger.Warn("os run settings invalid; using the defaults", zap.Error(osRunErr))
+	}
+	// The background work after a WhatsApp YES reports failures to marketflow-api's internal
+	// route with the shared internal key; MF_OS_MEDIA_TIMEOUT bounds it.
+	osHandler.WithMakeMedia(osrun.NewStore(redisClient, cfg.Redis.Namespace, osRunCfg.RunTTL),
+		osrun.NewCodes(redisClient, cfg.Redis.Namespace, osRunCfg), osRunCfg,
+		cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, cfg.App.InternalServiceKey)
 	// Competitor ad intel (Sprint 24): SerpApi from Platform, Providers adintel/serpapi.
 	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger).
 		// The Fix step: complaint themes from public reviews through Serper (adintel/serper).
@@ -565,8 +579,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			// "Generate with AI" for one profile or brand-context field (free model tier).
 			r.Post("/field-suggest", osHandler.FieldSuggest)
 			r.Post("/plan/quote", osHandler.Quote)
+			// An approved turn's script becomes a Studio video ad and its storyboard.
+			r.Post("/make-media", osHandler.MakeMedia)
 			r.Get("/creative/quote", osHandler.CreativeQuote)
 			r.Get("/creative/voices", osHandler.CreativeVoices)
+			r.Get("/creative/voices/library", osHandler.VoiceLibrary)
 			r.Get("/library/templates", osHandler.Templates)
 			r.Get("/team", osHandler.Team)
 		})
@@ -583,6 +600,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/daily-brief", osHandler.DailyBrief)
 		r.Post("/os/meeting-prep", osHandler.MeetingPrep)
 		r.Post("/os/whatsapp-ask", osHandler.WhatsAppAsk)
+		// Make-media for a named tenant, and the storyboard and finished-ad messages of a video
+		// made from a WhatsApp turn (marketflow-api sends them).
+		r.Post("/os/make-media", osHandler.InternalMakeMedia)
+		r.Post("/os/whatsapp-notify", osHandler.WhatsAppNotify)
+		// Which of a sender's businesses a bare "YES <code>" is for, once their pick expired.
+		r.Post("/os/approval-tenant", osHandler.ApprovalTenant)
 		// A lead's WhatsApp reply after the instant follow-up (Sprint 23, customer-safe tools).
 		r.Post("/os/lead-reply", chatHandler.LeadReply)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)

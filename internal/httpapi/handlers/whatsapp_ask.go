@@ -58,6 +58,9 @@ type whatsAppAskRequest struct {
 	TenantID   string `json:"tenant_id"`
 	TenantSlug string `json:"tenant_slug"`
 	UserID     string `json:"user_id"`
+	// Sender is the verified WhatsApp number the message came from (+254...); approval codes
+	// and the storyboard and finished-ad messages are bound to it.
+	Sender string `json:"sender"`
 	// PortalURL is MarketFlow's web address, for the links in replies.
 	PortalURL string `json:"portal_url"`
 	Text      string `json:"text"`
@@ -97,6 +100,12 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// "YES 4821" answers an approval code (whatsapp_approve.go). It comes before the gate, which
+	// would not see marketing words in it; any other message cancels the pending code.
+	if out, handled := h.approvalReply(ctx, r, tenantID, req); handled {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	v := h.gate.Check(ctx, req.Text, req.SessionActive)
 	out := WhatsAppAskResponse{Pass: v.Pass, Verdict: v}
 	if !v.Pass {
@@ -108,16 +117,31 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	sink, ok := h.whatsAppTurn(ctx, r, tenantID, req, askRequest{Text: req.Text, viaWhatsApp: true,
+		userID: req.UserID, sender: req.Sender, tenantSlug: req.TenantSlug, portalURL: req.PortalURL}, &out)
+	if !ok {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	portal := link(req.PortalURL, req.TenantSlug, "/marketing")
+	out.Reply = h.offerApprovalCode(ctx, tenantID, req, sink.out, whatsAppReply(sink.out, portal))
+	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// whatsAppTurn checks the tenant's credits, spends the turn's credit and runs one Marketing
+// Manager turn for a WhatsApp sender: a new request, or an approval (ask.ApprovePlan). It
+// reports false, with out.Reply set, when the turn did not run or failed.
+func (h *OSHandler) whatsAppTurn(ctx context.Context, r *http.Request, tenantID uuid.UUID, req whatsAppAskRequest, ask askRequest, out *WhatsAppAskResponse) (*captureSink, bool) {
+	topUp := "Your AI credits are used up. Top up from " + link(req.PortalURL, req.TenantSlug, "/settings/billing") + " and send your request again."
 	if ok, err := h.hasCredits(ctx, tenantID); err != nil {
 		h.logger.Warn("whatsapp ask: credit check failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		out.Reply = "I could not check your AI credits just now. Please try again in a few minutes."
-		writeJSON(w, http.StatusOK, out)
-		return
+		return nil, false
 	} else if !ok {
 		out.NeedsCredits = true
-		out.Reply = "Your AI credits are used up. Top up from " + link(req.PortalURL, req.TenantSlug, "/settings/billing") + " and send your request again."
-		writeJSON(w, http.StatusOK, out)
-		return
+		out.Reply = topUp
+		return nil, false
 	}
 
 	runID := uuid.NewString()
@@ -126,28 +150,24 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		dec, err := h.spend(ctx, tenantID, 1, "os:"+runID+":turn", "Marketing team request (WhatsApp)")
 		if err != nil || !dec.Allowed {
 			out.NeedsCredits = err == nil
-			out.Reply = "Your AI credits are used up. Top up from " + link(req.PortalURL, req.TenantSlug, "/settings/billing") + " and send your request again."
-			writeJSON(w, http.StatusOK, out)
-			return
+			out.Reply = topUp
+			return nil, false
 		}
 		if !dec.Exempt {
 			turnKey = "os:" + runID + ":turn"
 		}
 	}
 	sink := &captureSink{}
-	h.runTurn(ctx, r, tenantID, askRequest{Text: req.Text, viaWhatsApp: true}, runID, turnKey, sink)
+	h.runTurn(ctx, r, tenantID, ask, runID, turnKey, sink)
 	out.RunID = runID
 	if sink.failed != "" {
 		out.Reply = "Sorry, the marketing team could not finish that. Please try again, or open MarketFlow: " + link(req.PortalURL, req.TenantSlug, "/dashboard")
-		writeJSON(w, http.StatusOK, out)
-		return
+		return nil, false
 	}
 	if sink.out.Result != nil {
 		out.Route = sink.out.Result.Route
 	}
-	out.Reply = whatsAppReply(sink.out, link(req.PortalURL, req.TenantSlug, "/marketing"))
-	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
-	writeJSON(w, http.StatusOK, out)
+	return sink, true
 }
 
 // hasCredits is true for an unlimited plan or a positive balance. Without a credits client
@@ -185,9 +205,9 @@ func (s *captureSink) done(out askResponse)   { s.out = out }
 // maxReply keeps a WhatsApp text well inside Meta's 4,096 character limit.
 const maxReply = 3000
 
-// whatsAppReply turns a turn's result into plain WhatsApp text. Spending, posting and approving
-// stay in the portal until confirmation buttons ship (Sprint 17 proposals and tokens), so a
-// quote ends with the link rather than asking for a text "yes".
+// whatsAppReply turns a turn's result into plain WhatsApp text. A quote ends with the portal
+// link; offerApprovalCode (whatsapp_approve.go) then adds "Reply YES <code> to approve" when
+// the quote was kept and the tenant can afford it.
 func whatsAppReply(out askResponse, portal string) string {
 	var b strings.Builder
 	res := out.Result
