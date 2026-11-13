@@ -64,3 +64,34 @@ func (a *Allowance) NeedsCreditFor(ctx context.Context, tenantID uuid.UUID, now 
 	}
 	return (n-free-1)%a.turnsPerCredit == 0
 }
+
+// Status is a business's chat allowance today, for its usage card.
+type Status struct {
+	FreePerDay     int64     `json:"free_turns_daily"`
+	UsedToday      int64     `json:"turns_used_today"`
+	FreeLeft       int64     `json:"free_turns_left"`
+	TurnsPerCredit int64     `json:"turns_per_credit"`
+	ResetsAt       time.Time `json:"resets_at"`
+}
+
+// Status reads today's count without counting a turn. The day is a UTC day, so it resets at
+// midnight UTC (03:00 in Nairobi). Without Redis the count reads as zero.
+func (a *Allowance) Status(ctx context.Context, tenantID uuid.UUID, now time.Time, freePerDay int) Status {
+	day := now.UTC().Truncate(24 * time.Hour)
+	st := Status{FreePerDay: DefaultFreePerDay, TurnsPerCredit: DefaultTurnsPerCredit, ResetsAt: day.Add(24 * time.Hour)}
+	if a == nil {
+		return st
+	}
+	st.FreePerDay, st.TurnsPerCredit = a.freePerDay, a.turnsPerCredit
+	if freePerDay > 0 {
+		st.FreePerDay = int64(freePerDay)
+	}
+	if a.rdb != nil {
+		key := fmt.Sprintf("%s:chat-turns:%s:%s", a.ns, tenantID, now.UTC().Format("20060102"))
+		if n, err := a.rdb.Get(ctx, key).Int64(); err == nil {
+			st.UsedToday = n
+		}
+	}
+	st.FreeLeft = max(0, st.FreePerDay-st.UsedToday)
+	return st
+}

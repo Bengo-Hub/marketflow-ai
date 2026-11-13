@@ -47,6 +47,32 @@ func TestNeedsCreditWithoutRedis(t *testing.T) {
 	}
 }
 
+// The usage card reads today's turns without counting one, and the reset is the next UTC
+// midnight (03:00 in Nairobi).
+func TestStatus(t *testing.T) {
+	mr := miniredis.RunT(t)
+	a := New(redis.NewClient(&redis.Options{Addr: mr.Addr()}), "mf", 50, 5)
+	ctx := context.Background()
+	tid := uuid.New()
+	now := time.Date(2026, 11, 12, 21, 30, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		a.NeedsCreditFor(ctx, tid, now, 10)
+	}
+	st := a.Status(ctx, tid, now, 10)
+	if st.UsedToday != 3 || st.FreePerDay != 10 || st.FreeLeft != 7 || st.TurnsPerCredit != 5 {
+		t.Fatalf("status %+v", st)
+	}
+	if want := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC); !st.ResetsAt.Equal(want) {
+		t.Fatalf("resets at %v, want %v", st.ResetsAt, want)
+	}
+	if again := a.Status(ctx, tid, now, 10); again.UsedToday != 3 {
+		t.Fatal("reading the status must not count a turn")
+	}
+	if st := New(nil, "mf", 50, 5).Status(ctx, tid, now, 0); st.FreeLeft != 50 {
+		t.Fatalf("without Redis: %+v", st)
+	}
+}
+
 // The free allowance follows the business's plan (subscriptions limit chat_turns_daily).
 func TestNeedsCreditPerPlan(t *testing.T) {
 	mr := miniredis.RunT(t)

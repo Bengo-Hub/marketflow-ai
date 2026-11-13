@@ -34,6 +34,8 @@ type ChatHandler struct {
 	allowance *chatallowance.Allowance
 	// planTurns is the business's free chat turns a day from its plan (nil or 0: the default).
 	planTurns func(ctx context.Context, tenantID uuid.UUID) int
+	// kesPerUSD is the platform rate for showing KES values in USD (usage card).
+	kesPerUSD func(ctx context.Context) (float64, bool)
 }
 
 // WithAllowance prices chat turns with the daily free allowance.
@@ -328,6 +330,52 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		respEnvelope["form"] = form
 	}
 	json.NewEncoder(w).Encode(respEnvelope)
+}
+
+// WithKESPerUSD gives the usage card the platform's KES per USD rate (treasury, cached).
+func (h *ChatHandler) WithKESPerUSD(rate func(ctx context.Context) (float64, bool)) *ChatHandler {
+	h.kesPerUSD = rate
+	return h
+}
+
+// allowanceStatus is the usage card's chat part plus the rate used to show KES values in USD.
+type allowanceStatus struct {
+	chatallowance.Status
+	KESPerUSD float64 `json:"kes_per_usd,omitempty"`
+}
+
+// Allowance handles GET /api/v1/chat/allowance (signed in): today's free chat turns, how many
+// are used and left, and when they reset, for the caller's own tenant. Nothing is counted.
+// @Summary Today's free chat turns
+// @Tags Chat
+// @Param X-Tenant-ID header string true "Tenant slug or UUID"
+// @Success 200 {object} allowanceStatus
+// @Router /chat/allowance [get]
+func (h *ChatHandler) Allowance(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, "chat is not available")
+		return
+	}
+	tenantID, known := h.sessions.ResolveTenantID(r.Context(), r.Header.Get("X-Tenant-ID"))
+	if !known {
+		writeError(w, http.StatusBadRequest, "missing or invalid X-Tenant-ID header")
+		return
+	}
+	if !headerTenantAllowed(r, tenantID) {
+		writeError(w, http.StatusForbidden, "X-Tenant-ID does not match your account")
+		return
+	}
+	free := 0
+	if h.planTurns != nil {
+		free = h.planTurns(r.Context(), tenantID)
+	}
+	out := allowanceStatus{Status: h.allowance.Status(r.Context(), tenantID, time.Now(), free)}
+	if h.kesPerUSD != nil {
+		if rate, ok := h.kesPerUSD(r.Context()); ok {
+			out.KESPerUSD = rate
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sessionTarget resolves the tenant and session a delete applies to, the same

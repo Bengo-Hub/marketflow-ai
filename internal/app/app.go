@@ -396,6 +396,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	})
 	// Answers rated helpful become FAQ suggestions the owner approves (Sprint 25).
 	chatHandler.WithFAQSuggester(osContext.SuggestFAQ)
+	// The usage card shows KES values in USD at the platform's treasury rate.
+	chatHandler.WithKESPerUSD(fxSource.KESPerUSD)
 	teamRuntime := team.New(team.Config{
 		Library: lib, Opt: optimizer, Router: modelRouter, Decider: decider,
 		Registry: registrySource.Get, Tools: agentTools, Source: osContext, Logger: logger,
@@ -547,6 +549,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// Restricted roles (the app reviewer) never reach AI chat or make media.
 		r.Use(mw.DenyRestrictedRoles(cfg.Security.RestrictedRoles))
 		r.Post("/chat", chatHandler.Chat)
+		// Today's free chat turns for the usage card (gift a friend, WP2).
+		r.Get("/chat/allowance", chatHandler.Allowance)
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
 		r.Post("/chat/sessions/{id}/turns/{n}/feedback", chatHandler.RateTurn)
