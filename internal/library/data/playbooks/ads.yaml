@@ -25,7 +25,7 @@ playbooks:
       - No hook slop ("Stop scrolling", generic "POV:") and no CTA slop ("Get started today"); name the action and what they get.
     starters:
       - {title: "Ads for my product this week", template: "Write ads for ${offering} on ${platforms} this week, budget ${budget}."}
-      - {title: "Tangazo la wiki hii", template: "Nataka matangazo ya ${offering} wiki hii, budget ${budget}."}
+      - {title: "Tangazo la wiki hii", template: "Nataka matangazo ya ${offering} wiki hii, budget ${budget}.", language: sw}
 
   - key: ads
     name: Paid campaign strategy
