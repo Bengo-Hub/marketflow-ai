@@ -267,17 +267,23 @@ func TestOfferApprovalCode(t *testing.T) {
 	plan := &registry.CreativePlan{Recommended: registry.Option{Label: "Recommended", Credits: 14}}
 	out := askResponse{RunID: run.RunID, Result: &team.Result{Route: team.RouteQuote, Plan: plan}}
 	req := whatsAppAskRequest{UserID: "user-1", Sender: "+254700000001", PortalURL: "https://mf.example", TenantSlug: "boi"}
-	reply := f.h.offerApprovalCode(context.Background(), f.tenant, req, out, whatsAppReply(out, "https://mf.example/boi/marketing"))
+	reply, ia := f.h.offerApprovalCode(context.Background(), f.tenant, req, out, whatsAppReply(out, "https://mf.example/boi/marketing"))
 	m := yesLine.FindStringSubmatch(reply)
 	if m == nil || !strings.HasSuffix(reply, "Reply YES "+m[1]+" to approve (about 14 credits)") ||
 		!strings.Contains(reply, "works for 30 minutes") || strings.Contains(reply, "\n\nApprove it in MarketFlow") {
 		t.Fatalf("quote reply: %q", reply)
 	}
+	// The same quote with buttons: Approve carries the run and the code; no Cheaper option
+	// without a cheaper alternative. The body keeps the typed way.
+	if ia == nil || len(ia.Buttons) != 2 || ia.Buttons[0].ID != osrun.ReplyID(osrun.ReplyYes, run.RunID, m[1]) ||
+		ia.Buttons[1].Title != btnCancel || !strings.Contains(ia.Body, "reply YES "+m[1]) {
+		t.Fatalf("quote buttons: %+v", ia)
+	}
 	// Short of credits: no code, the portal link stays.
 	plan.Shortfall = 5
 	f.codes.Cancel(context.Background(), f.tenant.String(), "user-1")
-	reply = f.h.offerApprovalCode(context.Background(), f.tenant, req, out, whatsAppReply(out, "https://mf.example/boi/marketing"))
-	if yesLine.MatchString(reply) || f.codes.Pending(context.Background(), f.tenant.String(), "user-1") {
+	reply, ia = f.h.offerApprovalCode(context.Background(), f.tenant, req, out, whatsAppReply(out, "https://mf.example/boi/marketing"))
+	if yesLine.MatchString(reply) || ia != nil || f.codes.Pending(context.Background(), f.tenant.String(), "user-1") {
 		t.Fatalf("a shortfall gets no code: %q", reply)
 	}
 }
@@ -361,8 +367,8 @@ func wrongCode(code string) string {
 	return "1234"
 }
 
-// The storyboard message carries the stills and a render code bound to the version; the
-// finished ad's message carries its link; a portal run sends nothing.
+// The storyboard message carries one Studio link (no stills, owner 2026-11-14) and a render code
+// bound to the version; the finished ad's message carries its link; a portal run sends nothing.
 func TestWhatsAppNotify(t *testing.T) {
 	f := newMediaFixture(t)
 	ctx := context.Background()
@@ -375,7 +381,7 @@ func TestWhatsAppNotify(t *testing.T) {
 		"event": "storyboard_ready", "links": []string{"https://media.example/s1.jpg", "https://media.example/s2.jpg"}})
 	var msg whatsAppNotifyResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &msg)
-	if rec.Code != http.StatusOK || msg.To != "+254700000001" || !strings.Contains(msg.Text, "2. https://media.example/s2.jpg") ||
+	if rec.Code != http.StatusOK || msg.To != "+254700000001" || strings.Contains(msg.Text, "s2.jpg") || !strings.Contains(msg.Text, "(2 scenes)") ||
 		!strings.Contains(msg.Text, "https://mf.example/boi/studio/brief-1") || !strings.HasSuffix(msg.Text, "(about 22 credits)") {
 		t.Fatalf("storyboard message: %d %+v", rec.Code, msg)
 	}

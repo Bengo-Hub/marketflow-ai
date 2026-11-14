@@ -46,6 +46,10 @@ var (
 	ErrNoCode = errors.New("osrun: no pending approval code")
 	// ErrWrongCode is a code that does not match the pending one (or another number sent it).
 	ErrWrongCode = errors.New("osrun: wrong approval code")
+	// ErrStaleTap is a tapped button from an older message (another run, or a code that was
+	// replaced). It never counts as a wrong try (owner, 2026-11-14); the reply shows the current
+	// buttons instead.
+	ErrStaleTap = errors.New("osrun: button from an older message")
 )
 
 // Codes keeps pending approvals under "<namespace>:os:wa-code:<tenant>:<user>".
@@ -114,6 +118,14 @@ func (c *Codes) Issue(ctx context.Context, a Approval) (string, error) {
 // approval and deletes it (single use; of two racing replies only one wins). A wrong code
 // keeps it pending until CodeAttempts wrong tries cancel it.
 func (c *Codes) Redeem(ctx context.Context, tenantID, userID, sender, code string) (*Approval, error) {
+	return c.RedeemRun(ctx, tenantID, userID, sender, code, "")
+}
+
+// RedeemRun is Redeem for a tapped button, whose id names the run as well as the code. A tap whose
+// run or code is not the pending one is ErrStaleTap and costs no try: buttons stay on screen after
+// a newer message replaced them, and tapping one is not a guess. An empty runID is a typed reply,
+// where a wrong code counts as before.
+func (c *Codes) RedeemRun(ctx context.Context, tenantID, userID, sender, code, runID string) (*Approval, error) {
 	if c == nil || c.rdb == nil {
 		return nil, ErrNoCode
 	}
@@ -130,7 +142,11 @@ func (c *Codes) Redeem(ctx context.Context, tenantID, userID, sender, code strin
 		c.rdb.Del(ctx, key)
 		return nil, ErrNoCode
 	}
-	if a.Code != code || (a.Sender != "" && sender != "" && a.Sender != sender) {
+	wrongSender := a.Sender != "" && sender != "" && a.Sender != sender
+	if runID != "" && !wrongSender && (a.RunID != runID || a.Code != code) {
+		return nil, ErrStaleTap
+	}
+	if a.Code != code || wrongSender {
 		a.Attempts++
 		if a.Attempts >= c.attempts {
 			c.rdb.Del(ctx, key)

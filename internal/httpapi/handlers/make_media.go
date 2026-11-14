@@ -306,8 +306,21 @@ type studioClient struct {
 // for the message (whatsapp-notify, event media_failed) and sends text to the requester, the
 // same path as the storyboard message.
 func (c *studioClient) mediaFailed(ctx context.Context, tenantID uuid.UUID, runID, versionID, text string) error {
+	return c.turnEvent(ctx, tenantID, runID, versionID, notifyMediaFailed, text)
+}
+
+// discarded tells marketflow-api that the owner tapped Discard on a turn's video: the Studio
+// draft is kept for a while, then deleted unless the owner acts on it (owner, 2026-11-14).
+func (c *studioClient) discarded(ctx context.Context, tenantID uuid.UUID, runID, versionID string) error {
+	return c.turnEvent(ctx, tenantID, runID, versionID, eventDiscarded, "")
+}
+
+// eventDiscarded is marketflow-api's creative.OSTurnDiscarded.
+const eventDiscarded = "discarded"
+
+func (c *studioClient) turnEvent(ctx context.Context, tenantID uuid.UUID, runID, versionID, event, text string) error {
 	b, _ := json.Marshal(map[string]string{"tenant_id": tenantID.String(), "run_id": runID, "version_id": versionID,
-		"event": notifyMediaFailed, "error": text})
+		"event": event, "error": text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/v1/internal/creative/os-turn/events", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -320,7 +333,7 @@ func (c *studioClient) mediaFailed(ctx context.Context, tenantID uuid.UUID, runI
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("studio: media_failed event: status %d", resp.StatusCode)
+		return fmt.Errorf("studio: %s event: status %d", event, resp.StatusCode)
 	}
 	return nil
 }

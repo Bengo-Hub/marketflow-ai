@@ -64,6 +64,9 @@ type whatsAppAskRequest struct {
 	// PortalURL is MarketFlow's web address, for the links in replies.
 	PortalURL string `json:"portal_url"`
 	Text      string `json:"text"`
+	// ReplyID is the id of a tapped reply button or list row (whatsapp_interactive.go); Text is
+	// then its title. Empty for a typed message.
+	ReplyID string `json:"reply_id,omitempty"`
 	// SessionActive is true when the sender talked to the assistant in the last 30 minutes.
 	SessionActive bool `json:"session_active"`
 }
@@ -77,6 +80,9 @@ type WhatsAppAskResponse struct {
 	Reply        string             `json:"reply,omitempty"`
 	Route        string             `json:"route,omitempty"`
 	RunID        string             `json:"run_id,omitempty"`
+	// Interactive is the same answer with reply buttons or a list, sent instead of Reply while
+	// the sender's 24-hour window is open. Reply stays the full text form.
+	Interactive *waInteractive `json:"interactive,omitempty"`
 }
 
 // WhatsAppAsk handles POST /api/v1/internal/os/whatsapp-ask (S2S, marketflow-worker). The worker
@@ -100,6 +106,12 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// A tapped button goes through the same code check as a typed YES; a tapped list row
+	// completes the request that was waiting for it, which then runs as a normal turn.
+	if out, handled := h.replyTap(ctx, r, tenantID, &req); handled {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	// "YES 4821" answers an approval code (whatsapp_approve.go). It comes before the gate, which
 	// would not see marketing words in it; any other message cancels the pending code.
 	if out, handled := h.approvalReply(ctx, r, tenantID, req); handled {
@@ -124,7 +136,10 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	portal := link(req.PortalURL, req.TenantSlug, "/marketing")
-	out.Reply = h.offerApprovalCode(ctx, tenantID, req, sink.out, whatsAppReply(sink.out, portal))
+	out.Reply, out.Interactive = h.offerApprovalCode(ctx, tenantID, req, sink.out, whatsAppReply(sink.out, portal))
+	if out.Interactive == nil {
+		out.Interactive = h.offerClarifyList(ctx, tenantID, req, sink.out, out.Reply)
+	}
 	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
 	writeJSON(w, http.StatusOK, out)
 }

@@ -42,23 +42,47 @@ func (h *OSHandler) approvalReply(ctx context.Context, r *http.Request, tenantID
 		h.codes.Cancel(ctx, tenantID.String(), req.UserID)
 		return WhatsAppAskResponse{}, false
 	}
-	out := WhatsAppAskResponse{Pass: true, Verdict: approvalVerdict, Route: "approval"}
 	if code == "" {
+		out := WhatsAppAskResponse{Pass: true, Verdict: approvalVerdict, Route: "approval"}
 		out.Reply = "Reply YES and the 4-digit code from my last message, for example YES 1234."
 		return out, true
 	}
-	a, err := h.codes.Redeem(ctx, tenantID.String(), req.UserID, req.Sender, code)
+	return h.redeemApproval(ctx, r, tenantID, req, code, ""), true
+}
+
+// redeemApproval uses an approval code, typed ("YES 4821") or tapped (an Approve or Make the
+// video button, whose id also names the run). osrun decides: single use, the code TTL, bound to
+// the user and number, and wrong tries cancel it.
+func (h *OSHandler) redeemApproval(ctx context.Context, r *http.Request, tenantID uuid.UUID, req whatsAppAskRequest, code, runID string) WhatsAppAskResponse {
+	out := WhatsAppAskResponse{Pass: true, Verdict: approvalVerdict, Route: "approval"}
+	a, err := h.codes.RedeemRun(ctx, tenantID.String(), req.UserID, req.Sender, code, runID)
 	switch {
+	case errors.Is(err, osrun.ErrStaleTap):
+		// An older message's button costs no try (owner, 2026-11-14): say so and show the
+		// current buttons again.
+		out.Reply = "That button is from an older message and has expired, so nothing was spent."
+		if p, ok := h.codes.PendingApproval(ctx, tenantID.String(), req.UserID); ok {
+			if p.Action == osrun.ActionRender {
+				out.Reply += fmt.Sprintf(" To make the current video, reply YES %s.", p.Code)
+				out.Interactive = &waInteractive{Body: "That button has expired. " + approveLine(btnMakeVideo, p.Code, "make the current video", p.Credits),
+					Buttons: storyboardButtons(p.RunID, p.Code)}
+			} else {
+				out.Reply += fmt.Sprintf(" To approve the current plan, reply YES %s.", p.Code)
+				out.Interactive = &waInteractive{Body: "That button has expired. " + approveLine(btnApprove, p.Code, "approve the current plan", p.Credits),
+					Buttons: quoteButtons(p.RunID, p.Code, false)}
+			}
+		}
+		return out
 	case errors.Is(err, osrun.ErrWrongCode):
 		out.Reply = "That code does not match, so nothing was spent. Check the code in my last message and reply YES with it."
-		return out, true
+		return out
 	case errors.Is(err, osrun.ErrNoCode):
 		out.Reply = "That code has expired or was already used, so nothing was spent. Send your request again for a new quote."
-		return out, true
+		return out
 	case err != nil:
 		h.logger.Warn("approval code check failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		out.Reply = "I could not check that code just now, so nothing was spent. Please try again in a minute."
-		return out, true
+		return out
 	}
 	switch a.Action {
 	case osrun.ActionApprove:
@@ -69,7 +93,7 @@ func (h *OSHandler) approvalReply(ctx context.Context, r *http.Request, tenantID
 		out.Reply = "That code is not for anything I can do. Send your request again."
 	}
 	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
-	return out, true
+	return out
 }
 
 // approvedReply is the immediate answer to a right approval code; the work goes on in the background.
@@ -123,7 +147,9 @@ func (h *OSHandler) approveInBackground(ctx context.Context, r *http.Request, te
 		}
 		if res := sink.out.Result; res == nil || res.Route != team.RouteDone {
 			// The plan changed on the way (a shortfall, or a question): send it as a normal turn.
-			fail(quote.RunID, h.offerApprovalCode(ctx, tenantID, req, sink.out, whatsAppReply(sink.out, portal)))
+			// This text goes back through media_failed, which carries text only; the typed YES works.
+			text, _ := h.offerApprovalCode(ctx, tenantID, req, sink.out, whatsAppReply(sink.out, portal))
+			fail(quote.RunID, text)
 			return
 		}
 		if approved, err = h.runs.Get(ctx, tenantID.String(), out.RunID); err != nil {
@@ -210,28 +236,37 @@ func (h *OSHandler) mediaFailReply(err error, req whatsAppAskRequest, what strin
 }
 
 // offerApprovalCode adds the approval code to a WhatsApp quote that the tenant can afford and
-// that was kept: the reply then ends "Reply YES <code> to approve (about N credits)".
-func (h *OSHandler) offerApprovalCode(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, out askResponse, reply string) string {
+// that was kept: the reply then ends "Reply YES <code> to approve (about N credits)". The
+// interactive form shows the same quote with Approve, Cheaper option and Cancel buttons (nil
+// when no code was issued).
+func (h *OSHandler) offerApprovalCode(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, out askResponse, reply string) (string, *waInteractive) {
 	res := out.Result
 	if h.codes == nil || h.runs == nil || req.UserID == "" || res == nil || res.Route != team.RouteQuote ||
 		res.Plan == nil || res.Plan.Shortfall > 0 || out.RunID == "" {
-		return reply
+		return reply, nil
 	}
 	if _, err := h.runs.Get(ctx, tenantID.String(), out.RunID); err != nil {
-		return reply
+		return reply, nil
 	}
 	credits := res.Plan.Recommended.Credits
 	code, err := h.codes.Issue(ctx, osrun.Approval{Action: osrun.ActionApprove, RunID: out.RunID, TenantID: tenantID.String(),
 		UserID: req.UserID, Sender: req.Sender, Credits: credits})
 	if err != nil {
 		h.logger.Warn("approval code not issued", zap.String("run_id", out.RunID), zap.Error(err))
-		return reply
+		return reply, nil
 	}
 	portal := link(req.PortalURL, req.TenantSlug, "/marketing")
 	reply = strings.Replace(reply, "\n\nApprove it in MarketFlow: "+portal,
 		fmt.Sprintf("\n\nThe code below works for %s. You can also approve it in MarketFlow: %s", minutes(h.codes.TTL()), portal), 1)
-	return reply + fmt.Sprintf("\n\nReply YES %s to approve (about %d credits)", code, credits)
+	ia := &waInteractive{
+		Body:    trimRunes(reply, maxInteractiveText) + "\n\n" + approveLine(btnApprove, code, "approve", credits),
+		Buttons: quoteButtons(out.RunID, code, len(cheaperOptions(res.Plan)) > 0),
+	}
+	return reply + fmt.Sprintf("\n\nReply YES %s to approve (about %d credits)", code, credits), ia
 }
+
+// maxInteractiveText keeps the text above a button line inside Meta's 1,024-character body.
+const maxInteractiveText = 880
 
 // minutes writes a code's lifetime for a message: "30 minutes", "2 hours".
 func minutes(d time.Duration) string {
@@ -272,10 +307,11 @@ type whatsAppNotifyRequest struct {
 type whatsAppNotifyResponse struct {
 	To   string `json:"to,omitempty"`
 	Text string `json:"text,omitempty"`
+	// Interactive is the same message with buttons: the storyboard link with Make the video,
+	// Change and Discard; or the finished ad as a video. marketflow-api sends it instead of Text
+	// only while the requester's 24-hour window is open.
+	Interactive *waInteractive `json:"interactive,omitempty"`
 }
-
-// maxStills caps the storyboard links in one message.
-const maxStills = 12
 
 // WhatsAppNotify handles POST /api/v1/internal/os/whatsapp-notify (service key): marketflow-api
 // reports that a video made from a WhatsApp turn has its storyboard, or finished rendering. The
@@ -308,6 +344,7 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 		studio = link(run.PortalURL, run.TenantSlug, "/studio/"+run.BriefID)
 	}
 	var b strings.Builder
+	var ia *waInteractive
 	switch req.Event {
 	case notifyStoryboardReady:
 		credits := 0
@@ -323,18 +360,19 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "the render code could not be made")
 			return
 		}
-		b.WriteString("Your storyboard is ready. One picture per scene:")
-		for i, u := range req.Links {
-			if i == maxStills {
-				break
-			}
-			fmt.Fprintf(&b, "\n%d. %s", i+1, u)
-		}
-		fmt.Fprintf(&b, "\n\nTo change words or pictures, open the Studio: %s\nThe code below works for %s.", studio, minutes(h.codes.TTL()))
+		// One message with one link to the storyboard (owner, 2026-11-14): no images, so the
+		// stills never arrive out of order and cost no extra messages.
+		fmt.Fprintf(&b, "Your storyboard is ready (%d scenes). See it, and change words or pictures, in the Studio: %s\nThe code below works for %s.",
+			len(req.Links), studio, minutes(h.codes.TTL()))
 		if credits > 0 {
 			fmt.Fprintf(&b, "\n\nReply YES %s to make the video (about %d credits)", code, credits)
 		} else {
 			fmt.Fprintf(&b, "\n\nReply YES %s to make the video", code)
+		}
+		ia = &waInteractive{
+			Body: fmt.Sprintf("Your storyboard is ready (%d scenes). See it in the Studio: %s\nTo change words or pictures, tap %s. The code works for %s.\n\n%s",
+				len(req.Links), studio, btnChange, minutes(h.codes.TTL()), approveLine(btnMakeVideo, code, "make the video", credits)),
+			Buttons: storyboardButtons(run.RunID, code),
 		}
 	case notifyRenderDone:
 		if len(req.Links) == 0 {
@@ -342,6 +380,8 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprintf(&b, "Your video ad is ready: %s\n\nApprove it, post it or change a scene in the Studio: %s", req.Links[0], studio)
+		ia = &waInteractive{Media: []waMedia{{Type: "video", Link: req.Links[0],
+			Caption: "Your video ad is ready. Approve it, post it or change a scene in the Studio: " + studio}}}
 	case notifyRenderFailed:
 		reason := strings.TrimSpace(req.Error)
 		if reason == "" {
@@ -359,7 +399,7 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "event must be storyboard_ready, render_done, render_failed or media_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, whatsAppNotifyResponse{To: run.Sender, Text: b.String()})
+	writeJSON(w, http.StatusOK, whatsAppNotifyResponse{To: run.Sender, Text: b.String(), Interactive: ia})
 }
 
 type approvalTenantRequest struct {
@@ -367,6 +407,8 @@ type approvalTenantRequest struct {
 	Sender    string   `json:"sender"`
 	Text      string   `json:"text"`
 	TenantIDs []string `json:"tenant_ids"`
+	// ReplyID is a tapped button or list row; its run (or the waiting request) names the business.
+	ReplyID string `json:"reply_id,omitempty"`
 }
 
 // approvalTenantResponse says whether the text is an approval reply and, when its code is
@@ -385,10 +427,34 @@ func (h *OSHandler) ApprovalTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "user_id and at most 50 tenant_ids are required")
 		return
 	}
+	if rep, ok := osrun.ParseReply(req.ReplyID); ok {
+		writeJSON(w, http.StatusOK, approvalTenantResponse{Yes: true, TenantID: h.tapTenant(r.Context(), req, rep)})
+		return
+	}
 	code, yes := osrun.ParseYes(req.Text)
 	out := approvalTenantResponse{Yes: yes}
 	if yes && code != "" {
 		out.TenantID, _ = h.codes.Find(r.Context(), req.TenantIDs, req.UserID, req.Sender, code)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// tapTenant is the business a tapped button or list row belongs to: the tenant holding the
+// approval code, the run's tenant, or the tenant with a request waiting for the field. Only the
+// given tenants count; "" when none does. Nothing is used here.
+func (h *OSHandler) tapTenant(ctx context.Context, req approvalTenantRequest, rep osrun.Reply) string {
+	switch {
+	case rep.Kind == osrun.ReplyField:
+		tid, _ := h.codes.ClarifyTenant(ctx, req.TenantIDs, req.UserID)
+		return tid
+	case rep.Kind == osrun.ReplyYes:
+		tid, _ := h.codes.Find(ctx, req.TenantIDs, req.UserID, req.Sender, rep.Code)
+		return tid
+	}
+	for _, tid := range req.TenantIDs {
+		if run, err := h.runs.Get(ctx, tid, rep.RunID); err == nil && run.UserID == req.UserID {
+			return tid
+		}
+	}
+	return ""
 }
