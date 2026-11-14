@@ -56,7 +56,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind, Tier: req.Tier,
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
-		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
+		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood,
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
 	if err := h.ads.Validate(areq); err != nil {
@@ -304,6 +304,8 @@ type storyboardRequest struct {
 	Actor       *media.Actor        `json:"actor"`        // the brief's actor, kept when set
 	ActorPrompt string              `json:"actor_prompt"` // who the presenter is, for a new actor
 	Charge      bool                `json:"charge"`
+	// Delivery is the ad's voice delivery; "ugc" draws the stills as candid phone photos.
+	Delivery string `json:"delivery"`
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -336,7 +338,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		req.Actor = nil
 	}
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
-		Scenes: req.Scenes, Photos: req.PhotoURLs, Actor: req.Actor, ActorPrompt: req.ActorPrompt}
+		Scenes: req.Scenes, Photos: req.PhotoURLs, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery}
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only

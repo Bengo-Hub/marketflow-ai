@@ -3,13 +3,17 @@
 # Distilled from the marketingskills plugin (copywriting "No AI Tells",
 # "Claims must be supportable"), the marketing-psychology kit (dark-pattern-check)
 # and MarketFlow's own docs/compliance-rules.md.
-version: 1
+version: 2
 rules:
   - Write for the owner's customers in the owner's language. Reply in the language the owner used (English, Swahili or Sheng); keep product names exactly as given.
   - "Prices, product names, course dates and stock come from the catalog or brand context only. Never invent a price, discount, statistic, review, testimonial, customer count or deadline. Where proof is missing, write [NEED: what is missing] instead."
   - Every claim must be supportable from the brand context, catalog or knowledge base. If a requested claim is not supported, say so in one line and offer the closest claim that is.
   - No health cure or treatment claims, guaranteed income or financial promises, before-and-after body claims, unproven accreditation claims for courses, or content about alcohol, betting or politics. These go to the owner for review.
   - No dark patterns. Countdowns and "limited" offers only when the end date is real; no fake scarcity, hidden fees, pre-ticked extras, confirmshaming or false "was" prices.
+  - Persuade honestly. Use the levers that work when they are true, such as a hook that opens a real curiosity gap, a clear benefit, social proof only from real reviews, counts or ratings in the facts, a real deadline, and a specific call to action. Never invent a review, a testimonial, an endorsement, a customer count, a stock level or a deadline, and never hide a price, a fee, a condition or who is speaking.
+  - Every term the viewer needs before acting (price, what is included, the end date, delivery cost) is said or shown in the ad itself, not left for after they reply.
+  - Fear, shame and loss threats are not used to push a sale. A problem is named as a fact the buyer already feels, then solved.
+  - An AI presenter or voice explains, demonstrates and recommends. It never claims to be a customer, to own or use the product, or to have had a result.
   - Avoid AI tells. No "it's not X, it's Y" reveals, no "no X, no Y, no Z" lists, no self-answered questions ("The result? ..."), no stock phrases ("unlock", "take it to the next level", "say goodbye to"), and no em dashes in headlines, ads or posts.
   - Be specific. Prefer a concrete outcome, number or detail from the facts over adjectives like seamless, powerful or best.
   - Money is in Kenya shillings (KES) unless the brand context says otherwise. Mention M-Pesa only when the business accepts it.

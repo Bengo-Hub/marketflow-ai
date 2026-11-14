@@ -52,6 +52,14 @@ var VoiceCatalog = map[string]string{
 	"Will":    "bIHbv24MWmeRgasZH58o", // relaxed, optimistic male
 }
 
+// premadeGender labels the catalogued premade voices (as described above), so a request for
+// a male or a female voice, such as the second voice of a two-voice ad, never lands on a
+// premade voice of the other gender.
+var premadeGender = map[string]string{
+	"Bella": "female", "Sarah": "female", "Matilda": "female", "Alice": "female",
+	"Brian": "male", "Eric": "male", "Chris": "male", "Daniel": "male", "Will": "male",
+}
+
 // DefaultVoice is the premade voice used when the collection has none that fits.
 const DefaultVoice = "Bella"
 
@@ -115,6 +123,10 @@ type Voices struct {
 	http     *http.Client
 	library  *voiceLibrary
 	defaults []string // DefaultVoices unless set
+	// speakerDefaults are the default voices per gender, best first, used when a voice is
+	// asked for by gender (a two-voice ad's speakers); empty keeps defaults
+	// (MF_ELEVENLABS_MALE_VOICES, MF_ELEVENLABS_FEMALE_VOICES).
+	speakerDefaults map[string][]string
 	// overrides change deliveries' settings (MF_VOICE_DELIVERY_SETTINGS).
 	overrides map[string]DeliveryOverride
 	logger    *zap.Logger
@@ -169,6 +181,24 @@ func (v *Voices) WithDefaults(list []string) *Voices {
 		v.defaults = list
 	}
 	return v
+}
+
+// WithSpeakerDefaults sets the default voices per gender ("male", "female"), best first (ids or
+// name prefixes); a gender without a list uses the general defaults.
+func (v *Voices) WithSpeakerDefaults(m map[string][]string) *Voices {
+	v.speakerDefaults = m
+	return v
+}
+
+// Pick is the voice a request would be read in, without making anything: the named voice, or
+// the best one for the delivery, gender and accent asked for. ok is false only for a named
+// voice that does not exist.
+func (v *Voices) Pick(ctx context.Context, req VoiceRequest) (LibraryVoice, bool) {
+	lang := req.Language
+	if lang == "" {
+		lang = "en"
+	}
+	return pickVoice(v.collection(ctx), v.choice(req), lang, "")
 }
 
 // WithDeliveryOverrides sets per-delivery setting overrides; nil keeps the defaults.
@@ -393,7 +423,11 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 
 // choice is a request's voice choice.
 func (v *Voices) choice(req VoiceRequest) VoiceChoice {
-	return VoiceChoice{Name: req.Voice, Delivery: v.Delivery(req.Delivery), Prefs: req.Prefs, Defaults: v.defaults}
+	defaults := v.defaults
+	if list := v.speakerDefaults[strings.ToLower(req.Prefs.Gender)]; len(list) > 0 {
+		defaults = list
+	}
+	return VoiceChoice{Name: req.Voice, Delivery: v.Delivery(req.Delivery), Prefs: req.Prefs, Defaults: defaults}
 }
 
 // directed opens the text with the delivery's direction tag, unless the text

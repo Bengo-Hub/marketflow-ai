@@ -66,7 +66,10 @@ type TaskSpec struct {
 	Confidence         float64  `json:"confidence"`
 	Route              string   `json:"route"` // decide | agreed | keyword | manager
 	InjectionSuspected bool     `json:"injection_suspected,omitempty"`
-	Original           string   `json:"original"`
+	// Approach is the ad template the request's words point to (library ad_templates.yaml), for
+	// video scripts and ad copy; its hook, beats and call to action go into the brief.
+	Approach string `json:"approach,omitempty"`
+	Original string `json:"original"`
 	CostUSD            float64  `json:"cost_usd"`
 }
 
@@ -158,6 +161,7 @@ func (o *Optimizer) Optimize(ctx context.Context, tenantID, text string, tc Cont
 		pb, _ := o.lib.Playbook(spec.Playbook)
 		spec.Specialist = pb.Specialist
 		o.fillMissing(ctx, spec, pb, answers, derr == nil)
+		spec.Approach = approachFor(o.lib, pb, text)
 	}
 	if spec.Complexity == "campaign" && spec.Playbook != GeneralQuestion {
 		spec.Specialist = "manager" // the manager plans and delegates
@@ -384,6 +388,7 @@ func Pin(lib *library.Library, spec *TaskSpec, playbook string) error {
 	if len(spec.MissingFields) > 0 {
 		spec.ClarifyingQuestion = clarifyingQuestion(spec.MissingFields[0], spec.Entities.Language)
 	}
+	spec.Approach = approachFor(lib, pb, spec.Original)
 	spec.OptimisedBrief = brief(lib, spec)
 	return nil
 }
@@ -417,7 +422,25 @@ func brief(lib *library.Library, s *TaskSpec) string {
 	add("Website", e.URL)
 	add("Competitors", strings.Join(e.Competitors, ", "))
 	add("Write in", map[string]string{"sw": "Swahili", "mixed": "the owner's mix of English and Swahili", "en": "English"}[e.Language])
+	if t, ok := lib.AdTemplate(s.Approach); ok {
+		b.WriteString(lib.AdTemplateBrief(t))
+	}
 	return b.String()
+}
+
+// approachContracts are the outputs an ad template shapes: video scripts and ad copy angles.
+var approachContracts = map[string]bool{"video_script": true, "ad_copy_batch": true}
+
+// approachFor is the ad template the request's own words ask for ("a myth versus fact video",
+// "unboxing"), found deterministically with no model call; "" leaves the choice to the writer.
+func approachFor(lib *library.Library, pb library.Playbook, text string) string {
+	if !approachContracts[pb.OutputContract] {
+		return ""
+	}
+	if t, ok := lib.MatchAdTemplate(text); ok {
+		return t.Key
+	}
+	return ""
 }
 
 func candidateInputs(lib *library.Library, matches []library.Match) []string {

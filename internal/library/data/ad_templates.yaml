@@ -1,0 +1,217 @@
+# Ad templates: the script approaches a video ad (or an ad copy angle) can follow.
+# The script writer gets one template's hook, beats, call to action and honesty
+# rules (Library.AdTemplateBrief); the prompt optimiser and the Studio pick it
+# (Library.SelectAdTemplate). Distilled from the marketingskills plugin (copywriting,
+# ad-creative, video), the genmedia ugc and storytelling skills and the
+# marketing-psychology kit (persuasion-audit, dark-pattern-check), all MIT.
+#
+# Fields:
+#   kinds     the video kinds it suits: template (photos and voice), presenter (an AI
+#             presenter) and ugc (creator style, the only kind that may use two voices)
+#   two_voice true when the approach reads well as two people taking turns
+#   requires  facts that must exist before it can be used: real_reviews (reviews already
+#             published on the business's public page, owner 2026-11-14), founder_story (the founder's
+#             own story in the brand context or facts)
+#   keywords  words in a request that point to it (English and Swahili)
+version: 1
+
+# Defaults when nothing in the request points to a template, per video kind.
+defaults:
+  template: educate
+  presenter: problem-agitate-solve
+  ugc: day-in-the-life
+
+# Delivery tags a script line may open with (one per line at most). ElevenLabs v3 and
+# v4 voices follow them and never read them aloud; captions and timing skip them.
+voice_tags: [excited, curious, warm, confident, playful, reassuring, surprised, thoughtful, laughs softly, short pause]
+
+# Checks every video script gets before the owner sees it (findings, never a block).
+quality:
+  hook_max_chars: 45      # the first spoken sentence lands inside about 2 to 3 seconds
+  first_scene_max_s: 3.5  # the opening scene is short so the product shows early
+  max_scene_s: 6          # longer static scenes lose the viewer
+  max_caption_chars: 42   # two short lines on a phone screen
+  weak_ctas: [learn more, click here, get started, find out more, check it out, contact us, sign up, buy now, shop now, jifunze zaidi, wasiliana nasi]
+
+templates:
+  - key: educate
+    name: Teach one useful thing, then the offer
+    when_to_use: The buyer needs to understand something before they buy (how to choose, how to use, a common mistake), and the product is the easy way to act on it.
+    keywords: [teach, tip, tips, how to, explain, educate, learn, guide, mistake, mafunzo, fundisha, jinsi ya, elimu]
+    kinds: [template, presenter, ugc]
+    two_voice: true
+    requires: []
+    hook: Open with the tip itself or the mistake it fixes, in the buyer's words, within the first sentence.
+    beats:
+      - "Hook: one specific tip or mistake the buyer recognises."
+      - The tip in one or two plain steps the viewer can use even without buying.
+      - Where the product makes the tip easier, shown on screen from the owner's photo or footage.
+      - One proof from the facts (price, what is included, how it works), never an invented number.
+      - Call to action naming the exact next step and channel.
+    cta: Name the action and what they get, for example "WhatsApp us 'TIPS' for the full price list".
+    honesty:
+      - The tip must be true and safe on its own; no health, money or legal advice beyond the facts given.
+
+  - key: day-in-the-life
+    name: A day in the life with the product
+    when_to_use: The product fits into an everyday routine (work, school run, the shop, the kitchen) and seeing it used in a real setting sells it.
+    keywords: [day in the life, daily, routine day, everyday, siku yangu, kila siku, maisha, lifestyle]
+    kinds: [presenter, ugc, template]
+    two_voice: true
+    requires: []
+    hook: Open on a recognisable moment of the buyer's day (the 7 a.m. rush, closing the till, the matatu ride) with the time or place on screen.
+    beats:
+      - "Hook: a real moment of the day, named in a few words."
+      - The small friction that moment usually has.
+      - The product used in that moment, shown from the owner's photo or footage.
+      - The moment after, easier or calmer, described as what is seen, not a promised result.
+      - Call to action tied to the moment ("Order before 10 and it is with you by lunch" only when the facts say so).
+    cta: Tie the action to the moment and name the channel.
+    honesty:
+      - An AI presenter describes the day; it never says it owns, uses or got results from the product.
+
+  - key: routine
+    name: A routine that works, step by step
+    when_to_use: The product is used in steps (a care routine, a setup, a recipe, a weekly habit) and a short, followable routine shows how to get the most from it.
+    keywords: [routine, what works for me, steps, morning routine, regimen, ratiba, hatua, utaratibu]
+    kinds: [ugc, presenter]
+    two_voice: true
+    requires: []
+    hook: Open with the routine's promise in plain terms ("Three steps, under five minutes") and show step one at once.
+    beats:
+      - "Hook: the routine's length or number of steps."
+      - Step one, two and three, each one scene, each with the product or the owner's photo.
+      - The one detail people usually get wrong, from the facts.
+      - Call to action to get what the routine needs.
+    cta: Point to the exact product or bundle the routine uses and how to order it.
+    honesty:
+      - With an AI presenter the routine is presented as a suggested routine ("here is a routine that works for busy mornings"), never as the presenter's own experience or results.
+      - First person ("what works for me") only in the owner's own footage or a real, consented testimonial.
+
+  - key: problem-agitate-solve
+    name: Problem, agitate, solve
+    when_to_use: The buyer has a clear, felt problem the offering removes; the ad names it, shows what it costs them, then shows the way out.
+    keywords: [problem, struggle, pain, tired of, frustrated, fix, solve, shida, tatizo, suluhisho, umechoka]
+    kinds: [template, presenter, ugc]
+    two_voice: true
+    requires: []
+    hook: Name the problem in the buyer's own words as a question or a blunt statement in the first sentence.
+    beats:
+      - "Hook: the problem, in the buyer's words."
+      - "Agitate: what the problem really costs them (time, money, stress), stated as fact, not fear."
+      - "Solve: the product doing the job, on screen."
+      - "Proof: one supportable fact from the facts or brand context."
+      - Call to action with a low-friction next step.
+    cta: A low-friction next step, for example "Send 'DEMO' on WhatsApp and we show you in 5 minutes" only when that is real.
+    honesty:
+      - Agitate with true costs only; no fear, shame or invented risks.
+
+  - key: before-after
+    name: Before and after
+    when_to_use: The product visibly changes the state of a thing, place or process (a tidy stock room, a clean screen, a faster checkout) and the owner has real photos or footage of both states.
+    keywords: [before and after, before after, transformation, makeover, kabla na baada, mabadiliko]
+    kinds: [template, presenter, ugc]
+    two_voice: false
+    requires: []
+    hook: Show the before state first, with one line naming it, then cut to the after inside 3 seconds.
+    beats:
+      - "Hook: the before state, real, from the owner's photos or footage."
+      - "The change: what was done, with the product."
+      - The after state, real, from the owner's photos or footage.
+      - What made the difference, in one plain line.
+      - Call to action.
+    cta: Offer the same change, with the exact service or product name and how to book it.
+    honesty:
+      - Only real before and after pictures the owner supplied, of the same thing; never generated, edited to exaggerate or swapped.
+      - Never body, skin, weight, health, income or money results; those go to the owner for review under the house rules.
+
+  - key: myth-fact
+    name: Myth versus fact
+    when_to_use: Buyers hold a wrong belief that stops them buying (it is too expensive, too hard, not for small shops), and the facts can correct it.
+    keywords: [myth, fact, truth, misconception, people think, actually, uongo, ukweli, watu hudhani]
+    kinds: [template, presenter, ugc]
+    two_voice: true
+    requires: []
+    hook: State the myth plainly as the opening line, then flag it ("Myth.") so the viewer waits for the fact.
+    beats:
+      - "Hook: the myth, said the way buyers say it."
+      - The fact, from the facts or brand context, with the number or detail that proves it.
+      - What that means for the buyer.
+      - A second myth only if the ad has time and the facts support it.
+      - Call to action.
+    cta: Invite them to check the fact themselves (a price list, a demo, a visit).
+    honesty:
+      - Every fact comes from the facts, brand context or catalogue; a myth is never made up to knock down.
+
+  - key: founder-story
+    name: Founder story
+    when_to_use: The business has a real founder story (why it started, the problem the founder saw) and the buyer trusts people more than brands.
+    keywords: [founder, story, why we started, our story, owner story, mwanzilishi, hadithi yetu, tulianza]
+    kinds: [template, presenter, ugc]
+    two_voice: false
+    requires: [founder_story]
+    hook: Open on the moment the founder saw the problem, in one concrete sentence.
+    beats:
+      - "Hook: the moment the problem was seen."
+      - Why it mattered to the founder.
+      - What they built, shown.
+      - Who it serves today, from the facts.
+      - Call to action.
+    cta: Invite the viewer in (visit, order, follow) with the exact channel.
+    honesty:
+      - Only the founder's real story from the brand context or facts; an AI presenter tells it in the third person ("Achieng started...") unless the owner's own footage is used.
+
+  - key: testimonial
+    name: A real customer review, read aloud
+    when_to_use: The business has real customer reviews already published on its public page, and a review speaks to the buyer's doubt.
+    keywords: [testimonial, review, customer says, feedback, ushuhuda, maoni ya wateja, mteja alisema]
+    kinds: [template, presenter, ugc]
+    two_voice: false
+    requires: [real_reviews]
+    hook: Open with the review's most specific line, quoted exactly, with the customer's first name or role on screen.
+    beats:
+      - "Hook: the exact quote."
+      - The situation the customer was in, only as the review says it.
+      - The product the review is about, shown.
+      - Call to action.
+    cta: Invite the viewer to try the same product or service, named exactly.
+    honesty:
+      - Quote real reviews word for word with attribution; never invent, combine, shorten into a stronger claim or present an AI presenter as the customer.
+      - If no real review is available this template is not used.
+
+  - key: comparison
+    name: Comparison with the usual way
+    when_to_use: The offering is better than the way buyers do it today (by hand, a notebook, a costly middleman) on a point the facts can show.
+    keywords: [compare, comparison, versus, vs, better than, instead of, the old way, linganisha, badala ya, njia ya zamani]
+    kinds: [template, presenter, ugc]
+    two_voice: true
+    requires: []
+    hook: Put the usual way and the new way side by side in the first line, for example a notebook count against a till count, with real figures only.
+    beats:
+      - "Hook: the usual way against this one, on one point."
+      - The usual way's real cost, as a fact.
+      - The product doing the same job, shown.
+      - One more point of difference from the facts.
+      - Call to action.
+    cta: Offer an easy way to see the difference themselves (a demo, a trial, a price list).
+    honesty:
+      - Compare with the usual way or the category, not a named competitor, unless the facts hold a verifiable comparison.
+      - Figures only from the facts; no invented percentages or times.
+
+  - key: unboxing-demo
+    name: Unboxing or demo
+    when_to_use: Seeing the product itself (what is in the box, how it works, its size and finish) is the reason to buy.
+    keywords: [unboxing, unbox, demo, demonstration, show how it works, what's inside, onyesha, fungua, inavyofanya kazi]
+    kinds: [template, presenter, ugc]
+    two_voice: true
+    requires: []
+    hook: Open with the product in hand or the box opening, and one line on what is about to be shown.
+    beats:
+      - "Hook: the reveal."
+      - What is included, item by item, from the facts.
+      - It working, from the owner's footage or photos.
+      - The detail buyers ask about most (size, finish, setup time) from the facts.
+      - Call to action with the price when the facts give it.
+    cta: Name the product, the price from the facts and where to get it.
+    honesty:
+      - Show only the real product from the owner's photos or footage; never a generated product that looks different.

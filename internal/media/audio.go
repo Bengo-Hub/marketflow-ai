@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 // Audio steps of the assembler: the per-scene voice track, the mix, the two-pass
@@ -28,9 +30,13 @@ func sceneAudio(scenes []AdScene) bool {
 }
 
 // sceneVoice lays each scene's voice-over at the start of its scene, cleaned by the filter
-// chain (AudioConfig.VoiceFilter; "" for none) and padded or cut to the scene's length
-// (silence for a scene without one), into one WAV.
-func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene, filter string) (string, error) {
+// chain (AudioMix.VoiceFilter; "" for none) and padded or cut to the scene's length
+// (silence for a scene without one), into one WAV, in timeline order. When the scenes have two
+// or more speakers (a two-voice ad) each piece is also levelled to AudioMix.VoiceMatchLUFS, so
+// the voices sit at one loudness before the mix; a piece that cannot be measured is left as it is.
+func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene, m AudioMix) (string, error) {
+	filter := m.VoiceFilter
+	match := m.VoiceMatchLUFS != 0 && sceneSpeakers(scenes) > 1
 	var list strings.Builder
 	for i, s := range scenes {
 		piece := filepath.Join(dir, fmt.Sprintf("a%d.wav", i))
@@ -44,6 +50,9 @@ func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene
 				return "", err
 			}
 			err = a.run(ctx, "-i", raw, "-af", voicePieceFilter(filter, dur), "-ac", "2", "-c:a", "pcm_s16le", piece)
+			if err == nil && match {
+				a.levelPiece(ctx, piece, m.VoiceMatchLUFS, i)
+			}
 		}
 		if err != nil {
 			return "", fmt.Errorf("scene %d: %w", i+1, err)
@@ -59,6 +68,31 @@ func (a *Assembler) sceneVoice(ctx context.Context, dir string, scenes []AdScene
 		return "", err
 	}
 	return out, nil
+}
+
+// levelPiece brings one cleaned scene voice to target LUFS with a fixed gain (measured, then
+// applied), so two voices recorded at different levels match. It never fails the ad: a piece
+// that cannot be measured or rewritten keeps its level, with a log line.
+func (a *Assembler) levelPiece(ctx context.Context, piece string, target float64, i int) {
+	m, err := a.measureLoudness(ctx, piece)
+	if err != nil {
+		a.logger.Info("scene voice not levelled", zap.Int("scene", i+1), zap.Error(err))
+		return
+	}
+	gain, ok := matchGain(m.InputI, target)
+	if !ok {
+		return
+	}
+	tmp := piece + ".lvl.wav"
+	if err := a.run(ctx, "-i", piece, "-af", fmt.Sprintf("volume=%.2fdB", gain), "-c:a", "pcm_s16le", tmp); err != nil {
+		a.logger.Info("scene voice not levelled", zap.Int("scene", i+1), zap.Error(err))
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, piece); err != nil {
+		a.logger.Info("scene voice not levelled", zap.Int("scene", i+1), zap.Error(err))
+		_ = os.Remove(tmp)
+	}
 }
 
 // placedCue is a downloaded sound cue and its start in the ad.

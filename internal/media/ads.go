@@ -78,6 +78,9 @@ type ScriptScene struct {
 	// SFX is an optional short sound cue at the scene's start ("soft whoosh"), rendered from
 	// the sfx audio level up.
 	SFX string `json:"sfx,omitempty"`
+	// Speaker is who reads the line in a two-voice ad ("male" or "female"; two_voice.go). It
+	// counts only for a delivery allowed two voices; elsewhere the ad has one voice.
+	Speaker string `json:"speaker,omitempty"`
 }
 
 // SceneCache is one rendered scene kept for later versions of the ad: its voice-over and,
@@ -94,6 +97,8 @@ type SceneCache struct {
 	Route        string       `json:"route,omitempty"`
 	CostUSD      float64      `json:"cost_usd"`
 	Voice        string       `json:"voice,omitempty"`
+	// Speaker is the scene's speaker in a two-voice ad ("" in a one-voice ad).
+	Speaker string `json:"speaker,omitempty"`
 	// VoiceSubstitutedFor names the chosen voice when a premade one read the scene instead.
 	VoiceSubstitutedFor string `json:"voice_substituted_for,omitempty"`
 	// The scene's sound cue, when one was made, and the cue text it was made from (a cue is
@@ -137,6 +142,42 @@ type AdRequest struct {
 	Stills map[string]string
 	// Cache holds earlier versions' scenes by hash.
 	Cache map[string]SceneCache
+	// Music is the generated music of the version this one was revised from: reused when the
+	// music prompt is the same and the track still fits the length, so a revision does not pay
+	// for the same music twice (WP1).
+	Music *MusicCache
+}
+
+// MusicCache is one version's generated music, kept for its revisions.
+type MusicCache struct {
+	Prompt  string  `json:"prompt"`
+	URL     string  `json:"url"`
+	Key     string  `json:"key"`
+	Seconds float64 `json:"seconds"`
+	Route   string  `json:"route,omitempty"`
+	CostUSD float64 `json:"cost_usd"`
+	Reused  bool    `json:"reused,omitempty"`
+}
+
+// musicSlack is how much longer than the ad a cached track may be and still be reused: the
+// mix ends the music with the ad, so a slightly longer track only loses its tail.
+func musicSlack(seconds float64) float64 { return max(2, seconds*0.15) }
+
+// cachedMusic returns the earlier version's music when it was made from the same prompt, is
+// at least as long as the ad (and not much longer), and its file still exists.
+func (a *Ads) cachedMusic(ctx context.Context, req AdRequest, prompt string, seconds float64) *MusicCache {
+	c := req.Music
+	if c == nil || c.Key == "" || c.URL == "" || c.Prompt != prompt || a.files == nil {
+		return nil
+	}
+	want := soundSeconds(CapMusic, seconds)
+	if c.Seconds < want || c.Seconds > want+musicSlack(want) {
+		return nil
+	}
+	if !a.files.Exists(ctx, c.Key) {
+		return nil
+	}
+	return c
 }
 
 // Ads makes video ads.
@@ -181,7 +222,7 @@ func (a *Ads) WithAudio(cfg AudioConfig) *Ads {
 		a.sounds.WithMusicModel(cfg.MusicModel)
 	}
 	if a.voices != nil {
-		a.voices.WithDeliveryOverrides(cfg.Deliveries)
+		a.voices.WithDeliveryOverrides(cfg.Deliveries).WithSpeakerDefaults(cfg.SpeakerVoices)
 	}
 	return a
 }
@@ -303,6 +344,9 @@ func (a *Ads) Validate(req AdRequest) error {
 		if utf8.RuneCountInString(strings.TrimSpace(s.SFX)) > maxSFXChars {
 			return &UserError{Msg: fmt.Sprintf("scene %d: a sound cue is at most %d characters", i+1, maxSFXChars)}
 		}
+		if sp := strings.TrimSpace(s.Speaker); sp != "" && normalSpeaker(sp) == "" {
+			return &UserError{Msg: fmt.Sprintf("scene %d: the speaker is male, female or empty", i+1)}
+		}
 		chars += words
 	}
 	if chars == 0 || chars > MaxAdVoiceChars {
@@ -370,9 +414,10 @@ const voiceUSDPer1000 = 0.10
 // fails only when a paid scene has no route at all.
 func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 	plan := AdPlan{Kind: kindOf(req.Kind), Audio: audioLevelOf(req.Audio)}
+	two, turns := a.twoVoice(req), speakerTurns(req.Scenes)
 	photo, clip := 0, 0
 	adSeconds := endCardTail
-	for _, s := range req.Scenes {
+	for i, s := range req.Scenes {
 		chars := utf8.RuneCountInString(strings.TrimSpace(stripTags(s.Voiceover)))
 		sp := ScenePlan{SceneID: s.ID, Shot: s.Shot, Chars: chars, Seconds: estimateSeconds(chars, s.DurationS)}
 		switch {
@@ -388,7 +433,11 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) {
 			sp.Work = WorkClip
 		}
-		sp.Hash = sceneHash(req, s, sp, a.deliveryPrint(req.Delivery))
+		speaker := ""
+		if two {
+			speaker = turns[i]
+		}
+		sp.Hash = sceneHashFor(req, s, sp, a.deliveryPrint(req.Delivery), speaker)
 		if c, ok := req.Cache[sp.Hash]; ok && a.cacheUsable(ctx, req, c, sp) {
 			sp.Cached = true
 			plan.Cached++
@@ -420,7 +469,11 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		plan.Scenes = append(plan.Scenes, sp)
 	}
 	if plan.Audio == AudioScore {
-		plan.MusicUSD, plan.MusicRoute = a.sounds.Quote(ctx, CapMusic, tierOf(req), adSeconds)
+		if c := a.cachedMusic(ctx, req, musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle), adSeconds); c != nil {
+			plan.MusicRoute = c.Route // the earlier version's music is reused at no cost
+		} else {
+			plan.MusicUSD, plan.MusicRoute = a.sounds.Quote(ctx, CapMusic, tierOf(req), adSeconds)
+		}
 	}
 	plan.VoiceUSD = float64(plan.VoiceChars) * voiceUSDPer1000 / 1000
 	plan.CostUSD += plan.VoiceUSD + plan.SFXUSD + plan.MusicUSD
@@ -508,6 +561,12 @@ func clipSeconds(seconds float64) int {
 // deliveryPrint is the resolved voice settings' fingerprint, so retuned settings make new
 // voices.
 func sceneHash(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint string) string {
+	return sceneHashFor(req, s, sp, deliveryPrint, "")
+}
+
+// sceneHashFor is sceneHash with the scene's speaker in a two-voice ad; the speaker is left
+// out of one-voice scenes, so their hashes stay as they were.
+func sceneHashFor(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint, speaker string) string {
 	parts := map[string]any{
 		"kind": kindOf(req.Kind), "tier": tierOf(req), "shot": s.Shot, "work": sp.Work, "source": stableSource(sp.source),
 		"visual": strings.TrimSpace(s.Visual), "voiceover": strings.TrimSpace(s.Voiceover), "duration": s.DurationS,
@@ -516,6 +575,9 @@ func sceneHash(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint string)
 	}
 	if deliveryPrint != "" {
 		parts["delivery_settings"] = deliveryPrint
+	}
+	if speaker != "" {
+		parts["speaker"] = speaker
 	}
 	b, _ := json.Marshal(parts) // map keys are sorted, so the hash is stable
 	h := sha256.Sum256(b)
@@ -557,10 +619,14 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		return nil, err
 	}
 	outs := make([]sceneOut, len(req.Scenes))
+	// A two-voice ad (UGC with a man and a woman taking turns) reads each scene in its
+	// speaker's voice; every other ad has one voice.
+	two, turns := a.twoVoice(req), speakerTurns(req.Scenes)
 
 	// 1. Reused scenes: their files are copied to this version, so purging the old
 	// version leaves this one whole.
 	voice := req.Voice
+	seeded := map[string]string{} // a two-voice ad's voices from reused scenes, by speaker
 	for i, sp := range plan.Scenes {
 		if !sp.Cached {
 			continue
@@ -572,30 +638,62 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 			continue
 		}
 		outs[i].cache = c
-		if voice == "" && c.Voice != "" {
+		switch {
+		case two && turns[i] != "":
+			if seeded[turns[i]] == "" && c.Voice != "" {
+				seeded[turns[i]] = c.Voice // the same voice as this speaker's reused scenes
+			}
+		case voice == "" && c.Voice != "":
 			voice = c.Voice // the same voice as the reused scenes
 		}
 	}
 
-	// 2. Voices for the rest. The first one picks the voice; every other scene uses it.
+	// 2. Voices for the rest. A two-voice ad casts one voice per speaker first; when a second
+	// voice cannot be found the ad falls back to one voice and says why. In a one-voice ad the
+	// first scene picks the voice and every other scene uses it.
+	cast, twoNote := map[string]string{}, ""
+	if two {
+		cast, twoNote = a.castVoices(ctx, req, distinctSpeakers(turns), seeded)
+		if twoNote != "" {
+			two = false
+			if voice == "" {
+				voice = seeded[distinctSpeakers(turns)[0]]
+			}
+			a.logger.Warn("two-voice ad read by one voice", zap.String("version_id", req.VersionID), zap.String("reason", twoNote))
+		}
+	}
 	todo := []int{}
 	for i, sp := range plan.Scenes {
 		if !sp.Cached && sp.Chars > 0 {
 			todo = append(todo, i)
 		}
 	}
-	if len(todo) > 0 && voice == "" {
-		first := todo[0]
-		if err := a.voiceScene(ctx, req, plan.Scenes[first], req.Scenes[first], "", &outs[first]); err != nil {
+	if two {
+		if err := a.parallel(ctx, todo, func(i int) error {
+			return a.voiceScene(ctx, req, plan.Scenes[i], req.Scenes[i], cast[turns[i]], &outs[i])
+		}); err != nil {
 			return nil, err
 		}
-		voice = outs[first].cache.Voice
-		todo = todo[1:]
+	} else {
+		if len(todo) > 0 && voice == "" {
+			first := todo[0]
+			if err := a.voiceScene(ctx, req, plan.Scenes[first], req.Scenes[first], "", &outs[first]); err != nil {
+				return nil, err
+			}
+			voice = outs[first].cache.Voice
+			todo = todo[1:]
+		}
+		if err := a.parallel(ctx, todo, func(i int) error {
+			return a.voiceScene(ctx, req, plan.Scenes[i], req.Scenes[i], voice, &outs[i])
+		}); err != nil {
+			return nil, err
+		}
 	}
-	if err := a.parallel(ctx, todo, func(i int) error {
-		return a.voiceScene(ctx, req, plan.Scenes[i], req.Scenes[i], voice, &outs[i])
-	}); err != nil {
-		return nil, err
+	for i := range outs {
+		outs[i].cache.Speaker = ""
+		if two {
+			outs[i].cache.Speaker = turns[i]
+		}
 	}
 
 	// 3. Scene lengths from the voices, then the paid visuals.
@@ -650,7 +748,7 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		musicURL, musicRoute = snd.music.URL, snd.music.Route
 		extra += snd.music.CostUSD
 	}
-	mix := AudioMix{VoiceFilter: a.audio.VoiceFilter, SFXGain: a.audio.SFXGain}
+	mix := AudioMix{VoiceFilter: a.audio.VoiceFilter, SFXGain: a.audio.SFXGain, VoiceMatchLUFS: a.audio.VoiceMatchLUFS}
 	if level == AudioScore && musicURL != "" {
 		d := a.audio.Ducking()
 		mix.Duck = &d
@@ -665,7 +763,7 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	for i, s := range req.Scenes {
 		o := outs[i]
 		sp := plan.Scenes[i]
-		sc := AdScene{Seconds: o.seconds, AudioURL: o.cache.AudioURL}
+		sc := AdScene{Seconds: o.seconds, AudioURL: o.cache.AudioURL, Speaker: o.cache.Speaker}
 		switch {
 		case o.cache.VideoURL != "":
 			sc.VideoURL = o.cache.VideoURL
@@ -701,11 +799,24 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	res.Voice = voice
 	res.Route = routeSummary(outs)
 	res.AudioLevel, res.AudioUSD, res.MusicRoute = level, extra, musicRoute
+	res.Music = snd.musicCache
 	for _, o := range outs {
 		res.Scenes = append(res.Scenes, o.cache)
 		if res.VoiceSubstitution == "" && o.cache.VoiceSubstitutedFor != "" {
 			res.VoiceSubstitution = o.cache.VoiceSubstitutedFor
 		}
+	}
+	res.TwoVoiceNote = twoNote
+	if two {
+		// The voices by speaker as they read the ad, and the order they speak in.
+		res.Voices = map[string]string{}
+		for _, o := range outs {
+			if o.cache.Speaker != "" && o.cache.Voice != "" && res.Voices[o.cache.Speaker] == "" {
+				res.Voices[o.cache.Speaker] = o.cache.Voice
+			}
+		}
+		res.Voice = res.Voices[distinctSpeakers(turns)[0]]
+		res.VoiceTimeline = voiceTimeline(scenes)
 	}
 	return res, nil
 }
@@ -715,6 +826,8 @@ type adSounds struct {
 	wg    sync.WaitGroup
 	cues  []*SoundResult // by scene, nil where none was made
 	music *SoundResult
+	// musicCache is the music as kept for later versions (made here or reused).
+	musicCache *MusicCache
 }
 
 func (s *adSounds) wait() { s.wg.Wait() }
@@ -753,16 +866,27 @@ func (a *Ads) startSounds(ctx context.Context, req AdRequest, plan AdPlan, outs 
 		}()
 	}
 	if audioLevelOf(req.Audio) == AudioScore {
+		prompt := musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle)
+		if c := a.cachedMusic(ctx, req, prompt, total); c != nil {
+			// The same music as the version this one was revised from: no new track, no cost.
+			snd.music = &SoundResult{URL: c.URL, Key: c.Key, Route: c.Route}
+			kept := *c
+			kept.Reused, kept.CostUSD = true, 0
+			snd.musicCache = &kept
+			return snd
+		}
 		snd.wg.Add(1)
 		go func() {
 			defer snd.wg.Done()
 			r, err := a.sounds.Music(ctx, SoundRequest{TenantID: req.TenantID, VersionID: req.VersionID, Name: "music",
-				Prompt: musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle), Seconds: total, Tier: tierOf(req)})
+				Prompt: prompt, Seconds: total, Tier: tierOf(req)})
 			if err != nil {
 				a.logger.Warn("generated music failed; the ad uses the supplied track or none", zap.String("version_id", req.VersionID), zap.Error(err))
 				return
 			}
 			snd.music = r
+			snd.musicCache = &MusicCache{Prompt: prompt, URL: r.URL, Key: r.Key, Seconds: soundSeconds(CapMusic, total),
+				Route: r.Route, CostUSD: r.CostUSD}
 		}()
 	}
 	return snd

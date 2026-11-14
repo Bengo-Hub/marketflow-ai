@@ -164,6 +164,14 @@ func (h *OSHandler) makeMedia(ctx context.Context, tenantID uuid.UUID, run *osru
 	}
 	osrun.FitScript(script, kind)
 	ad := map[string]any{"seconds": seconds, "kind": kind, "script": script}
+	if run.Playbook == "ugc-video" {
+		// A UGC script keeps its creator-style delivery, so its two voices (if any) are read
+		// as written; every other video type is one voice.
+		ad["delivery"] = team.DeliveryUGC
+	}
+	if script.Approach != "" {
+		ad["approach"] = script.Approach
+	}
 	if lang := run.Entities.Language; studioLanguages[lang] {
 		ad["language"] = lang
 	}

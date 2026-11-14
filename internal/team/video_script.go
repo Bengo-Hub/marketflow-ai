@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 )
@@ -41,6 +42,65 @@ type VideoScriptRequest struct {
 	// 2026-11-12): only names from the list, or names in the style, never others.
 	ActorNameStyle string
 	ActorNames     []string
+	// Delivery is the voice delivery the owner chose (ad, ugc, kids, story, info). A UGC ad is
+	// written on the ugc-video playbook, the only one whose scripts may use two voices.
+	Delivery string
+	// Approach is the ad template the owner asked for (library ad_templates.yaml); "" lets the
+	// objective, audience and offering choose it.
+	Approach string
+	// Reviews are real reviews already published on the business's public page (owner,
+	// 2026-11-14), each as "quote | who said it". Only with them can the testimonial approach be
+	// used; they are quoted, never invented or reworded into new claims.
+	Reviews []string
+	// PresenterSpeaker is the gender of the actor already saved on the brief ("male" or
+	// "female"). The script follows the actor (owner, 2026-11-14): every presenter line goes to
+	// that voice, so the voice always matches the face and no new actor is drawn.
+	PresenterSpeaker string
+}
+
+// DeliveryUGC is the creator-style delivery (media.DeliveryUGC; kept as a string here so the
+// team package does not import media).
+const DeliveryUGC = "ugc"
+
+// adKind is the ad template kind of a script request.
+func (in VideoScriptRequest) adKind() string {
+	switch {
+	case in.Delivery == DeliveryUGC:
+		return library.AdKindUGC
+	case in.Presenter:
+		return library.AdKindPresenter
+	}
+	return library.AdKindTemplate
+}
+
+// founderWords hint that the brand context or the facts tell the founder's story.
+var founderWords = []string{"founder", "founded", "started the business", "mwanzilishi", "alianzisha"}
+
+// adFacts are the facts an ad template may need, as far as the request shows them.
+func adFacts(in VideoScriptRequest, marketingContext string) map[string]bool {
+	has := map[string]bool{library.NeedRealReviews: len(cleanReviews(in.Reviews)) > 0}
+	text := strings.ToLower(marketingContext + "\n" + in.Facts)
+	for _, w := range founderWords {
+		if strings.Contains(text, w) {
+			has[library.NeedFounderStory] = true
+			break
+		}
+	}
+	return has
+}
+
+// cleanReviews keeps at most five non-empty reviews of reasonable length.
+func cleanReviews(list []string) []string {
+	var out []string
+	for _, r := range list {
+		if r = strings.TrimSpace(r); r != "" && len(r) <= 400 {
+			out = append(out, r)
+		}
+		if len(out) == 5 {
+			break
+		}
+	}
+	return out
 }
 
 // actorNameStyles are the naming styles a business can choose, as the writer reads them.
@@ -118,19 +178,30 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 			r.logger.Warn("tenant context unavailable", zap.Error(err))
 		}
 	}
-	pb, ok := r.lib.Playbook("video-script")
+	playbook := "video-script"
+	if in.Delivery == DeliveryUGC {
+		playbook = "ugc-video"
+	}
+	pb, ok := r.lib.Playbook(playbook)
 	if !ok {
-		return nil, fmt.Errorf("team: the video-script playbook is missing")
+		return nil, fmt.Errorf("team: the %s playbook is missing", playbook)
 	}
 	m, ok := r.member("content_creator", tc)
 	if !ok {
 		m, _ = r.member("manager", tc)
 	}
-	task := scriptTask(in)
-	spec := &promptopt.TaskSpec{Playbook: pb.Key, Specialist: m.Key, OptimisedBrief: task, Original: task,
+	tpl, note := r.lib.SelectAdTemplate(library.AdCriteria{Key: in.Approach, Kind: in.adKind(),
+		Text: strings.Join([]string{in.Objective, in.Audience, in.Offering}, " "), Has: adFacts(in, tc.MarketingContext)})
+	twoVoice := r.twoVoice[pb.Key] && tpl.TwoVoice
+	task := scriptTask(in) + approachTask(r.lib, tpl, in.Reviews, twoVoice)
+	spec := &promptopt.TaskSpec{Playbook: pb.Key, Specialist: m.Key, OptimisedBrief: task, Original: task, Approach: tpl.Key,
 		Entities: promptopt.Entities{Offering: in.Offering, Objective: in.Objective, Audience: in.Audience, Language: in.Language}}
 	step := r.runStep(ctx, in.TenantID, plannedStep{member: m, playbook: pb, task: task}, spec, tc, "", 0)
 	out := &VideoScriptResult{}
+	if note != "" {
+		out.Findings = append(out.Findings, Finding{Quote: in.Approach, Severity: "low", Issue: note,
+			Fix: fmt.Sprintf("The script follows %q instead.", tpl.Name)})
+	}
 	defer func() {
 		out.Calls = meter.Calls()
 		_, out.CostUSD = meter.Totals()
@@ -138,7 +209,8 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 	if step.Error != "" || step.Output == nil {
 		return out, fmt.Errorf("team: no usable script: %s", step.Error)
 	}
-	_, out.Findings = r.review(ctx, &step, spec, tc, 0)
+	_, findings := r.review(ctx, &step, spec, tc, 0)
+	out.Findings = append(out.Findings, findings...)
 	if step.Error != "" || step.Output == nil {
 		return out, ErrScriptBlocked
 	}
@@ -147,8 +219,50 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 		return out, fmt.Errorf("team: unreadable script: %w", err)
 	}
 	fitTemplate(&v, in.Photos, in.Footage, in.Presenter)
+	if _, ok := r.lib.AdTemplate(v.Approach); !ok {
+		v.Approach = tpl.Key
+	}
+	// fitTemplate may have turned presenter scenes into narration, so the speakers are made
+	// consistent again for the shots as they now are.
+	r.polishScript(&v, pb.Key, tpl.Key, NormalizeSpeaker(in.PresenterSpeaker))
+	out.Findings = append(out.Findings, QualityFindings(v, r.lib.Quality)...)
 	out.Script = &v
 	return out, nil
+}
+
+// finishVideoScript polishes a parsed video_script reply (runStep): delivery tags cleaned,
+// an unknown approach cleared and the speakers made consistent for the playbook.
+func (r *Runtime) finishVideoScript(raw json.RawMessage, playbook, approach string) json.RawMessage {
+	var v VideoScript
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	r.polishScript(&v, playbook, approach, "")
+	b, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+// polishScript cleans each line's delivery tags and assigns speakers. Two voices are kept only
+// on a two-voice playbook (MF_AD_TWO_VOICE_PLAYBOOKS) and when the approach reads well as two
+// people; approach is the one the task asked for, else the one the writer named.
+func (r *Runtime) polishScript(v *VideoScript, playbook, approach, presenter string) {
+	if r.lib == nil {
+		return
+	}
+	if _, ok := r.lib.AdTemplate(v.Approach); !ok {
+		v.Approach = ""
+	}
+	if approach == "" {
+		approach = v.Approach
+	}
+	tpl, known := r.lib.AdTemplate(approach)
+	for i := range v.Scenes {
+		v.Scenes[i].Voiceover = CleanVoiceTags(v.Scenes[i].Voiceover, r.lib.AllowedVoiceTag)
+	}
+	AssignSpeakers(v, r.twoVoice[playbook] && (!known || tpl.TwoVoice), presenter)
 }
 
 // scriptTask tells the writer what this ad can show.
@@ -192,6 +306,35 @@ func scriptTask(in VideoScriptRequest) string {
 		"so the ad fits %d seconds, and keep each caption to a few words.", in.Seconds*14, in.Seconds)
 	b.WriteString(" Set mood to a few words on how the background music should feel. Give a scene an sfx cue " +
 		"(at most 60 characters, a plain sound such as \"soft whoosh\") only where a sound lifts that moment; most scenes have none.")
+	return b.String()
+}
+
+// approachTask adds the chosen ad template, the delivery tags, the real reviews the script may
+// quote and, for a two-voice UGC ad, how to give each line to a speaker.
+func approachTask(lib *library.Library, tpl library.AdTemplate, reviews []string, twoVoice bool) string {
+	if lib == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n")
+	b.WriteString(lib.AdTemplateBrief(tpl))
+	b.WriteString(lib.VoiceTagsText())
+	if list := cleanReviews(reviews); len(list) > 0 {
+		b.WriteString("Real customer reviews you may quote word for word, with the attribution given (never reword them into a stronger claim):\n")
+		for _, r := range list {
+			b.WriteString("- ")
+			b.WriteString(r)
+			b.WriteString("\n")
+		}
+	}
+	if twoVoice {
+		b.WriteString("Two voices may read this ad, a man and a woman taking turns, when a back-and-forth helps it " +
+			"(a question and its answer, a myth and the fact, one showing the other). Set each spoken scene's speaker to " +
+			"\"male\" or \"female\" by who would naturally say that line, and alternate turns. Every presenter scene uses the on-screen " +
+			"presenter's speaker. If one voice suits this ad better, leave every speaker empty.\n")
+	} else {
+		b.WriteString("One voice reads this whole ad: leave every speaker empty.\n")
+	}
 	return b.String()
 }
 

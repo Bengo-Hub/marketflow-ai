@@ -139,6 +139,8 @@ type Runtime struct {
 	source   ContextSource
 	filter   *compliance.Filter
 	logger   *zap.Logger
+	// twoVoice names the playbooks whose video scripts may be read by two voices (speakers.go).
+	twoVoice map[string]bool
 }
 
 // Config configures a Runtime.
@@ -151,6 +153,9 @@ type Config struct {
 	Tools    []agent.Tool // read-only tools; others are ignored
 	Source   ContextSource
 	Logger   *zap.Logger
+	// TwoVoicePlaybooks are the playbooks whose scripts may use two voices
+	// (MF_AD_TWO_VOICE_PLAYBOOKS); nil is DefaultTwoVoicePlaybooks, an empty list turns it off.
+	TwoVoicePlaybooks []string
 }
 
 // readOnlyTools are the only tools specialists may use. Mutations are next
@@ -177,8 +182,16 @@ func New(cfg Config) *Runtime {
 	if reg == nil {
 		reg = func(context.Context) registry.Registry { return registry.Defaults() }
 	}
+	twoVoice := map[string]bool{}
+	list := cfg.TwoVoicePlaybooks
+	if list == nil {
+		list = DefaultTwoVoicePlaybooks
+	}
+	for _, k := range list {
+		twoVoice[k] = true
+	}
 	return &Runtime{lib: cfg.Library, opt: cfg.Opt, router: cfg.Router, decider: cfg.Decider, registry: reg,
-		tools: tools, source: cfg.Source, filter: compliance.NewFilter(), logger: logger.Named("team")}
+		tools: tools, source: cfg.Source, filter: compliance.NewFilter(), logger: logger.Named("team"), twoVoice: twoVoice}
 }
 
 // mediaPlaybooks wait for an approved Creative Plan before any copy is written.
@@ -318,6 +331,12 @@ func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
 		short, findings := r.review(ctx, &res.Steps[i], spec, tc, k)
 		res.Shortlist = append(res.Shortlist, short...)
 		res.Findings = append(res.Findings, findings...)
+		if st := res.Steps[i]; st.Contract == "video_script" && st.Output != nil && r.lib != nil {
+			var v VideoScript
+			if json.Unmarshal(st.Output, &v) == nil {
+				res.Findings = append(res.Findings, QualityFindings(v, r.lib.Quality)...)
+			}
+		}
 	}
 	res.Route = RouteDone
 	res.NextActions = nextActions(spec.Playbook)
@@ -530,6 +549,9 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 		}
 		parsed, perr := parseContract(st.playbook.OutputContract, reply, n)
 		if perr == nil {
+			if st.playbook.OutputContract == "video_script" {
+				parsed = r.finishVideoScript(parsed, st.playbook.Key, spec.Approach)
+			}
 			out.Output, out.Error = parsed, ""
 			return out
 		}

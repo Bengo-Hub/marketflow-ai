@@ -290,6 +290,38 @@ func TestCachedCueFollowsItsText(t *testing.T) {
 	}
 }
 
+// A revision reuses the earlier version's music only for the same prompt, a length it still
+// fits and a file that still exists (WP1: music is not paid for twice).
+func TestCachedMusicReuse(t *testing.T) {
+	files := &sceneFiles{files: map[string][]byte{"m1": []byte("music")}}
+	a := &Ads{files: files}
+	ctx := context.Background()
+	c := &MusicCache{Prompt: "warm hopeful", URL: "https://media.example/m1.mp3", Key: "m1", Seconds: 30}
+	req := AdRequest{Music: c}
+	if a.cachedMusic(ctx, req, "warm hopeful", 30) == nil {
+		t.Fatal("same prompt and length: reused")
+	}
+	if a.cachedMusic(ctx, req, "warm hopeful", 28) == nil {
+		t.Fatal("a slightly shorter ad: the track still fits")
+	}
+	if a.cachedMusic(ctx, req, "upbeat", 30) != nil {
+		t.Fatal("another prompt: made again")
+	}
+	if a.cachedMusic(ctx, req, "warm hopeful", 45) != nil {
+		t.Fatal("a longer ad: the track would end early")
+	}
+	if a.cachedMusic(ctx, req, "warm hopeful", 15) != nil {
+		t.Fatal("a much shorter ad: made again rather than cut")
+	}
+	gone := AdRequest{Music: &MusicCache{Prompt: "warm hopeful", URL: "https://media.example/x.mp3", Key: "missing", Seconds: 30}}
+	if a.cachedMusic(ctx, gone, "warm hopeful", 30) != nil {
+		t.Fatal("a purged file: made again")
+	}
+	if a.cachedMusic(ctx, AdRequest{}, "warm hopeful", 30) != nil {
+		t.Fatal("no earlier music: made")
+	}
+}
+
 // A score-level ad: each cue is generated and placed, music is generated and ducked under the
 // voice, and the result is at the feeds' loudness. When music fails the ad is still made, with
 // no music and no music cost. Needs ffmpeg.

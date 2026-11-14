@@ -70,6 +70,15 @@ type AudioConfig struct {
 	MusicModel string
 	// Deliveries override the voice settings per delivery (MF_VOICE_DELIVERY_SETTINGS).
 	Deliveries map[string]DeliveryOverride
+	// TwoVoiceDeliveries are the deliveries whose scripts may be read by two voices taking
+	// turns (owner, 2026-11-14: UGC only); every other delivery is one voice.
+	TwoVoiceDeliveries map[string]bool
+	// SpeakerVoices are the default voices per speaker gender, best first (ids or name
+	// prefixes); a gender without a list ranks the account's voices of that gender.
+	SpeakerVoices map[string][]string
+	// VoiceMatchLUFS levels every scene voice of an ad read by two or more voices to the same
+	// loudness before the mix, so neither voice sits above the other (0 turns it off).
+	VoiceMatchLUFS float64
 }
 
 // Audio defaults (owner, 2026-11-12).
@@ -80,6 +89,10 @@ const (
 	minSFXSeconds      = 1.0
 	maxSFXSeconds      = 3.0
 	maxSFXChars        = 60
+	// defaultVoiceMatchLUFS is a speech level with headroom under the -14 LUFS master.
+	defaultVoiceMatchLUFS = -18.0
+	minVoiceMatchLUFS     = -30.0
+	maxVoiceMatchLUFS     = -10.0
 )
 
 // DefaultAudioConfig is the one place the audio defaults live.
@@ -97,6 +110,9 @@ func DefaultAudioConfig() AudioConfig {
 		Duck:        Ducking{Threshold: 0.02, Ratio: 8, AttackMS: 20, ReleaseMS: 350, FadeIn: 0.5, FadeOut: 1.5},
 		MusicStyle:  defaultMusicStyle,
 		MusicModel:  defaultMusicModel,
+		// Two voices for UGC only (owner, 2026-11-14).
+		TwoVoiceDeliveries: map[string]bool{DeliveryUGC: true},
+		VoiceMatchLUFS:     defaultVoiceMatchLUFS,
 	}
 }
 
@@ -194,7 +210,64 @@ func AudioConfigFromEnv(getenv func(string) string) (AudioConfig, error) {
 			cfg.Deliveries = d
 		}
 	}
+	if v := get("MF_AD_TWO_VOICE_DELIVERIES"); v != "" {
+		if d, err := parseDeliveryList(v); err != nil {
+			errs = append(errs, fmt.Errorf("MF_AD_TWO_VOICE_DELIVERIES: %w", err))
+		} else {
+			cfg.TwoVoiceDeliveries = d
+		}
+	}
+	for gender, key := range map[string]string{"male": "MF_ELEVENLABS_MALE_VOICES", "female": "MF_ELEVENLABS_FEMALE_VOICES"} {
+		if list := splitVoiceList(get(key)); len(list) > 0 {
+			if cfg.SpeakerVoices == nil {
+				cfg.SpeakerVoices = map[string][]string{}
+			}
+			cfg.SpeakerVoices[gender] = list
+		}
+	}
+	switch v := get("MF_VOICE_MATCH_LUFS"); {
+	case v == "":
+	case strings.EqualFold(v, "off"):
+		cfg.VoiceMatchLUFS = 0
+	default:
+		l, err := strconv.ParseFloat(v, 64)
+		if err != nil || math.IsNaN(l) || l < minVoiceMatchLUFS || l > maxVoiceMatchLUFS {
+			errs = append(errs, fmt.Errorf("MF_VOICE_MATCH_LUFS must be off or a level from %g to %g", minVoiceMatchLUFS, maxVoiceMatchLUFS))
+		} else {
+			cfg.VoiceMatchLUFS = l
+		}
+	}
 	return cfg, errors.Join(errs...)
+}
+
+// parseDeliveryList reads "ugc,story": known deliveries only; "none" or "off" is an empty set.
+func parseDeliveryList(s string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if v := strings.ToLower(strings.TrimSpace(s)); v == "none" || v == "off" {
+		return out, nil
+	}
+	for _, k := range strings.Split(s, ",") {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k == "" {
+			continue
+		}
+		if _, ok := Deliveries[k]; !ok {
+			return nil, fmt.Errorf("unknown delivery %q", k)
+		}
+		out[k] = true
+	}
+	return out, nil
+}
+
+// splitVoiceList reads a comma-separated list of voice ids or names.
+func splitVoiceList(s string) []string {
+	var out []string
+	for _, x := range strings.Split(s, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // SFXCue is one sound cue placed in the ad.
@@ -209,8 +282,13 @@ type AudioMix struct {
 	VoiceFilter string   // run on each scene voice ("" for none)
 	SFX         []SFXCue // cues at their times
 	SFXGain     float64
-	// Duck, when set, ducks the music under the voice and fades it (the score level).
+	// Duck, when set, ducks the music under the voice and fades it (the score level). The voice
+	// it keys on is every scene voice laid end to end, so with two voices the music dips under
+	// whichever one is speaking.
 	Duck *Ducking
+	// VoiceMatchLUFS, when not 0, levels each scene voice to this loudness before they are
+	// joined; the assembler applies it only when the scenes have two or more speakers.
+	VoiceMatchLUFS float64
 }
 
 // stereo48 makes every input of a ducked mix one format, so the sidechain sees the voice as it

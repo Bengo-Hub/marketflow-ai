@@ -50,6 +50,9 @@ type AdScene struct {
 	// cut match the words exactly). The scenes' audio is laid end to end; a scene without
 	// it is silent under the music.
 	AudioURL string `json:"audio_url,omitempty"`
+	// Speaker is who reads the scene in a two-voice ad ("" in a one-voice ad). With two or
+	// more speakers each scene voice is levelled to AudioMix.VoiceMatchLUFS before the join.
+	Speaker string `json:"speaker,omitempty"`
 }
 
 // AssembleRequest is a whole ad.
@@ -256,7 +259,7 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 	voicePath := ""
 	switch {
 	case sceneAudio(req.Scenes):
-		if voicePath, err = a.sceneVoice(ctx, dir, req.Scenes, req.Mix.VoiceFilter); err != nil {
+		if voicePath, err = a.sceneVoice(ctx, dir, req.Scenes, req.Mix); err != nil {
 			return nil, fmt.Errorf("media: scene voice: %w", err)
 		}
 	case req.VoiceURL != "":

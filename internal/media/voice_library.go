@@ -197,7 +197,7 @@ func (l *voiceLibrary) get(ctx context.Context, key, path string, out any) error
 func premadeVoices() []LibraryVoice {
 	out := make([]LibraryVoice, 0, len(VoiceCatalog))
 	for name, id := range VoiceCatalog {
-		out = append(out, LibraryVoice{ID: id, Name: name, Premade: true})
+		out = append(out, LibraryVoice{ID: id, Name: name, Premade: true, Gender: premadeGender[name]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
