@@ -27,7 +27,6 @@ func TestAssignSpeakers(t *testing.T) {
 		scenes   []Scene
 		twoVoice bool
 		want     []string
-		actor    string // the saved actor's gender, "" for none
 	}{
 		{"the writer's turns are kept", []Scene{
 			sc("b_roll", "Is a POS too expensive for a duka?", "female"),
@@ -68,20 +67,28 @@ func TestAssignSpeakers(t *testing.T) {
 		{"loose labels are read", []Scene{
 			sc("b_roll", "A.", "Woman"), sc("end_card", "B.", "M")}, true,
 			[]string{"female", "male"}},
-		{"a saved male actor keeps the presenter male", []Scene{
-			sc("presenter", "Hi, quick tip.", "female"),
-			sc("b_roll", "Here's the thing most people miss.", "female"),
-			sc("presenter", "So try it this way.", "female"),
-			sc("end_card", "Book on WhatsApp.", "")}, true,
-			[]string{"male", "female", "male", "female"}, "male"},
 	}
 	for _, tc := range cases {
 		v := VideoScript{Scenes: tc.scenes}
-		AssignSpeakers(&v, tc.twoVoice, tc.actor)
+		AssignSpeakers(&v, tc.twoVoice, "")
 		got := speakersOf(v)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Errorf("%s: speakers = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A saved actor decides the presenter's voice (owner, 2026-11-14: the script follows the actor).
+func TestAssignSpeakersFollowsTheActor(t *testing.T) {
+	v := VideoScript{Scenes: []Scene{
+		{Shot: "presenter", Voiceover: "Hi, quick tip.", Speaker: "female"},
+		{Shot: "b_roll", Voiceover: "Here's the thing most people miss.", Speaker: "female"},
+		{Shot: "presenter", Voiceover: "So try it this way.", Speaker: "female"},
+		{Shot: "end_card", Voiceover: "Book on WhatsApp."},
+	}}
+	AssignSpeakers(&v, true, "male")
+	if got := strings.Join(speakersOf(v), ","); got != "male,female,male,female" {
+		t.Fatalf("speakers = %s", got)
 	}
 }
 

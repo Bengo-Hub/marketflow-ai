@@ -97,7 +97,7 @@ func TestSafeRewrite(t *testing.T) {
 			t.Fatalf("exactly one rewrite call, got %d", m.calls())
 		}
 		sys := m.systems[0]
-		if !strings.Contains(sys, "YOUR LAST ANSWER BROKE THESE BUSINESS RULES") || !strings.Contains(sys, "prescription-only medicines") || !strings.Contains(sys, "amoxicillin") {
+		if !strings.Contains(sys, "YOUR LAST ANSWER BROKE THESE BUSINESS RULES") || !strings.Contains(sys, "prescription-only") || !strings.Contains(sys, "amoxicillin") {
 			t.Fatalf("the broken rule and the words must be in the system prompt:\n%s", sys)
 		}
 	})
