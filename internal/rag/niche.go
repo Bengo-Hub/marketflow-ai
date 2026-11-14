@@ -4,6 +4,8 @@ import "strings"
 
 // detectNiche infers businessType from question keywords when the client does not
 // send an explicit business_type. Returns "flp", "codevertex", "cafe", or "generic".
+// It never overrides a type the caller sent: the tenant's own business type always wins
+// (Sprint 7 #34; the chat handler fills it from the tenant before this runs).
 // This is a fast heuristic — no LLM call, runs in microseconds.
 func detectNiche(question string) string {
 	q := strings.ToLower(question)
@@ -94,7 +96,8 @@ func scopeGuard(businessType, question string) bool {
 		}
 	}
 
-	switch businessType {
+	// The MarketFlow business types (retail, salon, pharmacy...) use the generic blocks.
+	switch promptPersona(businessType) {
 	case "flp":
 		// FLP widgets are strictly health/wellness + FBO business assistants.
 		// Block tech, general coding, academic homework, cooking, finance, etc.

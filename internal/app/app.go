@@ -382,7 +382,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 					return tc.ChatTurnsDaily
 				}
 				return 0
-			})
+			}).
+		// The tenant's own business type picks the chat's compliance rules (Sprint 7 #34).
+		WithTenantType(func(ctx context.Context, tenantID uuid.UUID) (string, bool) {
+			if tc, err := osContext.Load(ctx, tenantID); err == nil {
+				return tc.BusinessType, tc.BusinessTypeChosen
+			}
+			return "", false
+		})
 	// ── Marketing OS (Sprint 21): decide layer, library, optimiser, team ──
 	lib := library.MustLoad()
 	decider := decide.New(decide.Config{

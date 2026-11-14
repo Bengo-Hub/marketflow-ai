@@ -14,6 +14,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/chatallowance"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
@@ -36,6 +37,16 @@ type ChatHandler struct {
 	planTurns func(ctx context.Context, tenantID uuid.UUID) int
 	// kesPerUSD is the platform rate for showing KES values in USD (usage card).
 	kesPerUSD func(ctx context.Context) (float64, bool)
+	// tenantType reads the tenant's own business type and whether the owner chose it (cached
+	// tenant context); nil or "" leaves the request and auto-detect to decide.
+	tenantType func(ctx context.Context, tenantID uuid.UUID) (string, bool)
+}
+
+// WithTenantType makes the tenant's own business type pick the chat's compliance rules
+// (Sprint 7 #34).
+func (h *ChatHandler) WithTenantType(f func(ctx context.Context, tenantID uuid.UUID) (businessType string, chosen bool)) *ChatHandler {
+	h.tenantType = f
+	return h
 }
 
 // WithAllowance prices chat turns with the daily free allowance.
@@ -190,7 +201,7 @@ type chatRequest struct {
 	Question     string `json:"question"`
 	SessionID    string `json:"session_id"`
 	Stream       bool   `json:"stream"`
-	BusinessType string `json:"business_type"` // "flp" | "generic" | "" (pipeline auto-detects)
+	BusinessType string `json:"business_type"` // a compliance business type key, "cafe", "codevertex" or "" (auto-detect); the tenant's own type wins
 }
 
 // Chat handles POST /api/v1/chat
@@ -258,14 +269,14 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Detect if this is a public/widget request (no auth required).
 	isPublic := strings.Contains(r.URL.Path, "/public/")
 
-	// X-Widget-Persona is a fallback when the widget does not explicitly send
-	// business_type in the request body (e.g. older embed codes or non-MarketFlow widgets).
-	businessType := req.BusinessType
-	if businessType == "" {
-		if persona := r.Header.Get("X-Widget-Persona"); persona != "" {
-			businessType = personaToBusinessType(persona)
-		}
+	// The tenant's own business type wins (Sprint 7 #34). X-Widget-Persona is a fallback when
+	// the widget does not explicitly send business_type in the request body (e.g. older embed
+	// codes or non-MarketFlow widgets); with neither, the pipeline auto-detects.
+	tenantType, chosen := "", false
+	if persist && h.tenantType != nil {
+		tenantType, chosen = h.tenantType(r.Context(), tenantID)
 	}
+	businessType := chooseBusinessType(tenantType, chosen, req.BusinessType, r.Header.Get("X-Widget-Persona"))
 
 	input := rag.ChatInput{
 		TenantID:     tenantID,
@@ -625,6 +636,30 @@ func extractTenantID(r *http.Request) (uuid.UUID, error) {
 	return slugUUID, nil
 }
 
+// chooseBusinessType picks the chat's business type. A tenant's own type wins over the request
+// body, the widget persona header and auto-detect when the owner chose it (chosen, generic
+// included: owner, 2026-11-14) or when it is a specific type; a request naming the same type (a
+// "cafe" widget on a restaurant) keeps its value, so the widget keeps its persona. A tenant that
+// never chose and is still on "generic", or has no known type, leaves the request, then the
+// persona header, then auto-detect (an empty result) to decide, so the cafe and Codevertex
+// widgets keep working.
+func chooseBusinessType(tenantType string, chosen bool, requested, persona string) string {
+	if compliance.Known(tenantType) && (chosen || compliance.Normalize(tenantType) != compliance.TypeGeneric) {
+		own := compliance.Normalize(tenantType)
+		if requested != "" && compliance.Normalize(requested) == own {
+			return requested
+		}
+		return own
+	}
+	if requested != "" {
+		return requested
+	}
+	if persona != "" {
+		return personaToBusinessType(persona)
+	}
+	return ""
+}
+
 // personaToBusinessType maps the X-Widget-Persona header value to a businessType
 // recognised by the RAG pipeline. Used when the widget embed does not send business_type.
 func personaToBusinessType(persona string) string {
@@ -636,6 +671,9 @@ func personaToBusinessType(persona string) string {
 		return "flp"
 	case strings.Contains(p, "codevertex"):
 		return "codevertex"
+	case compliance.Known(p):
+		// A MarketFlow business type or alias ("salon", "hotel", "pharmacy").
+		return compliance.Normalize(p)
 	default:
 		return "generic"
 	}

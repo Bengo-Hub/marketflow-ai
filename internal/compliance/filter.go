@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -19,21 +20,11 @@ type Filter struct {
 	weightTriggers      []string
 }
 
-// genericHardBlocks apply to every tenant that is not FLP. They are compiled once. They cover
-// medical cure claims and financial promises that are misleading for any business (Consumer
-// Protection Act 2012). "treat" and "heal" are deliberately not here: everyday copy such as
-// "treat yourself" would be blocked for cafes and shops.
-var genericHardBlocks = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bcure[sd]?\b|\bcuring\b`),
-	regexp.MustCompile(`(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b`),
-	regexp.MustCompile(`(?i)\bguaranteed?\s+income\b`),
-	regexp.MustCompile(`(?i)\bget\s+rich\b`),
-	regexp.MustCompile(`(?i)\beasy\s+money\b`),
-	regexp.MustCompile(`(?i)\bmake\s+money\s+fast\b`),
-	regexp.MustCompile(`(?i)\bguaranteed?\s+(returns?|profits?)\b`),
-	regexp.MustCompile(`(?i)\brisk[\s-]free\s+(investment|returns?|profits?)\b`),
-	regexp.MustCompile(`(?i)\bdouble\s+your\s+(money|investment)\b`),
-}
+// The rules every tenant that is not FLP gets (the baseline blocks) and each business type's own
+// blocks live in data/business_types.yaml (business_types.go). The baseline covers medical cure
+// claims and financial promises that are misleading for any business (Consumer Protection Act
+// 2012). "treat" and "heal" are deliberately not in it: everyday copy such as "treat yourself"
+// would be blocked for cafes and shops.
 
 type substituteRule struct {
 	pattern     *regexp.Regexp
@@ -114,25 +105,52 @@ func (f *Filter) Check(response string) (string, bool, string) {
 }
 
 // CheckGeneric validates an AI response for generic (non-FLP) tenants.
-// Applies minimal safety rules (no medical claims, no guaranteed income) but
+// Applies the shared baseline (no medical claims, no guaranteed income) but
 // skips FLP-specific disclaimers and product-name substitutions.
 func (f *Filter) CheckGeneric(response string) (string, bool, string) {
-	for _, re := range genericHardBlocks {
-		if re.MatchString(response) {
-			return "", true, "blocked pattern: " + re.String()
-		}
+	return f.CheckForTenant(response, TypeGeneric)
+}
+
+// CheckForTenant applies the tenant's business type rules (Sprint 7 #34). FLP keeps its full
+// compliance rules (Check: disclaimers, substitutions and blocked phrases). Every other type gets
+// the shared baseline blocks plus its own blocks from data/business_types.yaml; an empty,
+// unknown or legacy type ("codevertex") gets the generic rules. The text is never rewritten for
+// these types: it passes as it is or is blocked with a reason the owner can read.
+func (f *Filter) CheckForTenant(response, businessType string) (string, bool, string) {
+	t := rules.lookup(businessType)
+	if t.Strict == TypeFLP {
+		return f.Check(response)
+	}
+	if reason, blocked := checkBlocks(t, response); blocked {
+		return "", true, reason
 	}
 	return response, false, ""
 }
 
-// CheckForTenant routes to the appropriate filter based on business_type.
-// FLP uses full compliance rules (disclaimers + blocked phrases).
-// Codevertex and generic use minimal safety rules only.
-func (f *Filter) CheckForTenant(response, businessType string) (string, bool, string) {
-	if businessType == "flp" {
-		return f.Check(response)
+// Violations lists every rule the text breaks for the business type, each with the words that
+// broke it, in language a model can act on; empty when the text passes. The safe rewrite (one
+// more model try) adds them to the prompt (owner, 2026-11-14).
+func (f *Filter) Violations(response, businessType string) []string {
+	t := rules.lookup(businessType)
+	var out []string
+	add := func(reason string, re *regexp.Regexp) {
+		if m := re.FindString(response); m != "" {
+			out = append(out, fmt.Sprintf("%s (you wrote %q)", reason, m))
+		}
 	}
-	return f.CheckGeneric(response)
+	if t.Strict == TypeFLP {
+		for _, re := range f.blockedPatterns {
+			add("Forever Living rule: no medical cure, treatment or prevention claims, no income promises", re)
+		}
+		return out
+	}
+	for _, b := range rules.baselineBlocks {
+		add(b.Reason, b.re)
+	}
+	for _, b := range t.Blocks {
+		add(t.Label+" rule: "+b.Reason, b.re)
+	}
+	return out
 }
 
 // substituteLanguage replaces prohibited medical claims with approved language.

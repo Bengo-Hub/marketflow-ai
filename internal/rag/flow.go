@@ -243,6 +243,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		ares, aerr := p.agentLoop.Run(ctx, agentInput)
 		if aerr == nil && ares != nil && ares.Answer != "" {
 			ares.Answer = ScreenOutput(ares.Answer)
+			// A blocked answer gets one rewrite with the broken rules (rewrite.go) before the filter.
+			ares.Answer = p.rewriteIfBlocked(ctx, input, rewriteMessages(sys, input), ares.Answer)
 			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding)
 			p.logger.Info("agentic chat completed",
 				zap.Int("iterations", ares.Iterations),
@@ -289,6 +291,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	model := call.Model
 
 	raw := ScreenOutput(resp.Choices[0].Message.Content)
+	// A blocked answer gets one rewrite with the broken rules (rewrite.go) before the filter.
+	raw = p.rewriteIfBlocked(ctx, input, messages, raw)
 	filtered := p.filterAndCache(ctx, input, raw, embedding)
 	p.logger.Debug("single-shot completed", zap.Duration("latency", time.Since(started)))
 	return &ChatResult{

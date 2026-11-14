@@ -287,7 +287,7 @@ func (h *OSHandler) runTurn(ctx context.Context, r *http.Request, tenantID uuid.
 	out := askResponse{RunID: runID, Result: res}
 	if res.Route == team.RouteChat && h.pipeline != nil {
 		sink.progress(team.Progress{Stage: "answering", Member: "manager", Label: "Looking up the answer"})
-		chat, err := h.pipeline.Chat(ctx, rag.ChatInput{TenantID: tenantID, SessionID: uuid.New(), Question: req.Text, BusinessType: "generic"})
+		chat, err := h.pipeline.Chat(ctx, rag.ChatInput{TenantID: tenantID, SessionID: uuid.New(), Question: req.Text, BusinessType: h.chatBusinessType(ctx, tenantID)})
 		if err != nil {
 			h.refundUnlessPaid(r, tenantID, turnKey, meter)
 			sink.fail(http.StatusInternalServerError, "AI processing failed")

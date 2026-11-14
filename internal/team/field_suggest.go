@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 )
 
@@ -91,7 +92,8 @@ func (r *Runtime) SuggestField(ctx context.Context, in FieldSuggestRequest) (*Fi
 	if spec.MaxItems > 0 {
 		shape = fmt.Sprintf(`Reply with JSON only: {"items":[""]}, at most %d items, each at most %d characters.`, spec.MaxItems, spec.MaxChars)
 	}
-	system := fieldSuggestSystem + "\nWrite in " + lang + ".\nField: " + spec.Label + ": " + spec.Ask + ".\n" + shape
+	system := fieldSuggestSystem + "\nWrite in " + lang + ".\nField: " + spec.Label + ": " + spec.Ask + ".\n" + shape +
+		"\n" + compliance.PromptRules(tc.BusinessType)
 
 	var facts strings.Builder
 	facts.WriteString("BUSINESS TYPE: " + firstNonEmptyStr(tc.BusinessType, "generic") + "\n")
