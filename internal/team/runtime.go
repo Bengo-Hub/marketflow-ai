@@ -317,7 +317,7 @@ func (r *Runtime) Ask(ctx context.Context, req Request) (*Result, error) {
 		}
 		report(ctx, Progress{Stage: "step", Member: st.member.Key,
 			Label: fmt.Sprintf("%s (%s) is working on: %s", st.member.Name, st.member.Role, st.playbook.Name)})
-		out := r.runStep(ctx, req.TenantID, st, spec, tc, prior.String(), n)
+		out := r.runStepSafe(ctx, req.TenantID, st, spec, tc, prior.String(), n)
 		res.Steps = append(res.Steps, out)
 		if out.Contract == "ad_copy_batch" && out.Output != nil {
 			res.CopyBatchRun = true

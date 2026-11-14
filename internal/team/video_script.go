@@ -196,7 +196,7 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 	task := scriptTask(in) + approachTask(r.lib, tpl, in.Reviews, twoVoice)
 	spec := &promptopt.TaskSpec{Playbook: pb.Key, Specialist: m.Key, OptimisedBrief: task, Original: task, Approach: tpl.Key,
 		Entities: promptopt.Entities{Offering: in.Offering, Objective: in.Objective, Audience: in.Audience, Language: in.Language}}
-	step := r.runStep(ctx, in.TenantID, plannedStep{member: m, playbook: pb, task: task}, spec, tc, "", 0)
+	step := r.runStepSafe(ctx, in.TenantID, plannedStep{member: m, playbook: pb, task: task}, spec, tc, "", 0)
 	out := &VideoScriptResult{}
 	if note != "" {
 		out.Findings = append(out.Findings, Finding{Quote: in.Approach, Severity: "low", Issue: note,
