@@ -376,10 +376,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// Owner, 2026-11-11: chat free up to a daily allowance, then 1 credit per 5 turns.
 		WithAllowance(chatallowance.New(redisClient, cfg.Redis.Namespace, chatallowance.DefaultFreePerDay, chatallowance.DefaultTurnsPerCredit),
 			// The free turns a day follow the business's plan (chat_turns_daily), read from the
-			// cached tenant context; the default applies when the plan sets none.
+			// cached tenant context. A plan that sets none (PowerSuite Basic) gives no free turns
+			// (owner, 2026-11-14); the default applies only when the plan is unknown.
 			func(ctx context.Context, tenantID uuid.UUID) int {
 				if tc, err := osContext.Load(ctx, tenantID); err == nil {
-					return tc.ChatTurnsDaily
+					return chatallowance.PlanFreeTurns(tc.HasPlan, tc.Exempt, tc.ChatTurnsDaily)
 				}
 				return 0
 			}).

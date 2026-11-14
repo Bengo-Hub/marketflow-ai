@@ -84,7 +84,10 @@ func (c *HTTPCreditSpender) SpendFor(ctx context.Context, tenantID uuid.UUID, un
 // Balance returns the tenant's spendable AI credits: the plan allowance left
 // plus purchased bundles. unlimited is true for an unlimited allowance; exempt
 // tenants (the platform) report unlimited too. It uses the check endpoint with
-// zero units, so nothing is spent.
+// zero units, so nothing is spent. Contract (subscriptions-api credits.Check,
+// fixed 2026-11-14; before that it never filled the balances and every tenant
+// read 0): bundle_balance is the bought credits, quota_balance the live
+// included allowance (0 when the plan grants none, -1 when unlimited).
 func (c *HTTPCreditSpender) Balance(ctx context.Context, tenantID uuid.UUID) (credits int64, unlimited bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("%s/api/v1/s2s/credits/ai_credits/check?tenant_id=%s&units=0", c.baseURL, tenantID), nil)
