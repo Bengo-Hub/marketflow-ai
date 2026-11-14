@@ -1,0 +1,90 @@
+# Facets of the template gallery (Marketing team > Templates): what each playbook's
+# starters are for, what they produce, when they were added and, for media jobs, the
+# registry tier their price comes from. The gallery's filter labels come from here too,
+# so the UI never hard-codes them. Every playbook must have an entry (Library.validate).
+version: 1
+
+goals:
+  - {key: ads, label: Ads}
+  - {key: content, label: Content and posts}
+  - {key: copy, label: Copy and writing}
+  - {key: analysis, label: Review and analysis}
+  - {key: strategy, label: Strategy and planning}
+  - {key: leads, label: Leads and customers}
+  - {key: seo, label: Search and AI search}
+  - {key: brand, label: Brand}
+
+outputs:
+  - {key: video, label: Video}
+  - {key: poster, label: Poster}
+  - {key: copy, label: Copy}
+  - {key: plan, label: Plan}
+  - {key: report, label: Report}
+  - {key: profile, label: Brand profile}
+
+languages:
+  - {key: en, label: English}
+  - {key: sw, label: Swahili}
+
+# A template names a channel when one of its words appears in the title or the request.
+channels:
+  - {key: facebook, label: Facebook, words: [facebook]}
+  - {key: instagram, label: Instagram, words: [instagram]}
+  - {key: tiktok, label: TikTok, words: [tiktok]}
+  - {key: whatsapp, label: WhatsApp, words: [whatsapp]}
+  - {key: google, label: Google, words: [google, seo]}
+  - {key: linkedin, label: LinkedIn, words: [linkedin]}
+  - {key: email, label: Email, words: [email, newsletter, barua pepe]}
+  - {key: sms, label: SMS, words: [sms]}
+  - {key: ai_assistants, label: AI assistants, words: [ai assistants, ai answers]}
+
+# The inputs a template asks the owner for (its ${...} slots and the playbook's required
+# inputs), with the words the filter shows.
+inputs:
+  - {key: offering, label: A product or service}
+  - {key: budget, label: A budget}
+  - {key: platforms, label: Platforms}
+  - {key: audience, label: An audience}
+  - {key: objective, label: An objective}
+  - {key: period, label: A period}
+  - {key: language, label: A language}
+  - {key: goal, label: A goal}
+  - {key: topic, label: A topic or text}
+  - {key: url, label: A website link}
+  - {key: competitors, label: Competitors}
+  - {key: winners, label: Winning ads}
+
+# Per playbook: goal, output, the date its starters were added (newest sort) and, for media
+# jobs priced by the registry, the tier (team.mediaPlaybooks must agree; a team test checks).
+playbooks:
+  ad-creative: {goal: ads, output: copy, added: "2026-10-22", tier: poster}
+  ads: {goal: ads, output: report, added: "2026-10-22"}
+  ab-testing: {goal: analysis, output: plan, added: "2026-10-22"}
+  copywriting: {goal: copy, output: copy, added: "2026-10-22"}
+  copy-editing: {goal: copy, output: copy, added: "2026-10-22"}
+  social: {goal: content, output: copy, added: "2026-10-22"}
+  video-script: {goal: ads, output: video, added: "2026-10-22", tier: template_video_30s}
+  ugc-video: {goal: ads, output: video, added: "2026-10-22", tier: presenter_30s}
+  poster-brief: {goal: ads, output: poster, added: "2026-10-22", tier: poster}
+  emails: {goal: content, output: copy, added: "2026-10-22"}
+  whatsapp-sms: {goal: content, output: copy, added: "2026-10-22"}
+  customer-research: {goal: analysis, output: report, added: "2026-10-22"}
+  competitor-profiling: {goal: analysis, output: report, added: "2026-10-22"}
+  lead-magnets: {goal: leads, output: plan, added: "2026-10-22"}
+  referrals: {goal: leads, output: plan, added: "2026-10-22"}
+  community-marketing: {goal: leads, output: plan, added: "2026-10-22"}
+  revops: {goal: leads, output: plan, added: "2026-10-22"}
+  sales-enablement: {goal: leads, output: copy, added: "2026-10-22"}
+  attribution-analytics: {goal: analysis, output: report, added: "2026-10-22"}
+  seo-audit: {goal: seo, output: report, added: "2026-10-22"}
+  ai-seo: {goal: seo, output: plan, added: "2026-10-22"}
+  marketing-psychology: {goal: analysis, output: report, added: "2026-10-22"}
+  marketing-loops: {goal: strategy, output: plan, added: "2026-10-22"}
+  marketing-plan: {goal: strategy, output: plan, added: "2026-10-22"}
+  content-strategy: {goal: content, output: plan, added: "2026-10-22"}
+  offers: {goal: strategy, output: plan, added: "2026-10-22"}
+  launch: {goal: strategy, output: plan, added: "2026-10-22"}
+  brand-context: {goal: brand, output: profile, added: "2026-10-22"}
+  marketing-ideas: {goal: strategy, output: plan, added: "2026-10-22"}
+  influencer-marketing: {goal: strategy, output: plan, added: "2026-10-22"}
+  events: {goal: strategy, output: plan, added: "2026-10-22"}

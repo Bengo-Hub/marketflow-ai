@@ -114,7 +114,7 @@ playbooks:
       - No real public figures, no voice cloning without recorded consent.
     starters:
       - {title: "UGC video of someone showing my product", template: "Make a UGC-style video ad of a presenter showing ${offering}, in ${language}, for ${platforms}."}
-      - {title: "Video ya mtu akionyesha bidhaa", template: "Nataka video ya mtu akionyesha ${offering} kama za TikTok, bajeti ${budget}."}
+      - {title: "Video ya mtu akionyesha bidhaa", template: "Nataka video ya mtu akionyesha ${offering} kama za TikTok, bajeti ${budget}.", language: sw}
 
   - key: poster-brief
     name: Poster and static image ad

@@ -369,12 +369,23 @@ func (h *OSHandler) Quote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, plan)
 }
 
-// Templates handles GET /api/v1/os/library/templates.
+// Templates handles GET /api/v1/os/library/templates: the templates with their facets, a media
+// template's credit price from the registry, and the facet labels the gallery's filters show.
 func (h *OSHandler) Templates(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"templates": h.lib.Templates(r.URL.Query().Get("q"), r.URL.Query().Get("category"), limit),
-	})
+	list := h.lib.Templates(r.URL.Query().Get("q"), r.URL.Query().Get("category"), limit)
+	if h.registry != nil {
+		reg := h.registry(r.Context())
+		for i := range list {
+			if list[i].Tier == "" {
+				continue
+			}
+			if c, err := reg.Credits(list[i].Tier); err == nil {
+				list[i].Credits = &c
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": list, "facets": h.lib.Facets()})
 }
 
 type teamMember struct {

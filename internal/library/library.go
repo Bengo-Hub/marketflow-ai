@@ -25,7 +25,7 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-//go:embed data/house_rules.yaml data/team.yaml data/playbooks/*.yaml data/prompts.json
+//go:embed data/house_rules.yaml data/team.yaml data/playbooks/*.yaml data/prompts.json data/template_facets.yaml
 var dataFS embed.FS
 
 // Source credits where a playbook was distilled from.
@@ -39,6 +39,8 @@ type Source struct {
 type Starter struct {
 	Title    string `yaml:"title" json:"title"`
 	Template string `yaml:"template" json:"template"`
+	// Language is the starter's language, "en" when empty (template_facets.yaml lists them).
+	Language string `yaml:"language" json:"language,omitempty"`
 }
 
 // Playbook is one marketing job a specialist knows how to do.
@@ -100,6 +102,7 @@ type Library struct {
 	members    map[string]Member
 	memberKeys []string
 	prompts    []Prompt
+	facets     TemplateFacets // the template gallery's facets (template_facets.go)
 
 	idxOnce sync.Once
 	pbIdx   map[string][]string // playbook key -> tokens
@@ -156,6 +159,9 @@ func Load() (*Library, error) {
 	}
 	if err := json.Unmarshal(raw, &lib.prompts); err != nil {
 		return nil, fmt.Errorf("library: prompts.json: %w", err)
+	}
+	if err := lib.loadFacets(); err != nil {
+		return nil, err
 	}
 	if err := lib.validate(); err != nil {
 		return nil, err
@@ -230,7 +236,7 @@ func (l *Library) validate() error {
 			}
 		}
 	}
-	return nil
+	return l.validateFacets()
 }
 
 // Playbook returns a playbook by key.
@@ -274,6 +280,20 @@ type Template struct {
 	Playbook string `json:"playbook,omitempty"`
 	Category string `json:"category"`
 	Source   string `json:"source"`
+	// Facets of a playbook starter (template_facets.go); curated prompts carry none. Rank is
+	// the library's recommended order.
+	Specialist string   `json:"specialist,omitempty"`
+	Goal       string   `json:"goal,omitempty"`
+	Output     string   `json:"output,omitempty"`
+	Language   string   `json:"language,omitempty"`
+	Channels   []string `json:"channels,omitempty"`
+	Inputs     []string `json:"inputs,omitempty"`
+	Added      string   `json:"added,omitempty"`
+	Tier       string   `json:"tier,omitempty"`
+	Rank       int      `json:"rank"`
+	// Credits is the registry price of a media template's tier (set by the handler); nil for a
+	// text template, which uses the daily chat turns.
+	Credits *int `json:"credits,omitempty"`
 }
 
 // Templates lists starters (playbook-backed, for owners) then curated prompts
@@ -289,7 +309,9 @@ func (l *Library) Templates(query, category string, limit int) []Template {
 			if category != "" && !strings.EqualFold(category, p.Specialist) {
 				continue
 			}
-			out = append(out, Template{ID: fmt.Sprintf("%s:%d", p.Key, i), Title: s.Title, Template: s.Template, Playbook: p.Key, Category: cat, Source: "marketflow"})
+			t := Template{ID: fmt.Sprintf("%s:%d", p.Key, i), Title: s.Title, Template: s.Template, Playbook: p.Key, Category: cat, Source: "marketflow"}
+			l.decorate(&t, p, s)
+			out = append(out, t)
 		}
 	}
 	if q := strings.TrimSpace(query); q != "" {
@@ -308,6 +330,9 @@ func (l *Library) Templates(query, category string, limit int) []Template {
 	}
 	if len(out) > limit {
 		out = out[:limit]
+	}
+	for i := range out {
+		out[i].Rank = i + 1
 	}
 	return out
 }
