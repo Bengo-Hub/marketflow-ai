@@ -400,9 +400,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	chatHandler.WithFAQSuggester(osContext.SuggestFAQ)
 	// The usage card shows KES values in USD at the platform's treasury rate.
 	chatHandler.WithKESPerUSD(fxSource.KESPerUSD)
+	// Two voices in UGC ads (owner, 2026-11-14): MF_AD_TWO_VOICE_PLAYBOOKS names the playbooks
+	// whose scripts may be read by a man and a woman taking turns (default ugc-video; "off").
 	teamRuntime := team.New(team.Config{
 		Library: lib, Opt: optimizer, Router: modelRouter, Decider: decider,
 		Registry: registrySource.Get, Tools: agentTools, Source: osContext, Logger: logger,
+		TwoVoicePlaybooks: team.TwoVoicePlaybooksFromEnv(os.Getenv("MF_AD_TWO_VOICE_PLAYBOOKS")),
 	})
 	osHandler := handlers.NewOSHandler(handlers.OSConfig{
 		Runtime: teamRuntime, Opt: optimizer, Library: lib, Source: osContext, Pipeline: pipeline,
@@ -619,6 +622,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/creative/ad", osHandler.Ad)
 		r.Post("/creative/ad/quote", osHandler.AdQuote)
 		r.Post("/creative/storyboard", osHandler.Storyboard)
+		// The ad templates for the Studio's picker (owner, 2026-11-14).
+		r.Get("/creative/ad-templates", osHandler.AdTemplates)
 		r.Get("/creative/jobs/{version_id}", osHandler.JobStatus)
 		r.Post("/creative/jobs/{version_id}/refund", osHandler.JobRefund)
 	})

@@ -128,6 +128,18 @@ type scriptRequest struct {
 	// (owner, 2026-11-12): a naming style, an exact list, or both.
 	ActorNameStyle string   `json:"actor_name_style"`
 	ActorNames     []string `json:"actor_names"`
+	// Delivery is the voice delivery the owner chose; "ugc" writes a creator-style script,
+	// which may be read by two voices taking turns (owner, 2026-11-14).
+	Delivery string `json:"delivery"`
+	// Approach is an ad template key (educate, day-in-the-life, myth-fact, ...); "" lets the
+	// objective and audience choose.
+	Approach string `json:"approach"`
+	// Reviews are real reviews already published on the business's public page, each as
+	// "quote | who said it"; the testimonial approach needs them.
+	Reviews []string `json:"reviews"`
+	// PresenterSpeaker is the gender of the actor already saved on the brief ("male",
+	// "female", or "" when none): presenter lines follow it.
+	PresenterSpeaker string `json:"presenter_speaker"`
 }
 
 // Script handles POST /api/v1/internal/creative/script (service key): the
@@ -180,7 +192,8 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		Facts: req.Facts, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
 		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage,
 		Presenter:   req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium,
-		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames})
+		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames,
+		Delivery: req.Delivery, Approach: req.Approach, Reviews: req.Reviews, PresenterSpeaker: req.PresenterSpeaker})
 	if err != nil {
 		h.refundKey(tenantID, chargeKey)
 		if errors.Is(err, team.ErrScriptBlocked) {
@@ -231,6 +244,8 @@ type adRequest struct {
 	Stills map[string]string `json:"stills"`
 	// SceneCache is the scenes of earlier versions of this ad, reused when unchanged.
 	SceneCache []media.SceneCache `json:"scene_cache"`
+	// MusicCache is the generated music of the version this one was revised from.
+	MusicCache *media.MusicCache `json:"music_cache,omitempty"`
 }
 
 // adBlockChars is about 30 seconds of speech: a longer voice-over costs a

@@ -4,6 +4,7 @@
 //     marketing-psychology kit (both MIT), one per marketing job;
 //   - the default team roster (Marketing Manager plus specialists);
 //   - house rules every specialist follows;
+//   - ad templates: the script approaches a video ad can follow (ad_templates.go);
 //   - a curated marketing subset of the prompts.chat library (CC0), produced by
 //     cmd/curate-prompts.
 //
@@ -25,7 +26,7 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-//go:embed data/house_rules.yaml data/team.yaml data/playbooks/*.yaml data/prompts.json
+//go:embed data/house_rules.yaml data/team.yaml data/playbooks/*.yaml data/prompts.json data/ad_templates.yaml
 var dataFS embed.FS
 
 // Source credits where a playbook was distilled from.
@@ -101,6 +102,14 @@ type Library struct {
 	memberKeys []string
 	prompts    []Prompt
 
+	// Ad templates (ad_templates.go): the script approaches, the kinds' defaults, the delivery
+	// tags a voiceover line may open with and the script quality limits.
+	adTemplates map[string]AdTemplate
+	adOrder     []string
+	adDefaults  map[string]string
+	VoiceTags   []string
+	Quality     ScriptQuality
+
 	idxOnce sync.Once
 	pbIdx   map[string][]string // playbook key -> tokens
 	prIdx   [][]string          // prompt index -> tokens
@@ -156,6 +165,9 @@ func Load() (*Library, error) {
 	}
 	if err := json.Unmarshal(raw, &lib.prompts); err != nil {
 		return nil, fmt.Errorf("library: prompts.json: %w", err)
+	}
+	if err := lib.loadAdTemplates(); err != nil {
+		return nil, err
 	}
 	if err := lib.validate(); err != nil {
 		return nil, err

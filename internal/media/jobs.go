@@ -53,11 +53,19 @@ type MediaResult struct {
 	AudioLevel string  `json:"audio_level,omitempty"`
 	AudioUSD   float64 `json:"audio_cost_usd,omitempty"`
 	MusicRoute string  `json:"music_route,omitempty"`
+	// Music is the generated music, kept for the ad's revisions (Reused when it was the
+	// earlier version's track).
+	Music *MusicCache `json:"music,omitempty"`
 	// AudioCredits are the credits charged after the render for the cues and music made; the
 	// job's CreditsCharged includes them.
 	AudioCredits int `json:"audio_credits,omitempty"`
 	// Storyboard is a storyboard job's stills and actor.
 	Storyboard *StoryboardResult `json:"storyboard,omitempty"`
+	// Voices are a two-voice ad's voices by speaker ("male", "female"), VoiceTimeline the
+	// order they speak in, and TwoVoiceNote why an ad written for two voices was read by one.
+	Voices        map[string]string `json:"voices,omitempty"`
+	VoiceTimeline []VoiceSpan       `json:"voice_timeline,omitempty"`
+	TwoVoiceNote  string            `json:"two_voice_note,omitempty"`
 }
 
 // Job is a job's state as callers see it.

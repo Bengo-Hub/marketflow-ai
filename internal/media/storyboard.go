@@ -55,6 +55,9 @@ type StoryboardRequest struct {
 	// brief has the same presenter. Empty makes one from ActorPrompt.
 	Actor       *Actor
 	ActorPrompt string
+	// Delivery is the ad's voice delivery; DeliveryUGC draws generated stills and the actor as
+	// candid phone photos rather than advertising photos.
+	Delivery string
 }
 
 // Actor is an ad's one presenter: the still every presenter scene is lip-synced from.
@@ -66,6 +69,9 @@ type Actor struct {
 	Prompt string `json:"prompt"`
 	Seed   int64  `json:"seed"`
 	Route  string `json:"route,omitempty"`
+	// Gender is the actor's look ("male", "female" or "" when the description does not say).
+	// Later scripts give the presenter's lines to the matching voice (owner, 2026-11-14).
+	Gender string `json:"gender,omitempty"`
 }
 
 // Still is one scene's storyboard frame.
@@ -157,12 +163,15 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			if desc == "" {
 				desc = DefaultActor
 			}
+			// The actor's gender follows the presenter's speaker, so the lip-synced voice fits.
+			desc = actorWithGender(desc, presenterSpeaker(req.Scenes))
 			prompt := "Vertical selfie-style photo of " + desc + ", upper body, looking straight at the camera with a relaxed smile, mouth closed, soft natural daylight, plain uncluttered background. Real photo, no text, no letters, no logos."
 			url, key, route, cost, err := s.still(ctx, req, "actor", prompt)
 			if err != nil {
 				return nil, fmt.Errorf("media: actor still: %w", err)
 			}
-			res.Actor = &Actor{URL: url, Key: key, Prompt: desc, Seed: seedFor(req.VersionID, desc), Route: route}
+			res.Actor = &Actor{URL: url, Key: key, Prompt: desc, Seed: seedFor(req.VersionID, desc), Route: route,
+				Gender: ActorGender(desc)}
 			res.CostUSD += cost
 		}
 	}
@@ -190,6 +199,9 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			visual = strings.TrimSpace(req.Scenes[i].Caption)
 		}
 		prompt := scenePrompt(visual)
+		if req.Delivery == DeliveryUGC {
+			prompt = ugcStillPrompt(visual)
+		}
 		wg.Add(1)
 		go func(st *Still, prompt string) {
 			defer wg.Done()
@@ -280,6 +292,78 @@ func (s *Storyboards) generate(ctx context.Context, rt Route, format, prompt str
 		return "", &errJobFailed{provider: rt.Provider, status: "completed", detail: "no image in the result"}
 	}
 	return out.Images[0].URL, nil
+}
+
+// presenterSpeaker is the speaker of the ad's presenter scenes in a two-voice script ("" when
+// the script names none): speakerTurns gives every presenter scene the same one.
+func presenterSpeaker(scenes []ScriptScene) string {
+	turns := speakerTurns(scenes)
+	for i, s := range scenes {
+		if s.Shot == ShotPresenter && turns[i] != "" {
+			return turns[i]
+		}
+	}
+	return ""
+}
+
+// genderWords already say who the actor is; a description with one is left as written.
+var genderWords = []string{"man", "woman", "male", "female", "lady", "guy", "boy", "girl", "mother", "father", "mum", "dad",
+	"mwanamume", "mwanamke", "he", "she", "his", "her"}
+
+// Words that say an actor is a man or a woman (English and Swahili).
+var (
+	maleWords   = []string{"man", "male", "guy", "boy", "father", "dad", "gentleman", "mwanamume", "kijana", "he", "his", "him"}
+	femaleWords = []string{"woman", "female", "lady", "girl", "mother", "mum", "mom", "mwanamke", "she", "her"}
+)
+
+// ActorGender reads an actor description: SpeakerMale, SpeakerFemale, or "" when it says
+// neither or both.
+func ActorGender(desc string) string {
+	words := " " + strings.Join(strings.FieldsFunc(strings.ToLower(desc), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	}), " ") + " "
+	has := func(list []string) bool {
+		for _, w := range list {
+			if strings.Contains(words, " "+w+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	m, f := has(maleWords), has(femaleWords)
+	switch {
+	case m && !f:
+		return SpeakerMale
+	case f && !m:
+		return SpeakerFemale
+	}
+	return ""
+}
+
+// actorWithGender adds the speaker's gender to an actor description that does not give one.
+func actorWithGender(desc, speaker string) string {
+	if speaker == "" {
+		return desc
+	}
+	words := " " + strings.Join(strings.FieldsFunc(strings.ToLower(desc), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	}), " ") + " "
+	for _, w := range genderWords {
+		if strings.Contains(words, " "+w+" ") {
+			return desc
+		}
+	}
+	if speaker == SpeakerMale {
+		return desc + ", a man"
+	}
+	return desc + ", a woman"
+}
+
+// ugcStillPrompt is a generated storyboard still for a UGC ad: a candid phone photo of a real,
+// everyday setting rather than a polished advertising shot, so the ad feels like creator content.
+func ugcStillPrompt(visual string) string {
+	return strings.TrimSpace(visual) + ". Candid vertical phone-camera photo, natural window or daylight, a real everyday East African setting, " +
+		"slightly imperfect framing, no studio lighting. No text, no letters, no words, no logos, no watermark. Keep the lower third calm for captions."
 }
 
 // seedFor is a stable seed for an actor, recorded with the brief.

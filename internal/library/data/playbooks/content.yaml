@@ -65,7 +65,7 @@ playbooks:
 
   - key: video-script
     name: Video ad script
-    version: 1
+    version: 2
     source: {repo: coreyhaines31/marketingskills, skill: video, license: MIT}
     specialist: content_creator
     model_class: premium
@@ -75,23 +75,28 @@ playbooks:
     required_inputs: [offering]
     optional_inputs: [platforms, language, audience, objective, period]
     method:
-      - Hook in the first 3 seconds with the buyer's situation or the result; show the product early.
-      - 15 to 30 seconds, 4 to 6 scenes; each scene has duration, visual, voiceover, on-screen text and shot type.
-      - Give 3 alternative hooks.
+      - Follow the approach given in the task (its hook, beats and call to action) and set "approach" to its key; with none given, pick the one approach that best fits the buyer's doubt.
+      - The hook lands in the first 2 seconds; the first spoken sentence is under 8 words and names the buyer's situation, a surprising true fact or the result; the first scene lasts 3 seconds or less and the product is on screen by second 3.
+      - 15 to 30 seconds, 4 to 7 scenes of 2 to 5 seconds each, so the picture changes often; each scene has duration, visual, voiceover, on-screen caption and shot.
+      - Write the voiceover to be heard, not read; short spoken sentences, contractions, one idea per line, numbers said the way people say them ("eight fifty", "two thousand shillings").
+      - A caption is a few words that add to the voice (the price, the step, the place), never a copy of the whole line; at most two short lines.
+      - Visual lines describe what the camera sees in one action (a hand lifts the jar, the till screen shows the receipt), never text on screen.
+      - Give 3 alternative hooks, each a different reason to watch (the problem, the result, a myth, a question).
       - Use the product photos the owner provides for image-to-video scenes; describe motion simply (slow push-in, rotate, hand reveal).
-      - End with one call to action matching the objective (WhatsApp, call, visit, buy).
+      - End on one specific call to action matching the objective, naming the action, what they get and the channel ("WhatsApp 'ORDER' to 0712 for delivery today" only with real details); never "learn more" or "get started".
       - Give the music a mood in a few words (warm, hopeful, builds to the offer) that fits the brand voice.
       - Add a sound cue (sfx) only where it lifts a moment, such as a soft whoosh on a product reveal or a till ding on the price; most scenes have none, and never under a line the voice must carry.
     rules:
       - Vertical 9:16 with text inside the safe area; captions at most two lines.
       - Synthetic people are labelled AI-generated; never use a real public figure.
       - Sound cues are short plain descriptions (at most 60 characters), never music, never speech.
+      - One voice reads the whole ad; leave speaker empty.
     starters:
       - {title: "Turn my photos into a video ad", template: "Make a 30-second video ad for ${offering} from my product photos, in ${language}."}
 
   - key: ugc-video
     name: UGC-style video ad
-    version: 1
+    version: 2
     source: {repo: coreyhaines31/marketingskills, skill: ad-creative (short-form-video-specs, motion-video-ads), license: MIT}
     specialist: content_creator
     model_class: premium
@@ -106,12 +111,17 @@ playbooks:
       - Write 15 to 35 seconds as scenes - for each, the shot (presenter, product clip from photo, owner footage, end card), voiceover, on-screen caption of at most two lines, and duration.
       - Product scenes come from the owner's real photos or footage animated by the image-to-video model; never generate a different-looking product.
       - Vary the presenter voice and look per variant so A/B variants are distinguishable.
+      - Follow the approach given in the task (educate, a day in the life, a routine, problem then solve, before and after, myth versus fact, founder story, real review, comparison, unboxing) and set "approach" to its key.
+      - When two people talking helps the ad (a question and its answer, a myth and the fact, a friend showing a friend), write it for two voices taking turns, a man and a woman. Set each spoken scene's speaker to "male" or "female" by who would naturally say that line, and alternate; every presenter scene uses the one on-screen presenter's speaker. When one voice is better, leave every speaker empty.
+      - Direct the read with at most one delivery tag at the start of a line where the feeling changes ([curious] for the question, [reassuring] for the answer); keep lines short enough to say in one breath.
+      - Describe the presenter in "actor" in one line (age range, look, clothes, setting that fits the audience), plainly and without naming a real person.
     rules:
       - A synthetic presenter explains and recommends; it never claims to be a customer or to have used, tried or tested the product ("I tried it", "it changed my skin", "my results").
       - Customer experiences appear only from real testimonials the business holds (with consent), quoted and attributed, never invented or reworded into stronger claims.
       - Every synthetic person carries an on-screen "AI-generated" note, and the platform AI label is set.
       - Vertical 9:16, captions inside the safe band (720x1200 centred), music baked in for paid ads.
       - No real public figures, no voice cloning without recorded consent.
+      - Neither voice in a two-voice ad plays a customer, and the two never pretend to be strangers giving an unprompted review; they explain, ask and answer.
     starters:
       - {title: "UGC video of someone showing my product", template: "Make a UGC-style video ad of a presenter showing ${offering}, in ${language}, for ${platforms}."}
       - {title: "Video ya mtu akionyesha bidhaa", template: "Nataka video ya mtu akionyesha ${offering} kama za TikTok, bajeti ${budget}."}
