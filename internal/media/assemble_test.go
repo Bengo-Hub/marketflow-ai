@@ -112,6 +112,20 @@ func TestAINote(t *testing.T) {
 	}
 }
 
+// Owner 2026-11-14: the on-screen AI note is the owner's choice. The zero request keeps it; an
+// owner who turned the label off gets no note on a presenter ad.
+func TestAdAINoteHonoursTheOwnersChoice(t *testing.T) {
+	if adAINote(AdRequest{Kind: AdPresenter, Language: "sw"}) != "Imetengenezwa kwa AI" {
+		t.Fatal("the label is on unless the owner turns it off")
+	}
+	if adAINote(AdRequest{Kind: AdPresenter, Language: "en", NoAILabel: true}) != "" {
+		t.Fatal("no note when the owner turned the label off")
+	}
+	if adAINote(AdRequest{Kind: AdTemplate, Language: "en"}) != "" {
+		t.Fatal("template ads still carry no note")
+	}
+}
+
 func TestAssembleValidates(t *testing.T) {
 	a := NewAssembler(&fileStore{dir: t.TempDir()}, nil, nil)
 	a.ffmpeg = "ffmpeg" // validation runs before ffmpeg is used

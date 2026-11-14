@@ -144,11 +144,17 @@ func (f *Filter) Violations(response, businessType string) []string {
 		}
 		return out
 	}
-	for _, b := range rules.baselineBlocks {
-		add(b.Reason, b.re)
+	// Blocks go through find, so a refusal a block allows (allow_negated) is not listed either.
+	addBlock := func(reason string, b *Block) {
+		if m, hit := b.find(response); hit {
+			out = append(out, fmt.Sprintf("%s (you wrote %q)", reason, m))
+		}
 	}
-	for _, b := range t.Blocks {
-		add(t.Label+" rule: "+b.Reason, b.re)
+	for i := range rules.baselineBlocks {
+		addBlock(rules.baselineBlocks[i].Reason, &rules.baselineBlocks[i])
+	}
+	for i := range t.Blocks {
+		addBlock(t.Label+" rule: "+t.Blocks[i].Reason, &t.Blocks[i])
 	}
 	return out
 }

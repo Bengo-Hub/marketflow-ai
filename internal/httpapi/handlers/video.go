@@ -246,7 +246,13 @@ type adRequest struct {
 	SceneCache []media.SceneCache `json:"scene_cache"`
 	// MusicCache is the generated music of the version this one was revised from.
 	MusicCache *media.MusicCache `json:"music_cache,omitempty"`
+	// AILabel is the owner's AI label choice (owner 2026-11-14): false leaves out the on-screen
+	// "AI-generated" note on presenter ads. Missing (an older marketflow-api) keeps the note.
+	AILabel *bool `json:"ai_label,omitempty"`
 }
+
+// noAILabel reports whether the owner turned the AI label off; a missing value keeps it on.
+func (r adRequest) noAILabel() bool { return r.AILabel != nil && !*r.AILabel }
 
 // adBlockChars is about 30 seconds of speech: a longer voice-over costs a
 // second block of the template video price.

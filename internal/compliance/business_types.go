@@ -33,7 +33,19 @@ type TypeInfo struct {
 type Block struct {
 	Pattern string `yaml:"pattern"`
 	Reason  string `yaml:"reason"`
-	re      *regexp.Regexp
+	// AllowNegated lets a refusal through (owner, 2026-11-14): a match whose promotion phrase
+	// follows a negation in the same clause ("We can't offer discounts on Ozempic") is not a
+	// violation. The pattern marks its promotion phrase with one or more (?P<promo>...) groups;
+	// RE2 has no lookbehind, so negation.go does the check in code.
+	AllowNegated bool `yaml:"allow_negated"`
+	// Exempt skips a match whose medicine word starts a household or cosmetic phrase (owner,
+	// 2026-11-14: "dawa ya meno" is toothpaste, "dawa ya mbu" mosquito repellent). The pattern marks
+	// its medicine word with (?P<med>...) groups and Exempt is matched at that word's start.
+	Exempt   string `yaml:"exempt"`
+	re       *regexp.Regexp
+	promo    []int // indexes of the subexpressions named promo
+	med      []int // indexes of the subexpressions named med
+	exemptRe *regexp.Regexp
 }
 
 type typeRules struct {
@@ -128,6 +140,28 @@ func compileBlocks(blocks []Block, owner string) error {
 			return fmt.Errorf("compliance: %s block %d: %w", owner, i+1, err)
 		}
 		b.re = re
+		b.promo, b.med, b.exemptRe = nil, nil, nil
+		for idx, name := range re.SubexpNames() {
+			switch name {
+			case promoGroup:
+				b.promo = append(b.promo, idx)
+			case medGroup:
+				b.med = append(b.med, idx)
+			}
+		}
+		if b.AllowNegated && len(b.promo) == 0 {
+			return fmt.Errorf("compliance: %s block %d allows negation but has no (?P<%s>...) group", owner, i+1, promoGroup)
+		}
+		if strings.TrimSpace(b.Exempt) != "" {
+			if len(b.med) == 0 {
+				return fmt.Errorf("compliance: %s block %d has an exempt pattern but no (?P<%s>...) group", owner, i+1, medGroup)
+			}
+			ex, err := regexp.Compile(`^(?:` + b.Exempt + `)`)
+			if err != nil {
+				return fmt.Errorf("compliance: %s block %d exempt: %w", owner, i+1, err)
+			}
+			b.exemptRe = ex
+		}
 	}
 	return nil
 }
@@ -187,14 +221,14 @@ func PromptRules(businessType string) string {
 
 // checkBlocks returns the reason for the first baseline or type block the text matches.
 func checkBlocks(t *typeRules, text string) (string, bool) {
-	for _, b := range rules.baselineBlocks {
-		if b.re.MatchString(text) {
-			return b.Reason, true
+	for i := range rules.baselineBlocks {
+		if _, hit := rules.baselineBlocks[i].find(text); hit {
+			return rules.baselineBlocks[i].Reason, true
 		}
 	}
-	for _, b := range t.Blocks {
-		if b.re.MatchString(text) {
-			return t.Label + " rule: " + b.Reason, true
+	for i := range t.Blocks {
+		if _, hit := t.Blocks[i].find(text); hit {
+			return t.Label + " rule: " + t.Blocks[i].Reason, true
 		}
 	}
 	return "", false

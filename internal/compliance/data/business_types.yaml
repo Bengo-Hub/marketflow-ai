@@ -13,17 +13,33 @@
 # phrase that is wrong for that business whatever the facts are. Anything that depends on the
 # facts (is the "was" price real, is the room really free) is guidance for the writer, not a block.
 #
-# Sources (read 2026-11-14; the PPB guideline was read through law firm summaries, not its own text):
-# - Consumer Protection Act No. 46 of 2012 (Kenya), ss. 12 and 13: false, misleading or
-#   unconscionable representations about price, quality, availability or results.
+# allow_negated: true lets a refusal through (owner, 2026-11-14). The pattern marks its promotion
+# phrase with (?P<promo>...) groups (the same name may appear in each alternative), and a match is
+# not a violation when a negation (can't, cannot, don't, no, never, not, unable to, hatuwezi,
+# hatutoi, hakuna, si, sio and similar) stands before that phrase in the same clause. RE2 has no
+# lookbehind, so negation.go does the check; "don't miss" and "never been cheaper" still count as
+# sales lines. The gap between the promotion phrase and the medicine is lazy ({0,40}?), so the
+# phrase checked is the one nearest the medicine: in "Panadol is not on offer, but lotions are
+# 20% off" it is "on offer", which is negated.
+#
+# exempt: a block whose pattern marks its medicine word with (?P<med>...) groups may name phrases
+# that are not medicines although they start with a medicine word ("dawa ya meno" is toothpaste).
+# A match whose medicine word starts one of them is not a violation.
+#
+# Sources (read 2026-11-14):
+# - Consumer Protection Act No. 46 of 2012 (Cap. 501, Kenya Law revision as at 31 December 2022),
+#   s. 12(1) and (2)(a), (k), (n): false, misleading or deceptive representations, including
+#   benefits or approval a product does not have, a price advantage that does not exist and
+#   exaggeration; s. 13(2)(h): undue pressure; s. 15: unfair practices are prohibited. Text read
+#   from the Kenya Law PDF (FRBR /akn/ke/act/2012/46/eng@2022-12-31) mirrored at
+#   https://globalfoodlaws.georgetown.edu/wp-content/uploads/2026/05/Kenya_2022_Consumer-Protection-Act_EN.pdf
 # - Competition Act No. 12 of 2010 (Kenya), s. 55: false or misleading representations,
-#   including about a price advantage or a previous price.
-# - Pharmacy and Poisons Act (Cap 244) and the PPB Guideline for Advertisement and Promotion of
-#   Health Products and Technologies (July 2022): only registered products may be advertised,
-#   prescription-only medicines may not be advertised to the public (online and through
-#   influencers too), adverts need PPB approval. Summaries: bowmanslaw.com "Healthy respect for
-#   advertising guidelines is critical in Kenyan pharmaceutical sector"; blog.galalaw.com
-#   "Regulating medical advertising in Kenya"; PSK and PPB statements on Ozempic promotion (2025).
+#   including about a price advantage or a previous price (not re-read on 2026-11-14).
+# - Pharmacy rules: see the pharmacy entry below for the exact documents, clauses and URLs (the
+#   Pharmacy and Poisons Act Cap 244 ss. 36 to 40 and Schedule, the Pharmacy and Poisons
+#   (Amendment) Rules 2022 (L.N. 98 of 2022) rules 22 to 44, and the PPB Guideline for
+#   Advertisement and Promotion of Health Products and Technologies, HPT/PDS/GUD/046 Rev. 3,
+#   July 2025), all read in their own text on 2026-11-14.
 # - KEBS cosmetics standards (KS EAS 377) and the KEBS bans on mercury and hydroquinone in skin
 #   products: no skin lightening or bleaching promotion.
 # - Tourism Act 2011 and the Tourism Regulatory Authority classification: star ratings only when
@@ -171,22 +187,94 @@ types:
     label: Pharmacy or chemist
     description: Pharmacies, chemists and health product shops. Pharmacy and Poisons Board advertising limits apply.
     aliases: [chemist, pharmaceutical]
+    # Sources, all read in their own text on 2026-11-14:
+    # - Pharmacy and Poisons Act, Cap 244, as at 11 December 2023 (Kenya Law,
+    #   https://new.kenyalaw.org/akn/ke/act/1956/17/eng@2023-12-11, read through the web.archive.org
+    #   capture of 5 March 2026 because Kenya Law refuses automated fetches): s. 2 ("advertisement"
+    #   includes oral announcements and anything transmitted by light or sound), s. 36 (no drug may be
+    #   advertised without the Board's written permission), s. 37 and the Schedule (no advert may imply
+    #   a drug is effective for the listed diseases or for restoring or stimulating sexual function),
+    #   s. 38 (abortion), s. 39 (extravagant claims), s. 40 (penalties).
+    # - Pharmacy and Poisons (Amendment) Rules, 2022, L.N. 98 of 2022, Kenya Subsidiary Legislation
+    #   2022 pp. 657 to 675 (https://faolex.fao.org/docs/pdf/ken212579.pdf): rules 22 (written
+    #   approval, registered products only, approval number and holder details on print), 23 and 24
+    #   (what is and is not an advert), 25 (prohibited adverts), 26 (general public: general sale
+    #   only; pharmacy-only inside the pharmacy; prescription-only only at the point of sale;
+    #   controlled drugs never), 29 (herbal), 30 (vitamins), 31 (weight management disclaimer),
+    #   32 (pregnant and lactating women), 33 (children), 34 (required content for the public),
+    #   38 (websites for the public: no named prescription-only medicine, no highlighted price
+    #   offers, no free offers in competitions), 44 (offences).
+    # - PPB Guideline for Advertisement and Promotion of Health Products and Technologies,
+    #   HPT/PDS/GUD/046 Rev. No. 3, July 2025 (supersedes Rev. 2 of 13 July 2022),
+    #   https://web.pharmacyboardkenya.org/download/guideline-for-advertisement-and-promotion-of-health-products-and-technologies/
+    #   Sections 5.0, 6.0 (a) to (n), 7.0, 8.0, 9.0, 10.0, 12.0, 13.0 (c), 16.0, 17.0 and 18.0.
     guidance:
-      - Never claim a medicine or health product cures anything, works for everyone or has no side effects.
-      - Never advertise prescription-only medicines (antibiotics, weight loss injections, strong painkillers and similar) to the public, in ads, posts or chat. You may say the pharmacy fills prescriptions.
-      - Follow the Pharmacy and Poisons Board advertising limits. Promote only registered over-the-counter products, and do not claim PPB approval of an advert unless the business has it.
+      # Rule 26(1)(a) to (d); guideline 7.0 (general public) (a) to (c) and 12.0 general (a).
+      - Advertise to the public only general sale medicines and health products registered with the Pharmacy and Poisons Board. Pharmacy-only medicines may be promoted only inside the pharmacy, never in posts, ads or broadcasts. Controlled drugs are never advertised to the public.
+      # Rule 26(1)(c), rule 38(1)(c) and (g); guideline 7.0 (a) and (d), 12.0 (licensed online pharmacies) (a) to (d), 5.0 (not an advert) (c) and (d), 13.0 (c).
+      - Never advertise prescription-only medicines (antibiotics, weight loss injections, strong painkillers, sleeping pills, erection pills and similar) to the public in ads, posts, captions or broadcasts, even with only a price. You may say the pharmacy fills prescriptions. When a customer asks in chat whether a prescription-only medicine is in stock or what it costs, answer factually, say it needs a valid prescription, and do not push it.
+      # Act s. 37 and Schedule, s. 38, s. 39; rule 22(4); guideline 18.0, 7.0 (herbal) (n), 7.0 (medical devices) (f) and (g).
+      - Never say a medicine, supplement or device cures, treats, prevents or relieves a serious disease such as cancer, diabetes, tuberculosis, epilepsy, HIV, high blood pressure or heart disease, or that it restores or boosts sexual performance. Never mention anything for ending a pregnancy.
+      # Guideline 16.0 (claims) (c), (d), (f); 10.0 (e); 7.0 (herbal) (k), (l), (m), (o), (p); 16.0 (comparisons) (a); CPA s. 12(2)(a) and (n).
+      - Never call a product safe, harmless, free of side effects or safe because it is natural, and never say it is guaranteed to work, works for everyone, is the best or number one, or is better than or as good as another product. Use only the claims on the approved label. Never call a herbal product clinically proven.
+      # Guideline 17.0 (b), (c), (d), 12.0 general (d); CPA s. 12(2)(a) and (b).
+      - Never write that a product is PPB, WHO or FDA approved. Never have doctors, pharmacists, nurses, celebrities or influencers endorse or recommend a product, and never write influencer scripts for medicines. Do not use customer stories of a medicine treating their condition.
+      # Guideline 10.0 (b) and (c), 12.0 (window for the general public) (g); rule 38(1)(i) and (j); rule 24(2)(g) and guideline 5.0 (g) for factual price notices. Owner decision 2026-11-14: no discount or offer copy on any medicine, general sale ones included; offers on products that are not medicines stay allowed.
+      - Never write discount or offer copy for any medicine, general sale medicines included (paracetamol, Panadol, ibuprofen, cough syrup, antacids, ORS, antimalarials, multivitamins and similar) and supplements. That covers percentage or shilling discounts, price cuts, "on offer", multi-buy deals, free samples, giveaways and competitions. A factual price list without claims is fine. Offers on products that are not medicines, such as lotions, cosmetics, toiletries (dawa ya meno), household products (dawa ya mbu, dawa ya wadudu), baby care and medical devices, and free services such as blood pressure checks are fine. When a customer asks for a discount on a medicine, you may say plainly that the pharmacy cannot give one.
+      # Guideline 6.0 (k), (l), (m).
+      - Never diagnose, never suggest that seeing a doctor or getting a prescription is unnecessary, and never frighten people about their condition or say it will get worse without a product. For symptoms, tell them to talk to the pharmacist or a doctor.
+      # Act s. 36; rule 22(1), (5), (6), rule 34 (a), (b), (d); guideline 9.0 (a) to (f), 6.0 (n).
+      - When a post promotes a specific general sale product, give its generic name next to the brand name, what it is approved for, its main warning, and the line "If symptoms persist, seek medical advice" or "Maumivu yakizidi pata ushauri wa daktari". Every product advert needs the Pharmacy and Poisons Board's written approval before it runs, so add the PPB advert approval reference the business gave you as "PPB approval ref. <reference>" and never invent one. MarketFlow keeps a medicine advert as a draft until the owner has entered that reference.
+      # Rule 32 and 33; guideline 8.0.
+      - Do not suggest medicines for pregnant or breastfeeding women apart from vitamin and mineral supplements, and then say to consult a health professional first. Never say a product is safe in pregnancy. Never aim health product ads at children under 12 or show a child with a product without an adult.
+      # Rule 30 and 31; guideline 7.0 (vitamins) and (weight management).
+      - Never say vitamins replace a balanced diet or that health suffers without them. Weight loss or slimming claims must mention diet and exercise and carry the line "This product has not been proven to burn fat or block starch".
       - Tell customers to read the label and to talk to the pharmacist or a doctor about their condition.
     blocks:
-      - pattern: '(?i)\bno\s+prescriptions?\s+(needed|required|necessary)\b|\bprescription[\s-]free\b'
-        reason: selling medicines without a prescription
-      - pattern: '(?i)\b(no|zero)\s+side[\s-]effects?\b|\bfree\s+(of|from)\s+side[\s-]effects?\b|\bwithout\s+(any\s+)?side[\s-]effects?\b'
-        reason: claims of no side effects
-      - pattern: '(?i)\b(100\s*%|guaranteed?)\s+(effective|results?|recovery|relief)\b|\bworks\s+for\s+everyone\b'
+      # Guideline 6.0 (m): no impression that a consultation is unnecessary.
+      - pattern: '(?i)\bno\s+prescriptions?\s+(needed|required|necessary)\b|\bprescription[\s-]free\b|\bno\s+need\s+(to\s+see\s+(a|the|your)\s+doctor|for\s+(a\s+)?(doctor|prescription|consultation))\b|\bskip\s+the\s+doctor\b'
+        reason: saying a prescription or a doctor is not needed
+      # Guideline 16.0 (claims) (c) and (d); 7.0 (herbal) (o) and (p).
+      - pattern: '(?i)\b(no|zero)\s+(known\s+)?(side[\s-]effects?|harmful\s+effects?|adverse\s+effects?|toxic\s+effects?)\b|\bfree\s+(of|from)\s+(any\s+)?side[\s-]effects?\b|\bwithout\s+(any\s+)?side[\s-]effects?\b|\b(100\s*%|completely|totally|perfectly|absolutely)\s+(safe|harmless)\b|\bsafe\s+for\s+(everyone|everybody|all\s+ages)\b|\bsafe\s+because\s+(it\s+is|it''s|they\s+are|they''re)\s+(natural|herbal|organic)\b|\bnatural\s+(and|&|so)\s+(completely\s+|100\s*%\s+)?safe\b'
+        reason: claims of no side effects or complete safety
+      # Guideline 10.0 (e): effects may not be presented as guaranteed.
+      - pattern: '(?i)\b(100\s*%|guaranteed?)\s+(effective|results?|recovery|relief|cure|success)\b|\bresults\s+guaranteed\b|\bguaranteed\s+to\s+work\b|\bworks\s+(for\s+everyone|every\s+time)\b'
         reason: guaranteed results from medicine
-      - pattern: '(?i)\b(treats?|reverses?|eliminates?|ends?)\s+(diabetes|cancer|hiv|aids|hypertension|high\s+blood\s+pressure|tuberculosis|infertility|erectile\s+dysfunction)\b'
+      # Guideline 10.0 (e) and (f), 7.0 (herbal) (l), 16.0 (comparisons) (a).
+      - pattern: '(?i)\bleast\s+toxic\b|\bbest[\s-]tolerated\b|\bmost\s+effective\s+(medicine|treatment|remedy|drug|painkiller|cure)\b|\b(best|strongest)\s+(painkillers?|remed(y|ies)|drugs?)\b|(\bnumber\s+one|\bno\.?\s*1|#1)\s+(treatment|remedy|drug|painkiller|medicine|brand)\b|\b(better|stronger)\s+than\s+(any|all|other)\s+(other\s+)?(medicines?|painkillers?|brands?|treatments?|drugs?|products?)\b'
+        reason: superlative or unprovable comparison claims for medicine
+      # Act s. 37 and Schedule paragraph 2 (prevention, relief or cure).
+      - pattern: '(?i)\b(treats|heals|reverses|eliminates|ends|fights|beats|prevents|relieves|kills|gets\s+rid\s+of)\s+(your\s+|the\s+)?(diabetes|cancers?|tumou?rs?|tuberculosis|tb|epilepsy|seizures|lupus|leprosy|bilharzia|schistosomiasis|paralysis)\b'
+        reason: claims about diseases the Pharmacy and Poisons Act bars from adverts
+      # Act s. 37 and Schedule paragraphs 1 and 3 (cure), s. 39 and guideline 7.0 (herbal) (n) for other serious diseases.
+      - pattern: '(?i)\b(treats|heals|reverses|eliminates|ends|beats|gets\s+rid\s+of)\s+(your\s+|the\s+)?(hiv|aids|hypertension|high\s+blood\s+pressure|heart\s+disease|syphilis|gonorrh?o?ea|kidney\s+stones|gallstones|pneumonia|goitre|hernia|blindness|deafness|infertility|erectile\s+dysfunction|impotence|premature\s+ejaculation|weak\s+erections?)\b'
         reason: treatment claims for serious diseases
-      - pattern: '(?i)\b(discount(ed|s)?|offers?|deals?|promo(tion)?s?|sale|cheap(est)?|get\s+your|\d+\s*%\s*off)\b[^.!?\n]{0,40}\b(antibiotics?|amoxicillin|augmentin|azithromycin|ciprofloxacin|ozempic|semaglutide|wegovy|mounjaro|tramadol|codeine|sildenafil|viagra|diazepam)\b|\b(antibiotics?|amoxicillin|augmentin|azithromycin|ciprofloxacin|ozempic|semaglutide|wegovy|mounjaro|tramadol|codeine|sildenafil|viagra|diazepam)\b[^.!?\n]{0,40}\b(on\s+offer|on\s+sale|discount(ed)?|deals?|promo|\d+\s*%\s*off)'
-        reason: promoting prescription-only medicines to the public
+      # Act s. 37 and Schedule paragraph 4 (restoration or stimulation of sexual functions); guideline 7.0 (medical devices) (g).
+      - pattern: '(?i)\b(boosts?|restores?|increases?|enhances?|improves?|stimulates?|revives?)\s+(your\s+|male\s+|sexual\s+)?(libido|sex\s+drive|sexual\s+(performance|power|function|stamina)|erections?|manhood|man\s*power|virility)\b|\blast\s+longer\s+in\s+bed\b'
+        reason: sexual performance claims
+      # Act s. 38.
+      - pattern: '(?i)\babortion\s+(pills?|tablets?|kits?|drugs?)\b|\bpregnancy\s+termination\s+(pills?|tablets?|kits?)\b|\b(terminates?|ends?|removes?)\s+(a|an|your|the)\s+(unwanted\s+)?pregnancy\b|\bbring\s+back\s+(your\s+)?(missed\s+)?periods?\b'
+        reason: promoting anything for ending a pregnancy
+      # Guideline 17.0 (d): no PPB, WHO or similar approval claims. "WHO" is matched in capitals only so "the pharmacist who approved" passes.
+      - pattern: '\b((?i:ppb|fda|pharmacy\s+and\s+poisons\s+board)|WHO)[\s-]+(?i:approved|certified|endorsed)\b|(?i:\bapproved\s+by\s+(the\s+)?)(WHO\b|(?i:fda|world\s+health\s+organi[sz]ation)\b)'
+        reason: claims that a product is PPB, WHO or FDA approved
+      # Guideline 17.0 (c): no health workers or people posing as health workers promoting medicines.
+      - pattern: '(?i)\b(doctors?|pharmacists?|nurses?|physicians?|dermatologists?|dentists?)-(recommended|approved|endorsed|trusted|tested)\b|\brecommended\s+by\s+(top\s+|leading\s+|many\s+|most\s+)?(doctors|pharmacists|nurses|physicians|dermatologists|dentists)\b|\b(\d+|nine|eight)\s+out\s+of\s+(10|ten)\s+(doctors|pharmacists|nurses|dentists)\b|\b(doctors|pharmacists|nurses|dermatologists|dentists)\s+(recommend|trust)\s+(this|our|it)\b'
+        reason: endorsements by doctors, pharmacists or other health workers
+      # Rule 26(1)(c) and (d), rule 38(1)(c), (g) and (i); guideline 7.0 (a) and (c), 12.0 general (a). Needs a promotion word in the same sentence, so a factual chat answer that names a stocked medicine passes. A refusal passes too (allow_negated): "We can't offer discounts on Ozempic".
+      - pattern: '(?i)\b(?P<promo>\d+\s*%\s*off|discount(s|ed)?|special\s+offers?|on\s+offer|offers?\s+on|deals?\s+on|promo(tion)?s?|on\s+sale|(flash|mega|weekend|black\s+friday)\s+sale|cheap(er|est)?|buy\s+now|order\s+now|shop\s+now|grab\s+(yours|one|now)|get\s+yours|free\s+(delivery|shipping|samples?|gifts?|packs?|doses?)|giveaways?|bonanza|best\s+prices?|lowest\s+prices?|while\s+stocks?\s+last|limited\s+(time|offer|stock)|hurry)\b[^.!?\n]{0,40}?\b(antibiotics?|amoxicillin|amoxil|augmentin|azithromycin|ciprofloxacin|doxycycline|metronidazole|flagyl|ozempic|semaglutide|wegovy|rybelsus|mounjaro|zepbound|tirzepatide|saxenda|liraglutide|(weight[\s-]loss|slimming)\s+(injections?|jabs?|pens?)|tramadol|codeine|diazepam|valium|alprazolam|xanax|morphine|pethidine|sildenafil|viagra|tadalafil|cialis|misoprostol|cytotec|clomiphene|clomid)\b|\b(antibiotics?|amoxicillin|amoxil|augmentin|azithromycin|ciprofloxacin|doxycycline|metronidazole|flagyl|ozempic|semaglutide|wegovy|rybelsus|mounjaro|zepbound|tirzepatide|saxenda|liraglutide|(weight[\s-]loss|slimming)\s+(injections?|jabs?|pens?)|tramadol|codeine|diazepam|valium|alprazolam|xanax|morphine|pethidine|sildenafil|viagra|tadalafil|cialis|misoprostol|cytotec|clomiphene|clomid)\b[^.!?\n]{0,40}?\b(?P<promo>\d+\s*%\s*off|discount(s|ed)?|special\s+offers?|on\s+offer|on\s+sale|promo(tion)?s?|cheap(er|est)?|buy\s+now|order\s+now|shop\s+now|free\s+(delivery|shipping|samples?|gifts?|packs?|doses?)|giveaways?|best\s+prices?|lowest\s+prices?|while\s+stocks?\s+last|limited\s+(time|offer|stock)|hurry)\b'
+        reason: promoting prescription-only or controlled medicines to the public
+        allow_negated: true
+      # Guideline 10.0 (b) and (c), 12.0 (window for the general public) (g); rule 38(1)(i) and (j). Owner decision 2026-11-14: no discount or offer copy on ANY medicine, general sale ones included. The medicine list is the prescription-only list above plus general sale medicines and dosage forms; lotions, cosmetics, devices ("BP machine", "glucometer") and services ("free blood pressure checks") are not in it, so offers on them pass. "vitamins" matches only in the plural or with a dosage form, so "20% off vitamin C serum" (a cosmetic) passes. A refusal passes (allow_negated).
+      - pattern: '(?i)\b(?P<promo>\d+\s*%\s*(off|discount)|discount(s|ed)?|special\s+offers?|on\s+offer|offers?\s+on|deals?\s+on|promos?|promotions?|on\s+sale|(flash|mega|weekend|black\s+friday|clearance)\s+sale|half\s+price|price\s+(cuts?|drops?)|save\s+(kes|ksh|sh)\.?\s*\d+|cheap(er|est)?|buy\s+(one|1|two|2|three|3)\s+get\s+(one|1)|bogof|free\s+(samples?|gifts?|packs?|doses?)|giveaways?|bonanza|competition|best\s+prices?|lowest\s+prices?|punguzo|ofa|bei\s+(nafuu|poa|chini))\b[^.!?\n]{0,40}?\b(?P<med>medicines?|medications?|tablets|capsules|syrups?|painkillers?|pain\s+relief|supplements?|multi-?vitamins?|vitamins|vitamin(\s+[a-z0-9]{1,3})?\s+(tablets|capsules|supplements?|syrups?|gummies|drops)|drugs|inhalers?|paracetamol|panadol|calpol|ibuprofen|brufen|aspirin|diclofenac|antacids?|eno|gaviscon|cough\s+(syrups?|mixtures?|drops|medicines?)|lozenges|strepsils|ors|oral\s+rehydration(\s+salts?)?|anti-?malarials?|coartem|artemether|antihistamines?|piriton|cetirizine|loratadine|de-?wormers?|albendazole|mebendazole|eye\s+drops|ear\s+drops|dawa|antibiotics?|amoxicillin|amoxil|augmentin|azithromycin|ciprofloxacin|doxycycline|metronidazole|flagyl|ozempic|semaglutide|wegovy|rybelsus|mounjaro|zepbound|tirzepatide|saxenda|liraglutide|(weight[\s-]loss|slimming)\s+(injections?|jabs?|pens?)|tramadol|codeine|diazepam|valium|alprazolam|xanax|morphine|pethidine|sildenafil|viagra|tadalafil|cialis|misoprostol|cytotec|clomiphene|clomid)\b|\b(?P<med>medicines?|medications?|tablets|capsules|syrups?|painkillers?|pain\s+relief|supplements?|multi-?vitamins?|vitamins|vitamin(\s+[a-z0-9]{1,3})?\s+(tablets|capsules|supplements?|syrups?|gummies|drops)|drugs|inhalers?|paracetamol|panadol|calpol|ibuprofen|brufen|aspirin|diclofenac|antacids?|eno|gaviscon|cough\s+(syrups?|mixtures?|drops|medicines?)|lozenges|strepsils|ors|oral\s+rehydration(\s+salts?)?|anti-?malarials?|coartem|artemether|antihistamines?|piriton|cetirizine|loratadine|de-?wormers?|albendazole|mebendazole|eye\s+drops|ear\s+drops|dawa|antibiotics?|amoxicillin|amoxil|augmentin|azithromycin|ciprofloxacin|doxycycline|metronidazole|flagyl|ozempic|semaglutide|wegovy|rybelsus|mounjaro|zepbound|tirzepatide|saxenda|liraglutide|(weight[\s-]loss|slimming)\s+(injections?|jabs?|pens?)|tramadol|codeine|diazepam|valium|alprazolam|xanax|morphine|pethidine|sildenafil|viagra|tadalafil|cialis|misoprostol|cytotec|clomiphene|clomid)\b[^.!?\n]{0,40}?\b(?P<promo>\d+\s*%\s*(off|discount)|discount(s|ed)?|special\s+offers?|on\s+offer|promos?|promotions?|on\s+sale|(flash|mega|weekend|black\s+friday|clearance)\s+sale|half\s+price|price\s+(cuts?|drops?)|save\s+(kes|ksh|sh)\.?\s*\d+|cheap(er|est)?|buy\s+(one|1|two|2|three|3)\s+get\s+(one|1)|bogof|free\s+(samples?|gifts?|packs?|doses?)|giveaways?|bonanza|competition|best\s+prices?|lowest\s+prices?|punguzo|ofa|bei\s+(nafuu|poa|chini))\b'
+        reason: discounts, offers or giveaways on medicines
+        allow_negated: true
+        # Owner decision 2026-11-14: household and cosmetic "dawa" is not medicine (toothpaste,
+        # mosquito and insect repellent, hair products, cleaning products), so offers on them pass.
+        exempt: '(?i)dawa\s+(ya|za)\s+(meno|mbu|nywele|kuosha|kufulia|wadudu|mende|panya|kunguni|viroboto|chawa|kusafisha|nguo|vyombo|choo|sakafu|mimea|shamba|mifugo|kupaka|nyumba)\b'
+      # Rule 31(1)(a) and guideline 7.0 (weight management) (a): claims must come with diet and exercise; s. 39 extravagant claims.
+      - pattern: '(?i)\blose\s+\d+\s*(kg|kgs|kilos?|kilograms?|pounds|lbs)\s+in\s+(\d+|a|one|two|three|just)\b|\b(lose|losing)\s+weight\s+without\s+(diet|dieting|exercise|exercising|changing\s+your\s+diet)\b|\bwithout\s+(diet|dieting)\s+(or|and)\s+exercise\b'
+        reason: weight loss claims without diet and exercise
 
   - key: hospitality
     label: Hotel, guest house or lodge

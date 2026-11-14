@@ -146,6 +146,10 @@ type AdRequest struct {
 	// music prompt is the same and the track still fits the length, so a revision does not pay
 	// for the same music twice (WP1).
 	Music *MusicCache
+	// NoAILabel leaves out the on-screen AI note (aiNote) because the owner turned the AI label
+	// off (owner 2026-11-14). The zero value keeps the note. The script's honesty rules stay: it
+	// never claims an AI presenter is a real customer or a real person.
+	NoAILabel bool
 }
 
 // MusicCache is one version's generated music, kept for its revisions.
@@ -791,7 +795,7 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	card := req.EndCard
 	res, err := a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
 		Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &card, LogoURL: req.LogoURL,
-		MusicURL: musicURL, Mix: mix, AINote: aiNote(req.Kind, req.Language)})
+		MusicURL: musicURL, Mix: mix, AINote: adAINote(req)})
 	if err != nil {
 		return nil, err
 	}
@@ -903,6 +907,15 @@ func aiNote(kind, language string) string {
 		return "Imetengenezwa kwa AI"
 	}
 	return "AI-generated"
+}
+
+// adAINote is the request's on-screen AI note: aiNote, unless the owner turned the AI label off
+// (owner 2026-11-14: the visual label is the owner's choice).
+func adAINote(req AdRequest) string {
+	if req.NoAILabel {
+		return ""
+	}
+	return aiNote(req.Kind, req.Language)
 }
 
 // routeSummary names the routes the ad used, for the version's record.
