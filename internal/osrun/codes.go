@@ -20,6 +20,9 @@ import (
 const (
 	ActionApprove = "approve"
 	ActionRender  = "render"
+	// ActionPublish approves the finished ad and posts it to the business's connected accounts
+	// (organic only; paid ads are never started from WhatsApp).
+	ActionPublish = "publish"
 )
 
 // Approval is one pending WhatsApp approval. A user has at most one: a new code replaces the
@@ -35,7 +38,14 @@ type Approval struct {
 	// VersionID is the Studio video ad a render code renders.
 	VersionID string `json:"version_id,omitempty"`
 	// Credits is the price the message quoted.
-	Credits  int       `json:"credits,omitempty"`
+	Credits int `json:"credits,omitempty"`
+	// Tier is the media tier an approval of a cheaper option makes instead of the run's own.
+	Tier string `json:"tier,omitempty"`
+	// Option names the cheaper option a code approves, for the messages ("" for the plan).
+	Option string `json:"option,omitempty"`
+	// OTPDone marks an approval whose one-time code was already confirmed (or not needed), so a
+	// top-up that resumes it does not ask again.
+	OTPDone  bool      `json:"otp_done,omitempty"`
 	Attempts int       `json:"attempts,omitempty"`
 	Created  time.Time `json:"created"`
 }
@@ -61,6 +71,12 @@ type Codes struct {
 	now      func() time.Time
 	// gen makes a code; tests replace it.
 	gen func() (string, error)
+	// otpCredits, otpTTL and genOTP are the one-time code above a spend (otp.go); topupTTL keeps
+	// a Buy credits offer and the action waiting for its credits (topup.go).
+	otpCredits int
+	otpTTL     time.Duration
+	genOTP     func() (string, error)
+	topupTTL   time.Duration
 }
 
 // NewCodes builds the code store from the config.
@@ -72,7 +88,17 @@ func NewCodes(rdb *redis.Client, namespace string, cfg Config) *Codes {
 	if cfg.CodeAttempts <= 0 {
 		cfg.CodeAttempts = d.CodeAttempts
 	}
-	return &Codes{rdb: rdb, ns: namespace, ttl: cfg.CodeTTL, attempts: cfg.CodeAttempts, now: time.Now, gen: fourDigits}
+	if cfg.OTPTTL <= 0 {
+		cfg.OTPTTL = d.OTPTTL
+	}
+	if cfg.OTPCredits < 0 {
+		cfg.OTPCredits = 0
+	}
+	if cfg.TopupTTL <= 0 {
+		cfg.TopupTTL = d.TopupTTL
+	}
+	return &Codes{rdb: rdb, ns: namespace, ttl: cfg.CodeTTL, attempts: cfg.CodeAttempts, now: time.Now, gen: fourDigits,
+		otpCredits: cfg.OTPCredits, otpTTL: cfg.OTPTTL, genOTP: sixDigits, topupTTL: cfg.TopupTTL}
 }
 
 // TTL is how long a code works, for the message that carries it.
@@ -202,8 +228,9 @@ func (c *Codes) Cancel(ctx context.Context, tenantID, userID string) {
 }
 
 // yesReply is "YES 1234" and the ways people type it: any case, Swahili "ndio" or "ndiyo",
-// punctuation between, or the code alone after the word.
-var yesReply = regexp.MustCompile(`(?i)^\s*(yes|ndio|ndiyo)[\s,.:;!-]*(\d*)\s*[.!]*\s*$`)
+// punctuation between, or the code alone after the word. "POST 1234" (and Swahili "chapisha")
+// is the typed form of Approve and post on a finished ad; the code decides what it does.
+var yesReply = regexp.MustCompile(`(?i)^\s*(yes|ndio|ndiyo|post|chapisha)[\s,.:;!-]*(\d*)\s*[.!]*\s*$`)
 
 // ParseYes reads an approval reply. yes is true for a reply that is only the yes word and
 // maybe a number; code is the number when it has exactly 4 digits.

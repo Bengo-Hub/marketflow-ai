@@ -40,6 +40,7 @@ func (h *OSHandler) approvalReply(ctx context.Context, r *http.Request, tenantID
 	code, yes := osrun.ParseYes(req.Text)
 	if !yes || (code == "" && !h.codes.Pending(ctx, tenantID.String(), req.UserID)) {
 		h.codes.Cancel(ctx, tenantID.String(), req.UserID)
+		h.codes.CancelOTP(ctx, tenantID.String(), req.UserID)
 		return WhatsAppAskResponse{}, false
 	}
 	if code == "" {
@@ -62,7 +63,11 @@ func (h *OSHandler) redeemApproval(ctx context.Context, r *http.Request, tenantI
 		// current buttons again.
 		out.Reply = "That button is from an older message and has expired, so nothing was spent."
 		if p, ok := h.codes.PendingApproval(ctx, tenantID.String(), req.UserID); ok {
-			if p.Action == osrun.ActionRender {
+			if p.Action == osrun.ActionPublish {
+				out.Reply += fmt.Sprintf(" To post the current video, reply POST %s.", p.Code)
+				out.Interactive = &waInteractive{Body: fmt.Sprintf("That button has expired. Tap %s, or reply POST %s, to approve the current video and post it.", btnApprovePost, p.Code),
+					Buttons: publishButtons(p.RunID, p.Code)}
+			} else if p.Action == osrun.ActionRender {
 				out.Reply += fmt.Sprintf(" To make the current video, reply YES %s.", p.Code)
 				out.Interactive = &waInteractive{Body: "That button has expired. " + approveLine(btnMakeVideo, p.Code, "make the current video", p.Credits),
 					Buttons: storyboardButtons(p.RunID, p.Code)}
@@ -84,14 +89,8 @@ func (h *OSHandler) redeemApproval(ctx context.Context, r *http.Request, tenantI
 		out.Reply = "I could not check that code just now, so nothing was spent. Please try again in a minute."
 		return out
 	}
-	switch a.Action {
-	case osrun.ActionApprove:
-		h.whatsAppApprove(ctx, r, tenantID, req, a, &out)
-	case osrun.ActionRender:
-		h.whatsAppRender(ctx, tenantID, req, a, &out)
-	default:
-		out.Reply = "That code is not for anything I can do. Send your request again."
-	}
+	// Above the spend threshold a one-time code comes first (whatsapp_actions.go).
+	h.afterApproval(ctx, r, tenantID, req, a, &out)
 	h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
 	return out
 }
@@ -109,18 +108,23 @@ func (h *OSHandler) whatsAppApprove(ctx context.Context, r *http.Request, tenant
 		return
 	}
 	out.Reply = approvedReply
+	if a.Option != "" {
+		out.Reply = "Approved: " + a.Option + ". I'm writing the script and storyboard now; I'll send the stills here."
+	}
+	approval := *a
 	// A copy of the request made now: the original ends with the reply.
 	rc := r.Clone(context.WithoutCancel(ctx))
 	h.inBackground(func(bg context.Context) {
-		h.approveInBackground(bg, rc.WithContext(bg), tenantID, req, run)
+		h.approveInBackground(bg, rc.WithContext(bg), tenantID, req, run, approval)
 	})
 }
 
 // approveInBackground is the approval's work after the reply. Only one runs per quote (a Redis
 // lock), and a quote already approved reuses its approved turn, so a second YES or a retry
 // neither charges the turn again nor makes a second brief. Every failure reaches the requester
-// through marketflow-api (event media_failed).
-func (h *OSHandler) approveInBackground(ctx context.Context, r *http.Request, tenantID uuid.UUID, req whatsAppAskRequest, quote *osrun.Run) {
+// through marketflow-api (event media_failed). An approved cheaper option (a.Tier) runs the turn
+// at that tier instead of the plan's own, and never reuses the plan's approved turn.
+func (h *OSHandler) approveInBackground(ctx context.Context, r *http.Request, tenantID uuid.UUID, req whatsAppAskRequest, quote *osrun.Run, a osrun.Approval) {
 	release, ok, err := h.runs.Lock(ctx, "approve:"+quote.RunID, h.mediaTimeout)
 	if err != nil || !ok {
 		return // another approval of this quote is already running
@@ -132,17 +136,30 @@ func (h *OSHandler) approveInBackground(ctx context.Context, r *http.Request, te
 	if fresh, err := h.runs.Get(ctx, tenantID.String(), quote.RunID); err == nil {
 		quote = fresh
 	}
+	tier, option := quote.Tier, a.Tier != "" && a.Tier != quote.Tier
+	if option {
+		tier = a.Tier
+	}
 	var approved *osrun.Run
-	if quote.ApprovedRunID != "" {
+	if quote.ApprovedRunID != "" && !option {
 		approved, _ = h.runs.Get(ctx, tenantID.String(), quote.ApprovedRunID)
 	}
 	if approved == nil {
 		var out WhatsAppAskResponse
-		ask := askRequest{Text: quote.Text, ApprovePlan: true, Tier: quote.Tier, Platforms: quote.Platforms, viaWhatsApp: true,
+		ask := askRequest{Text: quote.Text, ApprovePlan: true, Tier: tier, Platforms: quote.Platforms, viaWhatsApp: true,
 			userID: req.UserID, sender: req.Sender, tenantSlug: req.TenantSlug, portalURL: req.PortalURL}
 		sink, ok := h.whatsAppTurn(ctx, r, tenantID, req, ask, &out)
 		if !ok {
-			fail(quote.RunID, out.Reply)
+			text := out.Reply
+			if out.NeedsCredits {
+				// Short of credits: the Buy credits button rides on the failure message
+				// (WhatsAppNotify, media_failed); the plan comes back to approve once they land.
+				waiting := a
+				waiting.Code, waiting.Attempts = "", 0
+				text, _ = h.offerBuy(ctx, tenantID, req, quote.RunID, a.Credits, a.Credits-max(h.balance(ctx, tenantID), 0), &waiting,
+					"Your AI credits do not cover this, so nothing was spent.")
+			}
+			fail(quote.RunID, text)
 			return
 		}
 		if res := sink.out.Result; res == nil || res.Route != team.RouteDone {
@@ -156,9 +173,11 @@ func (h *OSHandler) approveInBackground(ctx context.Context, r *http.Request, te
 			fail(quote.RunID, "Approved. The team wrote the drafts; open MarketFlow to make the video: "+portal)
 			return
 		}
-		quote.ApprovedRunID = approved.RunID
-		if err := h.runs.Update(ctx, quote); err != nil {
-			h.logger.Warn("approved turn not recorded on the quote", zap.String("run_id", quote.RunID), zap.Error(err))
+		if !option {
+			quote.ApprovedRunID = approved.RunID
+			if err := h.runs.Update(ctx, quote); err != nil {
+				h.logger.Warn("approved turn not recorded on the quote", zap.String("run_id", quote.RunID), zap.Error(err))
+			}
 		}
 	}
 	if _, err := h.makeMedia(ctx, tenantID, approved, -1); err != nil {
@@ -191,10 +210,16 @@ func (h *OSHandler) renderInBackground(ctx context.Context, tenantID uuid.UUID, 
 	}
 	defer release()
 	if q, err := h.studio.quote(ctx, tenantID, a.VersionID); err == nil && !q.Enough && q.Shortfall > 0 {
-		text := fmt.Sprintf("This video needs about %d credits and you are %d short, so nothing was spent. Top up here: %s",
-			q.CreditsNeeded, q.Shortfall, link(req.PortalURL, req.TenantSlug, "/settings/billing"))
-		if code, cerr := h.codes.Issue(ctx, a); cerr == nil {
-			text += fmt.Sprintf("\n\nThen reply YES %s to make the video (about %d credits).", code, q.CreditsNeeded)
+		// The Buy credits button (whatsapp_actions.go): once the credits land, this render starts
+		// by itself, since the person already approved it.
+		waiting := a
+		waiting.Code, waiting.Attempts, waiting.Credits = "", 0, q.CreditsNeeded
+		text, _ := h.offerBuy(ctx, tenantID, req, a.RunID, q.CreditsNeeded, q.Shortfall, &waiting,
+			fmt.Sprintf("This video needs about %d credits and you are %d short, so nothing was spent.", q.CreditsNeeded, q.Shortfall))
+		again := a
+		again.OTPDone = false // a new typed code asks for a new confirmation code above the threshold
+		if code, cerr := h.codes.Issue(ctx, again); cerr == nil {
+			text += fmt.Sprintf("\n\nOr top up another way, then reply YES %s to make the video (about %d credits).", code, q.CreditsNeeded)
 		}
 		h.tellFailure(ctx, tenantID, a.RunID, a.VersionID, text)
 		return
@@ -242,8 +267,22 @@ func (h *OSHandler) mediaFailReply(err error, req whatsAppAskRequest, what strin
 func (h *OSHandler) offerApprovalCode(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, out askResponse, reply string) (string, *waInteractive) {
 	res := out.Result
 	if h.codes == nil || h.runs == nil || req.UserID == "" || res == nil || res.Route != team.RouteQuote ||
-		res.Plan == nil || res.Plan.Shortfall > 0 || out.RunID == "" {
+		res.Plan == nil || out.RunID == "" {
 		return reply, nil
+	}
+	if res.Plan.Shortfall > 0 {
+		// Short of credits: one Buy credits button for the smallest covering bundle; the plan
+		// comes back to approve once the credits land.
+		if _, err := h.runs.Get(ctx, tenantID.String(), out.RunID); err != nil {
+			return reply, nil
+		}
+		waiting := &osrun.Approval{Action: osrun.ActionApprove, RunID: out.RunID, TenantID: tenantID.String(),
+			UserID: req.UserID, Sender: req.Sender, Credits: res.Plan.Recommended.Credits}
+		text, ia := h.offerBuy(ctx, tenantID, req, out.RunID, res.Plan.Recommended.Credits, res.Plan.Shortfall, waiting, trimRunes(reply, maxInteractiveText))
+		if ia == nil {
+			return reply, nil
+		}
+		return text, ia
 	}
 	if _, err := h.runs.Get(ctx, tenantID.String(), out.RunID); err != nil {
 		return reply, nil
@@ -311,6 +350,9 @@ type whatsAppNotifyResponse struct {
 	// Change and Discard; or the finished ad as a video. marketflow-api sends it instead of Text
 	// only while the requester's 24-hour window is open.
 	Interactive *waInteractive `json:"interactive,omitempty"`
+	// Template is the utility template to send instead when the window is closed (only if Meta
+	// approved it; otherwise marketflow-api sends nothing outside the window for this event).
+	Template *waTemplate `json:"template,omitempty"`
 }
 
 // WhatsAppNotify handles POST /api/v1/internal/os/whatsapp-notify (service key): marketflow-api
@@ -345,6 +387,7 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	var b strings.Builder
 	var ia *waInteractive
+	var tpl *waTemplate
 	switch req.Event {
 	case notifyStoryboardReady:
 		credits := 0
@@ -379,9 +422,22 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, whatsAppNotifyResponse{})
 			return
 		}
-		fmt.Fprintf(&b, "Your video ad is ready: %s\n\nApprove it, post it or change a scene in the Studio: %s", req.Links[0], studio)
-		ia = &waInteractive{Media: []waMedia{{Type: "video", Link: req.Links[0],
-			Caption: "Your video ad is ready. Approve it, post it or change a scene in the Studio: " + studio}}}
+		// Approve and post from WhatsApp (Sprint 17): the video, then Approve and post and Change,
+		// bound to a publish code like the plan's Approve.
+		text, offer, ok := h.publishOffer(ctx, run, req.VersionID, req.Links[0], studio)
+		if !ok {
+			text = fmt.Sprintf("Your video ad is ready: %s\n\nApprove it, post it or change a scene in the Studio: %s", req.Links[0], studio)
+			offer = &waInteractive{Media: []waMedia{{Type: "video", Link: req.Links[0],
+				Caption: "Your video ad is ready. Approve it, post it or change a scene in the Studio: " + studio}}}
+		}
+		b.WriteString(text)
+		ia = offer
+		// Outside the window the mf_video_ready template carries the Studio link instead.
+		studioPath := run.TenantSlug + "/studio"
+		if run.BriefID != "" {
+			studioPath += "/" + run.BriefID
+		}
+		tpl = &waTemplate{Kind: tplVideoReady, Button: studioPath}
 	case notifyRenderFailed:
 		reason := strings.TrimSpace(req.Error)
 		if reason == "" {
@@ -395,11 +451,17 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b.WriteString(trimRunes(text, maxReply))
+		// A shortfall offered a Buy credits button for this run: it rides on this message.
+		if o, ok := h.codes.PendingBuy(ctx, run.TenantID, run.UserID); ok && o.RunID == run.RunID {
+			ia = &waInteractive{Body: trimRunes(text, maxInteractiveText) + "\n\n" + fmt.Sprintf("Tap %s to get an M-Pesa prompt for %s on this number. Nothing is charged until you enter your PIN.",
+				buyTitle(o.Units), kes(o.PriceKES)+" (plus VAT where it applies)"),
+				Buttons: []waBtn{{ID: osrun.BuyID(o.Ref), Title: buyTitle(o.Units)}}}
+		}
 	default:
 		writeError(w, http.StatusBadRequest, "event must be storyboard_ready, render_done, render_failed or media_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, whatsAppNotifyResponse{To: run.Sender, Text: b.String(), Interactive: ia})
+	writeJSON(w, http.StatusOK, whatsAppNotifyResponse{To: run.Sender, Text: b.String(), Interactive: ia, Template: tpl})
 }
 
 type approvalTenantRequest struct {
@@ -450,6 +512,13 @@ func (h *OSHandler) tapTenant(ctx context.Context, req approvalTenantRequest, re
 	case rep.Kind == osrun.ReplyYes:
 		tid, _ := h.codes.Find(ctx, req.TenantIDs, req.UserID, req.Sender, rep.Code)
 		return tid
+	case rep.Kind == osrun.ReplyBuy:
+		for _, tid := range req.TenantIDs {
+			if o, ok := h.codes.PendingBuy(ctx, tid, req.UserID); ok && o.Ref == rep.RunID {
+				return tid
+			}
+		}
+		return ""
 	}
 	for _, tid := range req.TenantIDs {
 		if run, err := h.runs.Get(ctx, tid, rep.RunID); err == nil && run.UserID == req.UserID {

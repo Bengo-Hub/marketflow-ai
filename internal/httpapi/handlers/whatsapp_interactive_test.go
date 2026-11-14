@@ -122,8 +122,11 @@ func TestTappedCancelCheaperChange(t *testing.T) {
 
 	code := issue()
 	out := f.tap(t, osrun.ReplyID(osrun.ReplyCheaper, run.RunID, ""), btnCheaper)
+	// The cheaper options can be chosen (Sprint 17): a label over 20 characters makes it a list;
+	// the plan's own code stays typed in the text and the body.
 	if !strings.Contains(out.Reply, "Posters instead of video: 6 credits") || !strings.Contains(out.Reply, "reply YES "+code) ||
-		out.Interactive == nil || out.Interactive.Buttons[0].ID != osrun.ReplyID(osrun.ReplyYes, run.RunID, code) {
+		out.Interactive == nil || out.Interactive.List == nil || len(out.Interactive.List.Rows) != 1 ||
+		out.Interactive.List.Rows[0].ID != osrun.AltID(run.RunID, 0) || !strings.Contains(out.Interactive.Body, "reply YES "+code) {
 		t.Fatalf("cheaper: %+v", out)
 	}
 	if !f.codes.Pending(ctx, f.tenant.String(), "user-1") {
@@ -212,9 +215,13 @@ func TestWhatsAppNotifyInteractive(t *testing.T) {
 		"event": "render_done", "links": []string{"https://media.example/ad.mp4"}})
 	msg = whatsAppNotifyResponse{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &msg)
+	// The finished ad: the video, then Approve and post and Change bound to a publish code; the
+	// text keeps the typed POST and the Studio link; outside the window the video-ready template.
 	if msg.Interactive == nil || len(msg.Interactive.Media) != 1 || msg.Interactive.Media[0].Type != "video" ||
-		msg.Interactive.Media[0].Link != "https://media.example/ad.mp4" || !strings.Contains(msg.Interactive.Media[0].Caption, "/boi/studio/brief-1") ||
-		!strings.Contains(msg.Text, "https://media.example/ad.mp4") {
+		msg.Interactive.Media[0].Link != "https://media.example/ad.mp4" || len(msg.Interactive.Buttons) != 2 ||
+		msg.Interactive.Buttons[0].Title != btnApprovePost || msg.Interactive.Buttons[1].Title != btnChange ||
+		!strings.Contains(msg.Text, "https://media.example/ad.mp4") || !strings.Contains(msg.Text, "/boi/studio/brief-1") ||
+		msg.Template == nil || msg.Template.Kind != tplVideoReady || msg.Template.Button != "boi/studio/brief-1" {
 		t.Fatalf("finished interactive: %+v", msg)
 	}
 }

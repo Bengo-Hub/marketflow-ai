@@ -23,16 +23,28 @@ type Config struct {
 	// Studio calls, or the storyboard approval and render start. It is also how long the
 	// single-flight lock on a run or a version lasts.
 	MediaTimeout time.Duration
+	// OTPCredits is the spend from which an approval also needs a one-time code sent to the
+	// number by WhatsApp (auth_otp): an approval quoting at least this many credits. 0 turns the
+	// one-time code off.
+	OTPCredits int
+	// OTPTTL is how long that one-time code works (Sprint 17: 15 minutes).
+	OTPTTL time.Duration
+	// TopupTTL is how long a "Buy credits" offer, and the action waiting for the credits, are kept.
+	TopupTTL time.Duration
 }
 
 // DefaultConfig is 24 hours for a run, 30 minutes and 3 tries for a code, 5 minutes for the
-// background media work.
+// background media work, a one-time code from 100 credits for 15 minutes, and 2 hours for a
+// credit top-up to land.
 func DefaultConfig() Config {
-	return Config{RunTTL: 24 * time.Hour, CodeTTL: 30 * time.Minute, CodeAttempts: 3, MediaTimeout: 5 * time.Minute}
+	return Config{RunTTL: 24 * time.Hour, CodeTTL: 30 * time.Minute, CodeAttempts: 3, MediaTimeout: 5 * time.Minute,
+		OTPCredits: 100, OTPTTL: 15 * time.Minute, TopupTTL: 2 * time.Hour}
 }
 
-// ConfigFromEnv reads MF_OS_RUN_TTL, MF_OS_APPROVAL_CODE_TTL, MF_OS_MEDIA_TIMEOUT (Go durations
-// such as "24h" or "30m") and MF_OS_APPROVAL_CODE_ATTEMPTS. A bad value keeps its default; the error lists it.
+// ConfigFromEnv reads MF_OS_RUN_TTL, MF_OS_APPROVAL_CODE_TTL, MF_OS_MEDIA_TIMEOUT, MF_OS_OTP_TTL,
+// MF_OS_TOPUP_TTL (Go durations such as "24h" or "30m"), MF_OS_APPROVAL_CODE_ATTEMPTS and
+// MF_OS_OTP_CREDIT_THRESHOLD (0 switches the one-time code off). A bad value keeps its default;
+// the error lists it.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	cfg := DefaultConfig()
 	var bad []string
@@ -51,6 +63,16 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	dur("MF_OS_RUN_TTL", &cfg.RunTTL)
 	dur("MF_OS_APPROVAL_CODE_TTL", &cfg.CodeTTL)
 	dur("MF_OS_MEDIA_TIMEOUT", &cfg.MediaTimeout)
+	dur("MF_OS_OTP_TTL", &cfg.OTPTTL)
+	dur("MF_OS_TOPUP_TTL", &cfg.TopupTTL)
+	if v := strings.TrimSpace(getenv("MF_OS_OTP_CREDIT_THRESHOLD")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			bad = append(bad, "MF_OS_OTP_CREDIT_THRESHOLD must be 0 or more credits")
+		} else {
+			cfg.OTPCredits = n
+		}
+	}
 	if v := strings.TrimSpace(getenv("MF_OS_APPROVAL_CODE_ATTEMPTS")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 10 {

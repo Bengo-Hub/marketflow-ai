@@ -28,7 +28,17 @@ const (
 	ReplyChange  = "change"  // the storyboard's Change
 	ReplyDiscard = "discard" // the storyboard's Discard
 	ReplyField   = "f"       // a list row answering a missing field
+	ReplyAlt     = "alt"     // one cheaper option, chosen from the Cheaper option reply
+	ReplyBuy     = "buy"     // the Buy credits button; its id carries the offer's ref
 )
+
+// AltID is the id of the button (or list row) choosing cheaper option index of a run's plan.
+func AltID(runID string, index int) string {
+	return replyPrefix + ReplyAlt + ":" + runID + ":" + strconv.Itoa(index)
+}
+
+// BuyID is the id of a Buy credits button.
+func BuyID(ref string) string { return replyPrefix + ReplyBuy + ":" + ref }
 
 // replyPrefix marks our ids; anything else (a template quick reply such as "stop") is not ours.
 const replyPrefix = "mf:"
@@ -38,7 +48,8 @@ type Reply struct {
 	Kind  string
 	RunID string
 	Code  string
-	// Field and Row are set for ReplyField.
+	// Field and Row are set for ReplyField; Row is also the option index of ReplyAlt. For
+	// ReplyBuy, RunID holds the offer's ref.
 	Field string
 	Row   int
 }
@@ -82,6 +93,20 @@ func ParseReply(id string) (Reply, bool) {
 			return Reply{}, false
 		}
 		return Reply{Kind: ReplyYes, RunID: parts[1], Code: parts[2]}, true
+	case ReplyAlt:
+		if len(parts) != 3 || parts[1] == "" {
+			return Reply{}, false
+		}
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n < 0 || n > 9 {
+			return Reply{}, false
+		}
+		return Reply{Kind: ReplyAlt, RunID: parts[1], Row: n}, true
+	case ReplyBuy:
+		if len(parts) != 2 || len(parts[1]) != 16 {
+			return Reply{}, false
+		}
+		return Reply{Kind: ReplyBuy, RunID: parts[1]}, true
 	case ReplyCheaper, ReplyCancel, ReplyChange, ReplyDiscard:
 		if len(parts) != 2 || parts[1] == "" {
 			return Reply{}, false

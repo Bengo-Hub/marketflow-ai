@@ -424,7 +424,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// WhatsApp assistant (Sprint 17): the same decider, so Jev with the free fallback model.
 	osHandler.WithGate(assistgate.New(decider)).WithSessions(sessionService)
 	// Kept media turns, WhatsApp approval codes and make-media (Sprint 15 #134/#138, Sprint 17):
-	// MF_OS_RUN_TTL, MF_OS_APPROVAL_CODE_TTL and MF_OS_APPROVAL_CODE_ATTEMPTS, defaults in osrun.
+	// MF_OS_RUN_TTL, MF_OS_APPROVAL_CODE_TTL and MF_OS_APPROVAL_CODE_ATTEMPTS, defaults in osrun;
+	// MF_OS_OTP_CREDIT_THRESHOLD and MF_OS_OTP_TTL for the one-time code above a spend, and
+	// MF_OS_TOPUP_TTL for the WhatsApp Buy credits button (Sprint 17).
 	// Studio is marketflow-api's /api/v1/creative, called with the platform key for the tenant.
 	osRunCfg, osRunErr := osrun.ConfigFromEnv(os.Getenv)
 	if osRunErr != nil {
@@ -616,6 +618,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/os/whatsapp-notify", osHandler.WhatsAppNotify)
 		// Which of a sender's businesses a bare "YES <code>" is for, once their pick expired.
 		r.Post("/os/approval-tenant", osHandler.ApprovalTenant)
+		// A credit purchase started by a WhatsApp Buy credits tap was paid: resume what waited.
+		r.Post("/os/whatsapp-topup-paid", osHandler.WhatsAppTopupPaid)
 		// A lead's WhatsApp reply after the instant follow-up (Sprint 23, customer-safe tools).
 		r.Post("/os/lead-reply", chatHandler.LeadReply)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)

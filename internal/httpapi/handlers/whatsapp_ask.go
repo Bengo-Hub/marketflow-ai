@@ -83,6 +83,9 @@ type WhatsAppAskResponse struct {
 	// Interactive is the same answer with reply buttons or a list, sent instead of Reply while
 	// the sender's 24-hour window is open. Reply stays the full text form.
 	Interactive *waInteractive `json:"interactive,omitempty"`
+	// OTP is a one-time code for marketflow-api to send to the sender by the auth_otp template,
+	// for an approval above the spend threshold (whatsapp_actions.go).
+	OTP *waOTP `json:"otp,omitempty"`
 }
 
 // WhatsAppAsk handles POST /api/v1/internal/os/whatsapp-ask (S2S, marketflow-worker). The worker
@@ -111,6 +114,21 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 	if out, handled := h.replyTap(ctx, r, tenantID, &req); handled {
 		writeJSON(w, http.StatusOK, out)
 		return
+	}
+	// A 6-digit confirmation code answers an approval above the spend threshold; a typed BUY
+	// answers a pending Buy credits offer (whatsapp_actions.go).
+	if out, handled := h.otpReplyMsg(ctx, r, tenantID, req); handled {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if h.codes != nil && req.UserID != "" && isBuyReply(req.Text) {
+		if _, pending := h.codes.PendingBuy(ctx, tenantID.String(), req.UserID); pending {
+			out := WhatsAppAskResponse{Pass: true, Verdict: tapVerdict, Route: "buy"}
+			h.buyTap(ctx, tenantID, req, "", &out)
+			h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
 	}
 	// "YES 4821" answers an approval code (whatsapp_approve.go). It comes before the gate, which
 	// would not see marketing words in it; any other message cancels the pending code.
@@ -156,6 +174,10 @@ func (h *OSHandler) whatsAppTurn(ctx context.Context, r *http.Request, tenantID 
 	} else if !ok {
 		out.NeedsCredits = true
 		out.Reply = topUp
+		if !ask.ApprovePlan {
+			// A new request with no credits at all: the smallest bundle, then send it again.
+			out.Reply, out.Interactive = h.offerBuy(ctx, tenantID, req, "", 0, 1, nil, "Your AI credits are used up, so nothing was spent; send your request again once you have topped up.")
+		}
 		return nil, false
 	}
 

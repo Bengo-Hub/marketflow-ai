@@ -147,6 +147,17 @@ func (h *OSHandler) replyTap(ctx context.Context, r *http.Request, tenantID uuid
 	case osrun.ReplyYes:
 		out = h.redeemApproval(ctx, r, tenantID, *req, rep.Code, rep.RunID)
 		return out, true
+	case osrun.ReplyAlt:
+		// A cheaper option chosen from the list: its own price and approval code (whatsapp_actions.go).
+		h.chooseCheaper(ctx, tenantID, *req, rep, &out)
+		h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
+		return out, true
+	case osrun.ReplyBuy:
+		// Buy credits: this tap is the confirmation; the M-Pesa PIN on the phone is the payment.
+		out.Route = "buy"
+		h.buyTap(ctx, tenantID, *req, rep.RunID, &out)
+		h.recordWhatsApp(ctx, tenantID, req.UserID, req.Text, out.Reply, out.Route)
+		return out, true
 	}
 
 	pending, hasPending := h.codes.PendingApproval(ctx, tid, req.UserID)
@@ -202,10 +213,29 @@ func (h *OSHandler) replyTap(ctx context.Context, r *http.Request, tenantID uuid
 				Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, rep.RunID, pending.Code), Title: btnApprove}, {ID: osrun.ReplyID(osrun.ReplyCancel, rep.RunID, ""), Title: btnCancel}},
 			}
 		}
+		if len(opts) > 0 && run.UserID == req.UserID {
+			// Each cheaper option can be chosen (Sprint 17): buttons when they fit, else a list. A
+			// video option then gets its own price and approval code; posters and copy end with
+			// the MarketFlow link (chooseCheaper). The plan's own code stays typed in the text.
+			body := "Cheaper ways to do this. Tap one to see its price; nothing is spent until you approve it."
+			if sameRun {
+				body += fmt.Sprintf(" The plan I quoted still stands: reply YES %s to approve it.", pending.Code)
+			}
+			btns, list := cheaperChoices(rep.RunID, opts)
+			out.Interactive = &waInteractive{Body: body, Buttons: btns, List: list}
+		}
 	case osrun.ReplyChange:
 		text := "To change the words or the pictures, open the Studio: " + studio
 		out.Reply = text
-		if sameRun {
+		if sameRun && pending.Action == osrun.ActionPublish {
+			// The finished ad: changing a scene happens in the Studio; the current video can still
+			// be approved and posted.
+			out.Reply += fmt.Sprintf("\n\nTo post the current video as it is, reply POST %s.", pending.Code)
+			out.Interactive = &waInteractive{
+				Body:    text + "\n\nTo post the current video as it is: " + fmt.Sprintf("tap %s, or reply POST %s.", btnApprovePost, pending.Code),
+				Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, rep.RunID, pending.Code), Title: btnApprovePost}},
+			}
+		} else if sameRun {
 			out.Reply += fmt.Sprintf("\n\nWhen you are happy with it, reply YES %s to make the video.", pending.Code)
 			out.Interactive = &waInteractive{
 				Body: text + "\n\nWhen you are happy with it: " + approveLine(btnMakeVideo, pending.Code, "make the video", pending.Credits),
