@@ -114,7 +114,9 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		}
 		// Same output rules as the non-streaming path: jailbreak and schema-leak screen,
 		// then the tenant's compliance filter (blocked claims, substitutions, disclaimers).
-		return p.filterAndCache(cacheCtx, input, ScreenOutput(text), embedding)
+		// A blocked answer gets one rewrite with the broken rules (rewrite.go); the widget gets
+		// it as a replace delta like any other filtered text.
+		return p.filterAndCache(cacheCtx, input, p.rewriteIfBlocked(cacheCtx, input, messages, ScreenOutput(text)), embedding)
 	}), meta, nil
 }
 

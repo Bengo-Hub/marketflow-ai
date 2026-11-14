@@ -1,0 +1,204 @@
+# Business types and the advertising rules each one follows (Sprint 7 #32 and #34, owner
+# decision 2026-11-14). This file is the single source of truth: the compliance filter
+# (filter.go) blocks text that matches a type's blocks, and every chat, caption and script
+# prompt gets the baseline guidance plus the type's own guidance (PromptRules). marketflow-api
+# keeps a mirrored key list (internal/modules/tenant/business_types.go) that its parity test
+# checks against this file.
+#
+# An empty or unknown type, and the legacy "codevertex" persona, get the "generic" rules.
+# "flp" keeps its own strict filter in filter.go exactly as it was (disclaimers and
+# substitutions); its entry here only lists it and words the same rules for the prompts.
+#
+# Blocks are RE2 patterns. A match drops the whole text, so each one is narrow: it targets a
+# phrase that is wrong for that business whatever the facts are. Anything that depends on the
+# facts (is the "was" price real, is the room really free) is guidance for the writer, not a block.
+#
+# Sources (read 2026-11-14; the PPB guideline was read through law firm summaries, not its own text):
+# - Consumer Protection Act No. 46 of 2012 (Kenya), ss. 12 and 13: false, misleading or
+#   unconscionable representations about price, quality, availability or results.
+# - Competition Act No. 12 of 2010 (Kenya), s. 55: false or misleading representations,
+#   including about a price advantage or a previous price.
+# - Pharmacy and Poisons Act (Cap 244) and the PPB Guideline for Advertisement and Promotion of
+#   Health Products and Technologies (July 2022): only registered products may be advertised,
+#   prescription-only medicines may not be advertised to the public (online and through
+#   influencers too), adverts need PPB approval. Summaries: bowmanslaw.com "Healthy respect for
+#   advertising guidelines is critical in Kenyan pharmaceutical sector"; blog.galalaw.com
+#   "Regulating medical advertising in Kenya"; PSK and PPB statements on Ozempic promotion (2025).
+# - KEBS cosmetics standards (KS EAS 377) and the KEBS bans on mercury and hydroquinone in skin
+#   products: no skin lightening or bleaching promotion.
+# - Tourism Act 2011 and the Tourism Regulatory Authority classification: star ratings only when
+#   classified. VAT Act 2013 (16 percent) and the Tourism Fund catering levy (2 percent).
+# - Data Protection Act 2019 (Kenya), s. 37: commercial use of personal data needs consent,
+#   which covers testimonials and before and after photos of real people.
+# - ASA CAP Code (UK) principles used as a model: substantiation, no misleading prices or
+#   urgency, testimonials must be genuine.
+
+baseline:
+  guidance:
+    - Use only the facts, prices and offers the business gave you. Never invent a price, discount, stock level, award, certification, licence or review.
+    - Never promise a result the business cannot deliver to every customer. Where results differ from person to person, say so.
+    - A discount or "was" price must be a real earlier price. Never invent countdowns, scarcity or limited time pressure.
+    - Reviews, testimonials and before and after pictures must come from real customers who agreed to be shown.
+    - Give prices in KES with what is included, and name any extra cost such as delivery, VAT or a booking fee.
+    - Do not run down competitors or make comparisons the business cannot prove.
+  blocks:
+    - pattern: '(?i)\bcure[sd]?\b|\bcuring\b'
+      reason: claims that something cures a condition
+    - pattern: '(?i)\bmiracle\b|\bmagic\b|\bwonder\s+drug\b'
+      reason: miracle or magic claims
+    - pattern: '(?i)\bguaranteed?\s+income\b'
+      reason: guaranteed income
+    - pattern: '(?i)\bget\s+rich\b'
+      reason: get rich promises
+    - pattern: '(?i)\beasy\s+money\b'
+      reason: easy money promises
+    - pattern: '(?i)\bmake\s+money\s+fast\b'
+      reason: fast money promises
+    - pattern: '(?i)\bguaranteed?\s+(returns?|profits?)\b'
+      reason: guaranteed returns or profits
+    - pattern: '(?i)\brisk[\s-]free\s+(investment|returns?|profits?)\b'
+      reason: risk-free investment claims
+    - pattern: '(?i)\bdouble\s+your\s+(money|investment)\b'
+      reason: doubling money promises
+
+types:
+  - key: generic
+    label: Other business
+    description: Any business not listed here. It follows the shared honesty rules every business gets.
+
+  - key: flp
+    label: Forever Living (FBO)
+    description: Forever Business Owners selling Forever Living products. The strictest rules, with the health and income disclaimers Forever requires.
+    strict: flp
+    guidance:
+      - Never say a product cures, treats, heals or prevents any disease. Use "supports", "promotes" or "helps maintain".
+      - Never promise income. Results vary, and income talk carries the Forever income disclaimer.
+      - Never call a product FDA approved, a miracle or a wonder drug.
+      - Suggest a healthcare professional for any medical question.
+
+  - key: restaurant
+    label: Restaurant or cafe
+    description: Restaurants, cafes, bakeries, bars and food delivery. Honest menus, prices and allergens.
+    aliases: [cafe, food, eatery, bakery]
+    guidance:
+      - Never say a dish or drink treats, prevents or heals a condition, burns fat or detoxes the body.
+      - Be honest about allergens. Call a dish nut free, gluten free, dairy free, halal or vegan only when the business confirmed it, and tell guests with allergies to ask the staff.
+      - Menu items, portions, prices and opening hours must match what the business gave you.
+      - Say "fresh", "homemade" or "organic" only when the business said so.
+    blocks:
+      - pattern: '(?i)\ballerg(en|y)[\s-]free\b|\bsafe\s+for\s+(all|any|every)\s+allerg(y|ies)\b|\b100\s*%\s*(nut|peanut|gluten|dairy|lactose)[\s-]free\b'
+        reason: absolute allergen safety claims
+      - pattern: '(?i)\b(burns?|melts?)\s+(belly\s+)?fat\b|\b(detox(es|ifies)?|cleanses?)\s+your\s+(body|liver|kidneys|blood|system)\b|\bboosts?\s+(your\s+)?immun(e\s+system|ity)\b|\b(lowers?|reduces?)\s+(your\s+)?(blood\s+(sugar|pressure)|cholesterol)\b'
+        reason: unverifiable health claims about food
+
+  - key: retail
+    label: Retail shop
+    description: Shops, supermarkets, boutiques and hardware stores selling in person. Real prices, real stock and real discounts.
+    aliases: [shop, store, supermarket, boutique]
+    guidance:
+      - Prices and stock must be the business's real ones. Never invent "only a few left" or "selling fast".
+      - A "was" price must be a price the item really sold at before. Otherwise show only the current price.
+      - Say "original" or "genuine" only when the business confirmed it, and never claim a KEBS mark the product does not carry.
+      - State delivery cost and area, and the return and refund terms, or say where to find them.
+    blocks:
+      - pattern: '(?i)\b(cheapest|lowest\s+prices?)\s+in\s+(kenya|nairobi|mombasa|kisumu|town|the\s+country|africa)\b|\b(lowest|best)\s+prices?\s+guaranteed\b|\bguaranteed\s+(lowest|best)\s+prices?\b'
+        reason: unprovable lowest price claims
+      - pattern: '(?i)\bno\s+refunds?\s*(,|/|or|and)?\s*(no\s+)?returns?\b|\bno\s+returns?\s*(,|/|or|and)?\s*(no\s+)?refunds?\b'
+        reason: blanket no refund statements (faulty goods keep their legal remedies)
+
+  - key: ecommerce
+    label: Online shop (e-commerce)
+    description: Businesses that sell online with delivery. Real prices and stock, clear delivery, payment and return terms.
+    aliases: [e-commerce, online-shop, online_shop]
+    guidance:
+      - Prices and stock must be the business's real ones. Never invent "only a few left", visitor counts or countdown timers.
+      - A "was" price must be a price the item really sold at before. Otherwise show only the current price.
+      - State the delivery cost, areas and time, the payment methods, and the return and refund terms, or link to them.
+      - Say "original" or "genuine" only when the business confirmed it.
+      - Marketing messages go only to people who agreed to receive them, with a way to stop.
+    blocks:
+      - pattern: '(?i)\b(cheapest|lowest\s+prices?)\s+in\s+(kenya|nairobi|mombasa|kisumu|town|the\s+country|africa)\b|\b(lowest|best)\s+prices?\s+guaranteed\b|\bguaranteed\s+(lowest|best)\s+prices?\b'
+        reason: unprovable lowest price claims
+      - pattern: '(?i)\bno\s+refunds?\s*(,|/|or|and)?\s*(no\s+)?returns?\b|\bno\s+returns?\s*(,|/|or|and)?\s*(no\s+)?refunds?\b'
+        reason: blanket no refund statements (faulty goods keep their legal remedies)
+
+  - key: services
+    label: Professional services
+    description: Consultants, agencies, trainers, contractors, cleaners and other service providers. No guaranteed outcomes, licences named truthfully.
+    aliases: [service, professional-services]
+    guidance:
+      - Never guarantee an outcome the business does not control, such as a visa, a loan, a job, an exam pass or a court case.
+      - Name a licence, registration or membership (for example NCA, LSK, EBK or ICPAK) only when the business gave it, and name it exactly.
+      - Say what the price includes and what costs extra. Give timelines as estimates unless the business commits to them.
+    blocks:
+      - pattern: '(?i)\bguaranteed?\s+(visa|approval|job|employment|placement|admission|pass|win|loan|results?|success)\b|\b100\s*%\s+(success|pass|approval)(\s+rate)?\b|\bguaranteed\s+to\s+(win|pass|get)\b'
+        reason: guaranteed outcomes
+
+  - key: saas
+    label: Software or app (SaaS)
+    description: Software, apps and online tools sold by subscription. No fake uptime or security claims, clear trial and renewal terms.
+    aliases: [software, app, tech]
+    guidance:
+      - Quote uptime only as the published SLA figure. Never promise that the service never goes down.
+      - Name a security certification (ISO 27001, SOC 2, PCI DSS) or Data Protection Commissioner registration only when the business holds it. Never call the product unhackable or completely secure.
+      - State the trial length, what happens when it ends, the renewal price and how to cancel.
+      - Say "unlimited" only when there is no fair use limit.
+    blocks:
+      - pattern: '(?i)\b100\s*%\s+uptime\b|\bzero\s+downtime\b|\bnever\s+goes\s+down\b'
+        reason: absolute uptime claims
+      - pattern: '(?i)\bunhackable\b|\bhack[\s-]?proof\b|\b100\s*%\s+secure\b|\b(completely|totally|fully)\s+secure\b|\b(military|bank)[\s-]grade\s+(security|encryption)\b'
+        reason: absolute security claims
+
+  - key: salon
+    label: Salon, barber or beauty
+    description: Hair salons, barbers, spas, nail and beauty studios. No guaranteed results, real before and after pictures only.
+    aliases: [beauty, barber, barbershop, spa]
+    guidance:
+      - Never guarantee a result, and never promise instant, overnight or permanent results.
+      - Before and after pictures only from real clients who agreed in writing, shown without editing.
+      - Never promote skin lightening or bleaching products or injections (KEBS bans mercury and hydroquinone in skin products).
+      - Never make medical claims about skin, scalp or hair, such as regrowing hair or curing acne.
+      - Name the products and brands used truthfully.
+    blocks:
+      - pattern: '(?i)\bguaranteed?\s+(results?|hair\s+growth|clear(er)?\s+skin|weight\s+loss)\b|\bresults\s+guaranteed\b|\b(instant|overnight)\s+results?\b|\bpermanent(ly)?\s+(hair\s+removal|results?)\b'
+        reason: guaranteed or instant beauty results
+      - pattern: '(?i)\b(skin\s+)?(lightening|bleaching|whitening)\s+(creams?|lotions?|soaps?|injections?|pills?|treatments?|products?|serums?)\b|\bglutathione\s+(injections?|drips?)\b'
+        reason: skin lightening or bleaching promotion
+      - pattern: '(?i)\b(regrows?|restores?)\s+(your\s+)?(lost\s+)?hair\b'
+        reason: hair regrowth claims
+
+  - key: pharmacy
+    label: Pharmacy or chemist
+    description: Pharmacies, chemists and health product shops. Pharmacy and Poisons Board advertising limits apply.
+    aliases: [chemist, pharmaceutical]
+    guidance:
+      - Never claim a medicine or health product cures anything, works for everyone or has no side effects.
+      - Never advertise prescription-only medicines (antibiotics, weight loss injections, strong painkillers and similar) to the public, in ads, posts or chat. You may say the pharmacy fills prescriptions.
+      - Follow the Pharmacy and Poisons Board advertising limits. Promote only registered over-the-counter products, and do not claim PPB approval of an advert unless the business has it.
+      - Tell customers to read the label and to talk to the pharmacist or a doctor about their condition.
+    blocks:
+      - pattern: '(?i)\bno\s+prescriptions?\s+(needed|required|necessary)\b|\bprescription[\s-]free\b'
+        reason: selling medicines without a prescription
+      - pattern: '(?i)\b(no|zero)\s+side[\s-]effects?\b|\bfree\s+(of|from)\s+side[\s-]effects?\b|\bwithout\s+(any\s+)?side[\s-]effects?\b'
+        reason: claims of no side effects
+      - pattern: '(?i)\b(100\s*%|guaranteed?)\s+(effective|results?|recovery|relief)\b|\bworks\s+for\s+everyone\b'
+        reason: guaranteed results from medicine
+      - pattern: '(?i)\b(treats?|reverses?|eliminates?|ends?)\s+(diabetes|cancer|hiv|aids|hypertension|high\s+blood\s+pressure|tuberculosis|infertility|erectile\s+dysfunction)\b'
+        reason: treatment claims for serious diseases
+      - pattern: '(?i)\b(discount(ed|s)?|offers?|deals?|promo(tion)?s?|sale|cheap(est)?|get\s+your|\d+\s*%\s*off)\b[^.!?\n]{0,40}\b(antibiotics?|amoxicillin|augmentin|azithromycin|ciprofloxacin|ozempic|semaglutide|wegovy|mounjaro|tramadol|codeine|sildenafil|viagra|diazepam)\b|\b(antibiotics?|amoxicillin|augmentin|azithromycin|ciprofloxacin|ozempic|semaglutide|wegovy|mounjaro|tramadol|codeine|sildenafil|viagra|diazepam)\b[^.!?\n]{0,40}\b(on\s+offer|on\s+sale|discount(ed)?|deals?|promo|\d+\s*%\s*off)'
+        reason: promoting prescription-only medicines to the public
+
+  - key: hospitality
+    label: Hotel, guest house or lodge
+    description: Hotels, guest houses, lodges, Airbnbs and camps. Prices say whether taxes are included, no fake availability.
+    aliases: [hotel, guesthouse, guest-house, lodge, airbnb]
+    guidance:
+      - Every price says whether VAT (16 percent) and the 2 percent catering levy are included, or names them as extra.
+      - Never say rooms are almost gone, selling fast or "only a few left" unless the business gave you live availability.
+      - Claim a star rating only when the Tourism Regulatory Authority classified the property at that rating.
+      - Pictures and descriptions must show the actual property and rooms, and state check-in, cancellation and deposit terms when they matter.
+    blocks:
+      - pattern: '(?i)\bonly\s+(\d+|one|two|three|a\s+few)\s+rooms?\s+(left|remaining)\b|\b(last|final)\s+(\d+\s+)?rooms?\s+(left|available|remaining)\b|\balmost\s+(fully\s+)?(booked|sold\s+out)\b|\brooms?\s+(are\s+)?selling\s+fast\b'
+        reason: invented room availability
+      - pattern: '(?i)\b(lowest|best)\s+(price|rate)s?\s+guaranteed\b|\bguaranteed\s+(lowest|best)\s+(price|rate)s?\b'
+        reason: unprovable best rate guarantees

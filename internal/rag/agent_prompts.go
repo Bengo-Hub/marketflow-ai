@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 )
 
 // buildAgentSystemPrompt returns the system prompt used by the agent loop.
@@ -14,17 +15,20 @@ import (
 //	"codevertex" → Codevertex Africa Limited agent (Power Suite, Digitika, S2S data tools)
 //	"cafe"       → Cafe agent (menu, events, reservations)
 //	"generic"    → Generic marketing agent (any business, neutral persona)
+//	other MarketFlow business types → the generic agent plus that type's rules
 //	""           → Codevertex (legacy default)
+//
+// Every persona except FLP gets the business type's rules (compliance.PromptRules).
 func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent) string {
-	switch businessType {
+	switch promptPersona(businessType) {
 	case "generic":
-		return p.buildGenericMarketingAgentPrompt(intent)
+		return p.buildGenericMarketingAgentPrompt(intent) + compliance.PromptRules(businessType)
 	case "cafe":
-		return p.buildCafeAgentSystemPrompt(intent)
+		return p.buildCafeAgentSystemPrompt(intent) + compliance.PromptRules(businessType)
 	case "flp":
 		// handled below
 	default:
-		return p.buildCodevertexAgentSystemPrompt(intent)
+		return p.buildCodevertexAgentSystemPrompt(intent) + compliance.PromptRules(businessType)
 	}
 
 	var b strings.Builder

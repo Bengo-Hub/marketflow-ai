@@ -53,7 +53,11 @@ type MemberOverride struct {
 
 // TenantContext is what the runtime knows about the tenant for one request.
 type TenantContext struct {
-	BusinessType     string           `json:"business_type"`
+	BusinessType string `json:"business_type"`
+	// BusinessTypeChosen is true once the owner or a platform admin saved the type (marketflow-api
+	// OSContext.BusinessTypeChosen); a chosen type, generic included, is final in chat.
+	BusinessTypeChosen bool `json:"business_type_chosen,omitempty"`
+
 	MarketingContext string           `json:"marketing_context"` // JSON or text, size-capped by the API
 	Offerings        []string         `json:"offerings"`
 	Members          []MemberOverride `json:"members"`
@@ -481,7 +485,9 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 		class = c
 	}
 
-	system := r.systemPrompt(st)
+	// The business type's rules (Sprint 7 #34) shape every caption, script and post; the review
+	// then applies the same type's blocks (r.filter.CheckForTenant).
+	system := r.systemPrompt(st) + compliance.PromptRules(tc.BusinessType)
 	var user strings.Builder
 	if tc.MarketingContext != "" {
 		user.WriteString("BRAND CONTEXT (facts you may use):\n")

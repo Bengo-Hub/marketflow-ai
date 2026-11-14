@@ -15,18 +15,23 @@ import (
 //	"codevertex" → Codevertex Africa Limited persona (Power Suite, Digitika, services)
 //	"cafe"       → Cafe/restaurant persona (menu, events, reservations)
 //	"generic"    → Neutral marketing assistant persona (any business)
+//	restaurant, retail, salon, pharmacy and the other MarketFlow business types → the neutral
+//	               persona plus that type's rules (Sprint 7 #34)
 //	""           → Codevertex (legacy default; auto-detect should have set a value)
+//
+// Every persona except FLP (whose prompt already carries its compliance rules) gets the
+// business type's rules (compliance.PromptRules) ahead of the knowledge base context.
 func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chunks []SearchResult) string {
-	switch businessType {
+	switch promptPersona(businessType) {
 	case "generic":
-		return p.buildGenericMarketingPrompt(intent, chunks)
+		return withTypeRules(p.buildGenericMarketingPrompt(intent, nil), businessType, chunks)
 	case "cafe":
-		return p.buildCafeSystemPrompt(intent, chunks)
+		return withTypeRules(p.buildCafeSystemPrompt(intent, nil), businessType, chunks)
 	case "flp":
 		// handled below
 	default:
 		// "codevertex", "", or any unrecognised type → Codevertex persona
-		return p.buildCodevertexSystemPrompt(intent, chunks)
+		return withTypeRules(p.buildCodevertexSystemPrompt(intent, nil), businessType, chunks)
 	}
 
 	var b strings.Builder
