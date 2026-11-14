@@ -19,6 +19,25 @@ const (
 	DefaultTurnsPerCredit = 5
 )
 
+// NoFreeTurns passed as freePerDay means the business gets no free turns: every block of turns is
+// paid from the first one.
+const NoFreeTurns = -1
+
+// PlanFreeTurns is the free turns a day to pass for a business: its plan's chat_turns_daily, or
+// NoFreeTurns when it has a plan that includes none (PowerSuite Basic: chat is paid from bought
+// credits, owner 2026-11-14), or 0 (the default) when its plan is unknown. The platform owner's
+// own tenant is exempt from AI charges, so its turns are never charged anyway.
+func PlanFreeTurns(hasPlan, exempt bool, chatTurnsDaily int) int {
+	switch {
+	case chatTurnsDaily > 0:
+		return chatTurnsDaily
+	case hasPlan && !exempt:
+		return NoFreeTurns
+	default:
+		return 0
+	}
+}
+
 // Allowance counts a business's chat turns per UTC day.
 type Allowance struct {
 	rdb            *redis.Client
@@ -42,7 +61,8 @@ func (a *Allowance) NeedsCredit(ctx context.Context, tenantID uuid.UUID, now tim
 }
 
 // NeedsCreditFor is NeedsCredit with the business's own free turns a day (its plan's
-// chat_turns_daily); 0 or less keeps the default allowance.
+// chat_turns_daily); 0 keeps the default allowance and a negative value (NoFreeTurns) means no
+// free turns at all, for a plan that includes none (PowerSuite Basic, owner 2026-11-14).
 func (a *Allowance) NeedsCreditFor(ctx context.Context, tenantID uuid.UUID, now time.Time, freePerDay int) bool {
 	if a == nil || a.rdb == nil {
 		return true
@@ -56,8 +76,11 @@ func (a *Allowance) NeedsCreditFor(ctx context.Context, tenantID uuid.UUID, now 
 		_ = a.rdb.Expire(ctx, key, 48*time.Hour).Err()
 	}
 	free := a.freePerDay
-	if freePerDay > 0 {
+	switch {
+	case freePerDay > 0:
 		free = int64(freePerDay)
+	case freePerDay < 0:
+		free = 0
 	}
 	if n <= free {
 		return false
@@ -83,8 +106,11 @@ func (a *Allowance) Status(ctx context.Context, tenantID uuid.UUID, now time.Tim
 		return st
 	}
 	st.FreePerDay, st.TurnsPerCredit = a.freePerDay, a.turnsPerCredit
-	if freePerDay > 0 {
+	switch {
+	case freePerDay > 0:
 		st.FreePerDay = int64(freePerDay)
+	case freePerDay < 0:
+		st.FreePerDay = 0
 	}
 	if a.rdb != nil {
 		key := fmt.Sprintf("%s:chat-turns:%s:%s", a.ns, tenantID, now.UTC().Format("20060102"))
