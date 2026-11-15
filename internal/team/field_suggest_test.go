@@ -50,6 +50,30 @@ func TestSuggestFieldList(t *testing.T) {
 	}
 }
 
+// The inbox's default reply always carries a link placeholder the auto reply can fill, inside
+// the 500 characters marketflow-api keeps.
+func TestSuggestInboxReplyKeepsLink(t *testing.T) {
+	cases := map[string]string{
+		"kept":     `{"text":"Thank you for asking! See prices and leave your number here: {{booking_link}}"}`,
+		"dropped":  `{"text":"Thank you for asking! See our prices and leave your number on our page."}`,
+		"too long": `{"text":"` + strings.Repeat("Thanks for asking about our shea butter. ", 15) + `{{profile_link}}"}`,
+	}
+	for name, reply := range cases {
+		r, _ := newRuntime(promptopt.TaskSpec{}, func(string, string) string { return reply }, nil)
+		out, err := r.SuggestField(context.Background(), FieldSuggestRequest{TenantID: uuid.New(), Field: "inbox_reply_text"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		hasLink := strings.Contains(out.Text, "{{profile_link}}") || strings.Contains(out.Text, "{{booking_link}}")
+		if !hasLink || len([]rune(out.Text)) > 500 || strings.Count(out.Text, "{{") != 1 {
+			t.Fatalf("%s: %q", name, out.Text)
+		}
+	}
+	if got := withLink("{{profile_link}}", 500); got != "" {
+		t.Fatalf("a bare placeholder is no reply: %q", got)
+	}
+}
+
 func TestSuggestFieldRefusals(t *testing.T) {
 	r, _ := newRuntime(promptopt.TaskSpec{}, func(string, string) string { return `{"text":"It cures eczema in a week."}` }, nil)
 	if _, err := r.SuggestField(context.Background(), FieldSuggestRequest{TenantID: uuid.New(), Field: "password"}); !errors.Is(err, ErrUnknownField) {
