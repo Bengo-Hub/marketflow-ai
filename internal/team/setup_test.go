@@ -95,3 +95,52 @@ func TestAPISourceSetupTeam(t *testing.T) {
 		t.Fatalf("a viewer is refused: %v", err)
 	}
 }
+
+// The free first setup asks marketflow-api for only_first on both routes; a 409 means the first
+// setup was done and the request goes through the charged turn.
+func TestAPISourceSetupFirstTeam(t *testing.T) {
+	var gotQuery []string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = append(gotQuery, r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"first":true,"members":[]}`))
+	}))
+	defer srv.Close()
+	s := &APISource{BaseURL: srv.URL, Key: "svc"}
+	tid := uuid.New()
+
+	if out, err := s.SetupFirstTeam(context.Background(), tid, "Bearer owner"); err != nil || !out.First {
+		t.Fatalf("first setup: %+v %v", out, err)
+	}
+	if _, err := s.SetupFirstTeam(context.Background(), tid, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/api/v1/agents/team/setup?only_first=true", "/api/v1/internal/os/team/setup?tenant_id=" + tid.String() + "&only_first=true"}
+	if len(gotQuery) != 2 || gotQuery[0] != want[0] || gotQuery[1] != want[1] {
+		t.Fatalf("calls %v, want %v", gotQuery, want)
+	}
+	status = http.StatusConflict
+	if _, err := s.SetupFirstTeam(context.Background(), tid, "Bearer owner"); !errors.Is(err, ErrTeamAlreadySetUp) {
+		t.Fatalf("a done setup is ErrTeamAlreadySetUp: %v", err)
+	}
+	// The normal setup never reads 409 as "already set up".
+	if _, err := s.SetupTeam(context.Background(), tid, "Bearer owner"); err == nil || errors.Is(err, ErrTeamAlreadySetUp) {
+		t.Fatalf("plain setup on 409: %v", err)
+	}
+}
+
+// KnownTeamRequest never asks for a decision: patterns, then learned phrasings with a team word.
+func TestKnownTeamRequest(t *testing.T) {
+	ctx, tid := context.Background(), uuid.New()
+	l := &fakeLearner{known: []string{"get my team going"}}
+	if !KnownTeamRequest(ctx, tid, "set up my marketing team", nil) {
+		t.Error("a fixed pattern is known")
+	}
+	if !KnownTeamRequest(ctx, tid, "Get my team going!", l) {
+		t.Error("a learned phrasing is known")
+	}
+	if KnownTeamRequest(ctx, tid, "write three ads for the lotion", l) {
+		t.Error("marketing work is not a team request")
+	}
+}
