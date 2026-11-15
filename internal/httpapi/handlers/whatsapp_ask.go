@@ -167,6 +167,19 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 // reports false, with out.Reply set, when the turn did not run or failed.
 func (h *OSHandler) whatsAppTurn(ctx context.Context, r *http.Request, tenantID uuid.UUID, req whatsAppAskRequest, ask askRequest, out *WhatsAppAskResponse) (*captureSink, bool) {
 	topUp := "Your AI credits are used up. Top up from " + link(req.PortalURL, req.TenantSlug, "/settings/billing") + " and send your request again."
+	// The free first team setup comes before the credit check, as in the console (Sprint 21):
+	// a business with no credits can still ask for its team on WhatsApp the first time.
+	if !ask.ApprovePlan {
+		firstRun := uuid.NewString()
+		if res, status, msg, handled := h.firstTeamSetup(ctx, r, tenantID, ask, firstRun); handled {
+			if status != 0 {
+				out.Reply = msg
+				return nil, false
+			}
+			out.RunID = firstRun
+			return &captureSink{out: res}, true
+		}
+	}
 	if ok, err := h.hasCredits(ctx, tenantID); err != nil {
 		h.logger.Warn("whatsapp ask: credit check failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		out.Reply = "I could not check your AI credits just now. Please try again in a few minutes."
