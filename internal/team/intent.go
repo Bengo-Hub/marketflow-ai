@@ -81,6 +81,29 @@ const (
 	teamYesFallback = 0.62
 )
 
+// KnownTeamRequest is the free part of TeamIntent: the fixed patterns, then (only for a message
+// with a team word) the phrasings learned before. It never asks for a decision, so it can run
+// before any credit is checked.
+func KnownTeamRequest(ctx context.Context, tenantID uuid.UUID, text string, learner PhraseLearner) bool {
+	if IsTeamRequest(text) {
+		return true
+	}
+	phrase := NormalizePhrase(text)
+	if phrase == "" || learner == nil || !teamWord.MatchString(text) {
+		return false
+	}
+	known, err := learner.Phrases(ctx, tenantID, IntentTeam)
+	if err != nil {
+		return false
+	}
+	for _, k := range known {
+		if k == phrase {
+			return true
+		}
+	}
+	return false
+}
+
 // TeamIntent reports whether text is a request about the team itself, and how it was recognised:
 // "pattern", "learned" or "decided". learner may be nil (no learning, decisions still work).
 func (r *Runtime) TeamIntent(ctx context.Context, tenantID uuid.UUID, text string, learner PhraseLearner) (bool, string) {

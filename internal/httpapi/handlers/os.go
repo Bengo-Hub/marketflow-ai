@@ -134,6 +134,9 @@ type askRequest struct {
 	Platforms   []string `json:"platforms"`
 	// Playbook pins a guided flow's route (for example "brand-context").
 	Playbook string `json:"playbook"`
+	// TeamSetup is the console's "Set up my team" button: the turn is the team setup, with no
+	// intent detection (team_setup.go).
+	TeamSetup bool `json:"team_setup"`
 	// Stream answers as server-sent events: one progress event per stage, then
 	// the same response as the JSON reply in a final "result" event.
 	Stream bool `json:"stream"`
@@ -237,19 +240,34 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runID := uuid.NewString()
+	// The free first team setup comes before the credit check, so zero credits never block it.
+	if out, status, msg, handled := h.firstTeamSetup(r.Context(), r, tenantID, req, runID); handled {
+		sink, _ := h.askSinkFor(w, r, req)
+		if status != 0 {
+			sink.fail(status, msg)
+			return
+		}
+		sink.done(out)
+		return
+	}
 	turnKey, ok := h.charge(w, r, tenantID, 1, "os:"+runID+":turn", "Marketing team request")
 	if !ok {
 		return
 	}
-	var sink askSink = jsonSink{w}
+	sink, ctx := h.askSinkFor(w, r, req)
+	h.runTurn(ctx, r, tenantID, req, runID, turnKey, sink)
+}
+
+// askSinkFor answers as server-sent events when the request asked for a stream and the writer
+// can flush, otherwise as one JSON reply. The context carries the progress callback.
+func (h *OSHandler) askSinkFor(w http.ResponseWriter, r *http.Request, req askRequest) (askSink, context.Context) {
 	ctx := r.Context()
 	if req.Stream {
 		if s, ok := newSSESink(w); ok {
-			sink = s
-			ctx = team.WithProgress(ctx, s.progress)
+			return s, team.WithProgress(ctx, s.progress)
 		}
 	}
-	h.runTurn(ctx, r, tenantID, req, runID, turnKey, sink)
+	return jsonSink{w}, ctx
 }
 
 // runTurn runs one charged Marketing Manager turn and writes the outcome to sink. The portal

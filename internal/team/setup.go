@@ -46,6 +46,25 @@ type TeamSetupper interface {
 // SetupTeam implements TeamSetupper and drops the cached context, so the next request sees the
 // changed members at once.
 func (s *APISource) SetupTeam(ctx context.Context, tenantID uuid.UUID, bearer string) (TeamSetup, error) {
+	return s.setupTeam(ctx, tenantID, bearer, false)
+}
+
+// FirstTeamSetupper runs the setup only when the tenant never had one; a tenant that had one gets
+// ErrTeamAlreadySetUp. It lets a tenant with no AI credits reach the free first setup (owner
+// decision 2026-11-08) without letting a later, paid review through for free.
+type FirstTeamSetupper interface {
+	SetupFirstTeam(ctx context.Context, tenantID uuid.UUID, bearer string) (TeamSetup, error)
+}
+
+// ErrTeamAlreadySetUp means the first setup was done; a review goes through the charged turn.
+var ErrTeamAlreadySetUp = fmt.Errorf("the marketing team was already set up")
+
+// SetupFirstTeam implements FirstTeamSetupper (marketflow-api's ?only_first=true).
+func (s *APISource) SetupFirstTeam(ctx context.Context, tenantID uuid.UUID, bearer string) (TeamSetup, error) {
+	return s.setupTeam(ctx, tenantID, bearer, true)
+}
+
+func (s *APISource) setupTeam(ctx context.Context, tenantID uuid.UUID, bearer string, onlyFirst bool) (TeamSetup, error) {
 	var out TeamSetup
 	if s == nil || s.BaseURL == "" {
 		return out, fmt.Errorf("team setup: marketflow-api not configured")
@@ -53,8 +72,16 @@ func (s *APISource) SetupTeam(ctx context.Context, tenantID uuid.UUID, bearer st
 	base := strings.TrimSuffix(s.BaseURL, "/")
 	var req *http.Request
 	var err error
+	first := ""
+	if onlyFirst {
+		first = "only_first=true"
+	}
 	if bearer != "" {
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/v1/agents/team/setup", nil)
+		u := base + "/api/v1/agents/team/setup"
+		if first != "" {
+			u += "?" + first
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 		if err == nil {
 			req.Header.Set("Authorization", bearer)
 			req.Header.Set("X-Tenant-ID", tenantID.String())
@@ -63,7 +90,11 @@ func (s *APISource) SetupTeam(ctx context.Context, tenantID uuid.UUID, bearer st
 		if s.Key == "" {
 			return out, fmt.Errorf("team setup: no service key")
 		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/v1/internal/os/team/setup?tenant_id="+tenantID.String(), nil)
+		u := base + "/api/v1/internal/os/team/setup?tenant_id=" + tenantID.String()
+		if first != "" {
+			u += "&" + first
+		}
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 		if err == nil {
 			req.Header.Set("X-API-Key", s.Key)
 		}
@@ -82,6 +113,9 @@ func (s *APISource) SetupTeam(ctx context.Context, tenantID uuid.UUID, bearer st
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden {
 		return out, ErrTeamForbidden
+	}
+	if onlyFirst && resp.StatusCode == http.StatusConflict {
+		return out, ErrTeamAlreadySetUp
 	}
 	if resp.StatusCode != http.StatusOK {
 		return out, fmt.Errorf("team setup: status %d", resp.StatusCode)
