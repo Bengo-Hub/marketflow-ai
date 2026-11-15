@@ -29,9 +29,18 @@ type FieldSpec struct {
 	MaxChars int
 	// MaxItems > 0 makes it a list field.
 	MaxItems int
+	// Link: the text must carry {{profile_link}} or {{booking_link}} (see withLink).
+	Link bool
 }
 
-// FieldSpecs are the fields that can be generated: the public profile and the brand context.
+// The link placeholders the inbox auto reply fills (marketflow-api resolveNurtureVariables).
+const (
+	profileLink = "{{profile_link}}"
+	bookingLink = "{{booking_link}}"
+)
+
+// FieldSpecs are the fields that can be generated: the public profile, the brand context and
+// the inbox's automatic reply.
 var FieldSpecs = map[string]FieldSpec{
 	"tagline":          {Label: "Tagline", Ask: "a short tagline under the business name, a few words, no hashtags", MaxChars: 80},
 	"bio":              {Label: "Bio", Ask: "two or three sentences about the business and what it offers, for its public page", MaxChars: 400},
@@ -44,6 +53,12 @@ var FieldSpecs = map[string]FieldSpec{
 	"proof":            {Label: "Proof", Ask: "true reasons to trust the business taken only from the facts given (years in business, numbers served, certifications), one per line; none if the facts give none", MaxChars: 160, MaxItems: 5},
 	"voice_examples":   {Label: "Voice examples", Ask: "example sentences written in the business's voice, one per line", MaxChars: 200, MaxItems: 3},
 	"banned_claims":    {Label: "Claims never to make", Ask: "claims this kind of business must never make in ads (for example health cures or guaranteed income), one per line", MaxChars: 120, MaxItems: 6},
+	// The social inbox's automatic answer (Sprint 22), written as the Content Creator would. The
+	// owner edits it and switching the automatic reply on with it is the approval.
+	"inbox_reply_text": {Label: "Automatic reply to buyers", Ask: "the automatic reply sent to a person who asked about a price, delivery or " +
+		"stock in a comment or message on the business's Facebook or Instagram: thank them in the business's voice, say in one or two short " +
+		"sentences that they can see prices and leave their number at " + profileLink + ", and keep " + profileLink + " exactly as written. " +
+		"Never state a price, a delivery time or a stock level, since the reply goes to every buyer", MaxChars: 500, Link: true},
 }
 
 var (
@@ -167,7 +182,11 @@ func (r *Runtime) SuggestField(ctx context.Context, in FieldSuggestRequest) (*Fi
 		}
 		return out, nil
 	}
-	out.Text = clipRunes(strings.TrimSpace(raw.Text), spec.MaxChars)
+	if spec.Link {
+		out.Text = withLink(strings.TrimSpace(raw.Text), spec.MaxChars)
+	} else {
+		out.Text = clipRunes(strings.TrimSpace(raw.Text), spec.MaxChars)
+	}
 	if out.Text == "" {
 		return nil, ErrSuggestionBlocked
 	}
@@ -175,6 +194,20 @@ func (r *Runtime) SuggestField(ctx context.Context, in FieldSuggestRequest) (*Fi
 		return nil, err
 	}
 	return out, nil
+}
+
+// withLink returns s within n characters and carrying a link placeholder. When the model left
+// the placeholder out, or the text is too long to keep it whole, the placeholders are taken out,
+// the text is cut to fit and {{profile_link}} goes at the end. A text with no words left is "".
+func withLink(s string, n int) string {
+	bare := strings.Join(strings.Fields(strings.NewReplacer(profileLink, " ", bookingLink, " ").Replace(s)), " ")
+	if bare == "" {
+		return ""
+	}
+	if (strings.Contains(s, profileLink) || strings.Contains(s, bookingLink)) && len([]rune(s)) <= n {
+		return s
+	}
+	return clipRunes(bare, n-len(profileLink)-1) + " " + profileLink
 }
 
 // clipRunes cuts s to n characters at a word boundary when it can.
