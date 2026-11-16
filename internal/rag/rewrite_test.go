@@ -67,7 +67,7 @@ func scriptedPipeline(m *scriptedModel) *Pipeline {
 // filter blocks it, then the filter (with its fallback reply).
 func answerOf(p *Pipeline, input ChatInput, raw string) string {
 	msgs := []ai.Message{{Role: "system", Content: "You are Vera."}, {Role: "user", Content: input.Question}}
-	return p.applyFilter(p.rewriteIfBlocked(context.Background(), input, msgs, raw), input.BusinessType)
+	return p.applyFilter(p.rewriteIfBlocked(context.Background(), input, msgs, raw, nil), input.BusinessType)
 }
 
 func TestSafeRewrite(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // GenerateLinks produces distribID-embedded product links, category links,
@@ -15,11 +17,20 @@ import (
 // the tenant's distribID from an earlier tool call and just needs a
 // specific link type.
 type GenerateLinks struct {
-	logger *zap.Logger
+	logger  *zap.Logger
+	profile *GetFBOProfile
 }
 
-func NewGenerateLinks(logger *zap.Logger) *GenerateLinks {
-	return &GenerateLinks{logger: logger.Named("tool.generate_links")}
+// NewGenerateLinks builds the tool. With a profile reader, the distributor id, store, language,
+// slug and (on the public widget) the WhatsApp number come from the tenant's own profile, never
+// from the model, so an injected instruction cannot swap in someone else's affiliate id or number
+// (audit 2026-11-16).
+func NewGenerateLinks(logger *zap.Logger, profile ...*GetFBOProfile) *GenerateLinks {
+	g := &GenerateLinks{logger: logger.Named("tool.generate_links")}
+	if len(profile) > 0 {
+		g.profile = profile[0]
+	}
+	return g
 }
 
 func (*GenerateLinks) Name() string { return "generate_links" }
@@ -45,7 +56,7 @@ func (*GenerateLinks) Schema() map[string]any {
 	}
 }
 
-func (t *GenerateLinks) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) (string, error) {
+func (t *GenerateLinks) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string) (string, error) {
 	var args struct {
 		DistribID string `json:"distrib_id"`
 		StoreCode string `json:"store_code"`
@@ -60,6 +71,20 @@ func (t *GenerateLinks) Invoke(_ context.Context, _ uuid.UUID, argsJSON string) 
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
+	}
+	if t.profile != nil {
+		p := t.profile.profileOf(ctx, tenantID)
+		if p == nil {
+			return `{"error":"the business profile could not be read, so no link was made"}`, nil
+		}
+		text := func(k string) string { s, _ := p[k].(string); return s }
+		args.DistribID, args.StoreCode, args.Language = text("fbo_distrib_id"), text("flp_store_code"), text("flp_language")
+		args.Country, args.Slug = text("country"), text("slug")
+		// A signed-in owner may make a wa.me link to a lead's number; a public visitor only ever
+		// gets the business's own number.
+		if a, ok := guardrail.ActorFrom(ctx); !ok || a.Origin == guardrail.OriginPublic || args.Phone == "" {
+			args.Phone = text("whatsapp_number")
+		}
 	}
 	// Forever links follow marketflow-api's flp.ForTenant rule (flp_links.go).
 	b, linked := flpForTenant(args.Slug, args.DistribID, args.StoreCode, args.Language, args.Country)

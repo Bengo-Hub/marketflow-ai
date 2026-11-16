@@ -146,7 +146,7 @@ InternalServiceKey string
 **Deployed:** 2026-05-22
 
 ### Phase 1 — Jailbreak Defense ✅
-- `internal/rag/guard.go` (new) — `ScreenInput()` (18 regex patterns) + `ScreenOutput()` + `identityAnchor()`
+- `internal/rag/guard.go` (new): `ScreenInput()` (18 regex patterns), `ScreenOutput()`, `identityAnchor()`. Moved to `internal/guardrail` in Sprint 26.
 - Identity anchor prepended to all 6 system prompt builders (`buildSystemPrompt`, `buildCodevertexSystemPrompt`, `buildGenericMarketingPrompt`, `buildAgentSystemPrompt`, `buildCodevertexAgentSystemPrompt`, `buildGenericMarketingAgentPrompt`)
 - `ScreenInput()` called before LLM in both `Chat()` and `ChatStream()` — returns fixed identity rejection without burning tokens
 - `ScreenOutput()` called on all LLM responses (agent + single-shot) before compliance filter
@@ -247,3 +247,28 @@ Design: `.claude/plans/marketflow-marketing-os-2026-10-22.md`. Checklist: `marke
 New routes: `POST /api/v1/os/ask`, `POST /api/v1/os/optimize`, `POST /api/v1/os/plan/quote`, `GET /api/v1/os/library/templates`, `POST /api/v1/agent/run` (S2S; the route the worker always called), `POST /api/v1/internal/os/daily-brief` (S2S).
 
 Fixes folded in: the public widget gets a read-only tool allowlist (it could reach `query_service_data`, `get_contact_360`, `analyze_deal`, `meeting_prep`, `score_lead` and `request_integration`); the duplicated fallback ladder in `rag/flow.go` and `rag/stream.go` moves into the router; CRM tool model calls are metered.
+
+## AI guardrails (Sprint 26, from 2026-11-16)
+
+Full description: [guardrails.md](guardrails.md). Checklist: `marketflow/docs/sprint-plans/sprint-26-ai-guardrails-and-security.md`.
+
+One package, `internal/guardrail`, now holds every check. `rag/guard.go` and `decide.MaskPII` moved into it.
+
+- **Input:** screens cover English, Swahili and Sheng after Unicode folding, including authority claims and binding-offer requests.
+- **Context:** third-party text is fenced with a nonce tag (`Quote`).
+- **Actions:**
+  - A turn that read outside text loses its writing tools (agent taint).
+  - Tools send the acting user to marketflow-api.
+  - `create_campaign` and `create_funnel` make typed drafts only.
+- **Output:** prices, percentages and commitments the business never gave are rewritten once, then replaced by the fallback. Images come only from allowed hosts.
+- **Caches:** split by audience.
+- **Media downloads:** dial-time public-address check.
+
+The Sprint 14 security rules above now hold as follows:
+
+| Rule | How it holds now |
+|---|---|
+| The LLM never spends or publishes directly | Drafts only; launching needs a person, and a code above the threshold |
+| Third-party text is quarantined | Fenced as data and withdraws writing tools for the turn, instead of a separate summariser |
+| URL fetches pass an SSRF guard | `guardrail.SafeHTTPClient` in marketflow-ai; IP pinning in marketflow-crawler |
+| Lead PII never goes to generation providers | `MaskPII` before CRM, lead and ticket data reach a model |

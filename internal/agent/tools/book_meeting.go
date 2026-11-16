@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // BookMeeting is the agentic-RAG tool that schedules a meeting for a lead.
@@ -42,7 +45,7 @@ func NewBookMeeting(cfg BookMeetingConfig) *BookMeeting {
 	return &BookMeeting{
 		apiBaseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		apiKey:     cfg.APIKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.book_meeting"),
 	}
 }
@@ -115,16 +118,11 @@ func (t *BookMeeting) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON s
 	if args.AttendeeEmail == "" || args.StartsAt == "" {
 		return "", fmt.Errorf("attendee_email and starts_at are required")
 	}
-	starts, err := time.Parse(time.RFC3339, args.StartsAt)
-	if err != nil {
-		return "", fmt.Errorf("starts_at must be ISO-8601 RFC3339: %w", err)
+	if msg := checkBooking(ctx, args.AttendeeEmail, args.StartsAt, &args.DurationMinutes, &args.MeetingType, time.Now()); msg != "" {
+		return fmt.Sprintf(`{"error":%q}`, msg), nil
 	}
-	if args.DurationMinutes <= 0 {
-		args.DurationMinutes = 30
-	}
-	if args.MeetingType == "" {
-		args.MeetingType = "product_demo"
-	}
+	starts, _ := time.Parse(time.RFC3339, args.StartsAt)
+	args.Notes = trimText(args.Notes, 500)
 
 	body := map[string]any{
 		"scheduled_at":     starts.UTC().Format(time.RFC3339),
@@ -161,8 +159,7 @@ func (t *BookMeeting) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON s
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		t.logger.Warn("book_meeting api error",
-			zap.Int("status", resp.StatusCode), zap.ByteString("body", respBody))
+		t.logger.Warn("book_meeting api error", zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("marketflow-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
@@ -179,9 +176,49 @@ func (t *BookMeeting) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON s
 		"duration_mins":  m["duration_minutes"],
 	}
 	out, _ := json.Marshal(summary)
-	t.logger.Info("meeting booked via agent tool",
-		zap.String("tenant", tenantID.String()),
-		zap.String("attendee", args.AttendeeEmail),
-	)
+	t.logger.Info("meeting booked via agent tool", zap.String("tenant", tenantID.String()))
 	return string(out), nil
+}
+
+var (
+	bookingEmailRe = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$`)
+	meetingTypes   = map[string]bool{"product_demo": true, "business_opportunity": true, "follow_up": true, "onboarding": true}
+)
+
+// checkBooking validates a booking before anything is sent, and returns a message for the model
+// when it cannot go ahead. The invite goes to an outside address, so on the public widget the
+// email must be one the visitor typed (guardrail.Actor.VisitorWrote): an address found in a web
+// page or tool result is refused. The time must be in the next 90 days and the length 15 to 120
+// minutes; duration and type get their defaults.
+func checkBooking(ctx context.Context, email, startsAt string, duration *int, meetingType *string, now time.Time) string {
+	email = strings.TrimSpace(email)
+	if email == "" || startsAt == "" {
+		return "attendee_email and starts_at are required"
+	}
+	if !bookingEmailRe.MatchString(email) {
+		return "attendee_email is not a valid email address"
+	}
+	if a, ok := guardrail.ActorFrom(ctx); ok && !a.VisitorWrote(email) {
+		return "ask the visitor to type the email address the invite should go to"
+	}
+	starts, err := time.Parse(time.RFC3339, startsAt)
+	if err != nil {
+		return "starts_at must be an ISO-8601 (RFC 3339) date and time"
+	}
+	if starts.Before(now.Add(-5*time.Minute)) || starts.After(now.AddDate(0, 0, 90)) {
+		return "starts_at must be in the next 90 days"
+	}
+	if *duration <= 0 {
+		*duration = 30
+	}
+	if *duration < 15 || *duration > 120 {
+		return "duration_minutes must be between 15 and 120"
+	}
+	if *meetingType == "" {
+		*meetingType = "product_demo"
+	}
+	if !meetingTypes[*meetingType] {
+		return "meeting_type must be product_demo, business_opportunity, follow_up or onboarding"
+	}
+	return ""
 }

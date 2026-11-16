@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -465,6 +466,27 @@ func HiggsfieldWebhook(secrets func(ctx context.Context) []string, box media.Pus
 // a key is unknown), then the delivery goes to the push box for whichever pod waits on it. A bad
 // signature or body is a 400; a storage failure is a 503 so fal retries, and polling covers the
 // job meanwhile.
+
+// onceEvery admits one call per interval (per pod).
+type onceEvery struct {
+	mu       sync.Mutex
+	last     time.Time
+	interval time.Duration
+}
+
+func (o *onceEvery) Allow() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if now := time.Now(); now.Sub(o.last) >= o.interval {
+		o.last = now
+		return true
+	}
+	return false
+}
+
+var falRefetch = &onceEvery{interval: time.Minute}
+
+// FalWebhook handles POST /api/v1/webhooks/fal (see the comment above onceEvery).
 func FalWebhook(keys *media.FalKeys, box media.PushBox, logger *zap.Logger) http.HandlerFunc {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -485,8 +507,9 @@ func FalWebhook(keys *media.FalKeys, box media.PushBox, logger *zap.Logger) http
 		if err == nil {
 			err = media.VerifyFalWebhook(list, reqID, userID, ts, sig, body, time.Now())
 		}
-		if err != nil {
-			// fal may have rotated its keys: refetch once before refusing.
+		if err != nil && falRefetch.Allow() {
+			// fal may have rotated its keys: refetch before refusing, at most once a minute per
+			// pod, so a stream of forged requests cannot turn into a stream of key fetches.
 			if fresh, ferr := keys.Get(r.Context(), true); ferr == nil {
 				err = media.VerifyFalWebhook(fresh, reqID, userID, ts, sig, body, time.Now())
 			}

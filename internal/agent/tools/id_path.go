@@ -1,11 +1,23 @@
 package tools
 
 import (
+	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
+
+// serviceHTTP is the client every tool uses. Its transport adds the acting user and origin to
+// service-key requests (guardrail.ActingTransport), so marketflow-api applies the person's own
+// role instead of trusting the shared key (owner decision G6, 2026-11-16). Requests without
+// X-API-Key (Google, Tavily) go out unchanged.
+func serviceHTTP(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: guardrail.ActingTransport{}}
+}
 
 // idPath is the only form a model-supplied ID takes in a marketflow-api URL path: its canonical
 // UUID, or "invalid-id" (the API answers 404) so no tool argument can add path segments or a

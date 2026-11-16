@@ -98,7 +98,7 @@ func NewAssembler(store AdStore, posters *Posters, logger *zap.Logger) *Assemble
 		logger = zap.NewNop()
 	}
 	path, _ := exec.LookPath("ffmpeg")
-	return &Assembler{store: store, fetch: &http.Client{Timeout: 3 * time.Minute}, ffmpeg: path, posts: posters,
+	return &Assembler{store: store, fetch: fetchClient(3 * time.Minute), ffmpeg: path, posts: posters,
 		logger: logger.Named("media.assemble")}
 }
 

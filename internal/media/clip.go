@@ -14,10 +14,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // CapImageToVideo animates a still (a poster's clean scene) into a short clip.
@@ -95,7 +98,7 @@ func NewClips(keys KeySource, store VideoStore, posters *Posters, logger *zap.Lo
 	}
 	path, _ := exec.LookPath("ffmpeg")
 	return &Clips{router: NewRouter(ClipRoutes), keys: keys, store: store, queue: newQueueClient(),
-		fetch: &http.Client{Timeout: 3 * time.Minute}, ffmpeg: path, logger: logger.Named("media.clips"), posts: posters, estimate: NewEstimator()}
+		fetch: fetchClient(3 * time.Minute), ffmpeg: path, logger: logger.Named("media.clips"), posts: posters, estimate: NewEstimator()}
 }
 
 // Ready reports whether clips can be made here (ffmpeg and storage present).
@@ -297,6 +300,9 @@ func (c *Clips) save(ctx context.Context, url, path string) error {
 // downloadTo streams url into path, refusing more than limit bytes; what names
 // the file in errors.
 func downloadTo(ctx context.Context, hc *http.Client, url, path string, limit int64, what string) error {
+	if err := guardrail.CheckFetchURL(ctx, url); err != nil {
+		return fmt.Errorf("download %s: %w", what, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -323,7 +329,41 @@ func downloadTo(ctx context.Context, hc *http.Client, url, path string, limit in
 	if n > limit {
 		return fmt.Errorf("download %s: larger than %d MB", what, limit>>20)
 	}
+	// ffmpeg reads these files. A playlist or concat list could point it at local files or
+	// other hosts, so a download that is one is refused.
+	if playlistFile(path) {
+		_ = os.Remove(path)
+		return fmt.Errorf("download %s: a playlist is not a media file", what)
+	}
 	return nil
+}
+
+// fetchClient is the client for downloading media from URLs that came from data: public
+// addresses only (guardrail.SafeHTTPClient). Tests serving files from 127.0.0.1 set
+// allowPrivateFetch.
+func fetchClient(timeout time.Duration) *http.Client {
+	return guardrail.SafeHTTPClient(timeout, allowPrivateFetch)
+}
+
+var allowPrivateFetch = false
+
+// playlistFile reports whether a downloaded file is a text playlist (HLS, ffconcat, SDP) rather
+// than media.
+func playlistFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 64)
+	n, _ := io.ReadFull(f, head)
+	s := strings.TrimSpace(strings.TrimPrefix(string(head[:n]), string(rune(0xfeff))))
+	for _, p := range []string{"#EXTM3U", "#EXT-X-", "ffconcat", "file '", "v=0"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // overlay scales the clip to cover the format, lays the text layer on top and

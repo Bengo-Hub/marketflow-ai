@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -19,10 +20,40 @@ import (
 // with web_search (same API key + CSE). Falls back to FLP CDN image URLs
 // when the CSE key isn't configured.
 type ImageSearch struct {
-	apiKey string
-	cseID  string
-	http   *http.Client
-	logger *zap.Logger
+	apiKey    string
+	cseID     string
+	http      *http.Client
+	logger    *zap.Logger
+	redis     *redis.Client
+	namespace string
+	dailyCap  int
+}
+
+// WithQuota makes image searches count against the tenant's daily Google search cap (the same
+// key web_search uses), so the public widget cannot spend the shared Google quota through images
+// (audit 2026-11-16). A Redis error lets the search through, as web_search does.
+func (t *ImageSearch) WithQuota(r *redis.Client, namespace string, dailyCap int) *ImageSearch {
+	if dailyCap <= 0 {
+		dailyCap = 80
+	}
+	t.redis, t.namespace, t.dailyCap = r, namespace, dailyCap
+	return t
+}
+
+// overQuota counts one search for the tenant today and reports whether the cap is passed.
+func (t *ImageSearch) overQuota(ctx context.Context, tenantID uuid.UUID) bool {
+	if t.redis == nil {
+		return false
+	}
+	key := fmt.Sprintf("%s:gcse:quota:%s:%s", t.namespace, tenantID.String(), time.Now().UTC().Format("2006-01-02"))
+	n, err := t.redis.Incr(ctx, key).Result()
+	if err != nil {
+		return false
+	}
+	if n == 1 {
+		t.redis.Expire(ctx, key, 36*time.Hour)
+	}
+	return int(n) > t.dailyCap
 }
 
 func NewImageSearch(apiKey, cseID string, logger *zap.Logger) *ImageSearch {
@@ -49,7 +80,7 @@ func (*ImageSearch) Schema() map[string]any {
 	}
 }
 
-func (t *ImageSearch) Invoke(ctx context.Context, _ uuid.UUID, argsJSON string) (string, error) {
+func (t *ImageSearch) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string) (string, error) {
 	var args struct {
 		Query      string `json:"query"`
 		MaxResults int    `json:"max_results"`
@@ -62,6 +93,9 @@ func (t *ImageSearch) Invoke(ctx context.Context, _ uuid.UUID, argsJSON string) 
 	}
 
 	// If Google CSE is configured, use it for high-quality results.
+	if t.apiKey != "" && t.cseID != "" && t.overQuota(ctx, tenantID) {
+		return `{"images":[],"note":"the daily image search limit is reached"}`, nil
+	}
 	if t.apiKey != "" && t.cseID != "" {
 		u := fmt.Sprintf(
 			"https://www.googleapis.com/customsearch/v1?key=%s&cx=%s&q=%s&searchType=image&num=%d&safe=active",

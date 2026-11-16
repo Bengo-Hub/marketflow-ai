@@ -230,16 +230,3 @@ func TestDeciderValidatesQuestions(t *testing.T) {
 		t.Fatal("a one-option choice must be rejected")
 	}
 }
-
-func TestMaskPII(t *testing.T) {
-	in := "Call me on +254 712 345 678 or 0712345678, mail jane.doe@example.co.ke. Budget KES 3,000 for 7 days."
-	out := MaskPII(in)
-	for _, leaked := range []string{"712 345 678", "0712345678", "jane.doe"} {
-		if strings.Contains(out, leaked) {
-			t.Fatalf("PII leaked: %s", out)
-		}
-	}
-	if !strings.Contains(out, "KES 3,000") || !strings.Contains(out, "7 days") {
-		t.Fatalf("amounts must stay: %s", out)
-	}
-}

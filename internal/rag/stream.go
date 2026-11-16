@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"go.uber.org/zap"
 )
@@ -17,9 +18,9 @@ import (
 // the contact options) answers, so the visitor never gets an empty reply.
 func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.StreamDelta, *ChatResult, error) {
 	// Jailbreak guard — same as Chat()
-	if blocked, resp := ScreenInput(input.Question); blocked {
-		p.logger.Info("jailbreak attempt blocked (stream)", zap.String("tenant", input.TenantSlug))
-		return staticStream(resp), &ChatResult{Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
+	if s := guardrail.Check(input.Question); s.Blocked {
+		p.logger.Info("input guard blocked a message (stream)", zap.String("tenant", input.TenantSlug), zap.String("kind", s.Kind))
+		return staticStream(s.Reply), &ChatResult{Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
 	}
 	if input.BusinessType == "" {
 		input.BusinessType = detectNiche(input.Question)
@@ -46,7 +47,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 	input.formTurn = IntegrationForm(input.BusinessType, intent, input.Question) != nil
 	skipCache := len(input.History) > 0 || input.formTurn
 	if !skipCache {
-		if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
+		if resp, ok := p.cache.getExact(ctx, input.TenantID, audienceOf(input), input.Question); ok {
 			return staticStream(p.applyFilter(resp, input.BusinessType)),
 				&ChatResult{Intent: "cached", Cached: true, Model: "cache"}, nil
 		}
@@ -54,7 +55,7 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 
 	embedding := p.cachedEmbed(ctx, input.Question)
 	if !skipCache && embedding != nil {
-		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, embedding); ok {
+		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, audienceOf(input), embedding); ok {
 			return staticStream(p.applyFilter(resp, input.BusinessType)),
 				&ChatResult{Intent: string(intent), Confidence: confidence, Cached: true, Model: "semantic_cache"}, nil
 		}
@@ -116,7 +117,9 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		// then the tenant's compliance filter (blocked claims, substitutions, disclaimers).
 		// A blocked answer gets one rewrite with the broken rules (rewrite.go); the widget gets
 		// it as a replace delta like any other filtered text.
-		return p.filterAndCache(cacheCtx, input, p.rewriteIfBlocked(cacheCtx, input, messages, ScreenOutput(text)), embedding)
+		// The same price and commitment checks as Chat (guardrail.OutputViolations).
+		checked := p.rewriteIfBlocked(cacheCtx, input, messages, guardrail.ScreenOutput(text), allowedFigures(input, systemPrompt, nil))
+		return p.filterAndCache(cacheCtx, input, guardrail.SafeMarkdown(checked, nil), embedding, true)
 	}), meta, nil
 }
 

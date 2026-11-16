@@ -230,19 +230,21 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				LLMModel:   string(llm.Standard),
 				Logger:     logger,
 			})
+			profileTool := agenttools.NewGetFBOProfile(agenttools.FBOProfileConfig{
+				APIBaseURL: cfg.AI.MarketFlowAPIURL,
+				APIKey:     cfg.AI.MarketFlowAPIKey,
+				Logger:     logger,
+			})
 			tools = append(tools,
 				agenttools.NewBookMeeting(agenttools.BookMeetingConfig{
 					APIBaseURL: cfg.AI.MarketFlowAPIURL,
 					APIKey:     cfg.AI.MarketFlowAPIKey,
 					Logger:     logger,
 				}),
-				agenttools.NewGetFBOProfile(agenttools.FBOProfileConfig{
-					APIBaseURL: cfg.AI.MarketFlowAPIURL,
-					APIKey:     cfg.AI.MarketFlowAPIKey,
-					Logger:     logger,
-				}),
+				profileTool,
 				agenttools.NewCheckIntegrations(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
-				agenttools.NewGenerateLinks(logger),
+				// Links take the distributor id and number from the tenant's own profile.
+				agenttools.NewGenerateLinks(logger, profileTool),
 				agenttools.NewCreateCampaign(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCreateFunnel(cfg.AI.MarketFlowAPIURL, cfg.AI.MarketFlowAPIKey, logger),
 				agenttools.NewCalculateCost(registrySource.Get, logger),
@@ -300,7 +302,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			)
 			// Image search uses the same Google CSE key as web_search.
 			if googleCfg.APIKey != "" && googleCfg.CSEID != "" {
-				tools = append(tools, agenttools.NewImageSearch(googleCfg.APIKey, googleCfg.CSEID, logger))
+				// It shares web_search's per-tenant daily Google cap.
+				tools = append(tools, agenttools.NewImageSearch(googleCfg.APIKey, googleCfg.CSEID, logger).
+					WithQuota(redisClient, cfg.Redis.Namespace, googleCfg.DailyCap))
 			}
 		} else {
 			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
@@ -581,8 +585,13 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)
 		r.Delete("/chat/sessions/{id}/turns/{n}", chatHandler.DeleteTurn)
 		r.Post("/chat/sessions/{id}/turns/{n}/feedback", chatHandler.RateTurn)
-		r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
-		r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
+		// CRM AI calls a model with the tenant's CRM data: limited like the OS routes so one
+		// account cannot loop it (audit 2026-11-16).
+		r.Group(func(r chi.Router) {
+			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-crm"), 20, 60, 0))
+			r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
+			r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
+		})
 
 		// Marketing OS. Tenant comes from the token; a mismatched X-Tenant-ID is refused.
 		r.Route("/os", func(r chi.Router) {
@@ -624,6 +633,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// A lead's WhatsApp reply after the instant follow-up (Sprint 23, customer-safe tools).
 		r.Post("/os/lead-reply", chatHandler.LeadReply)
 		r.Post("/inbox/intent", inboxIntentHandler.Tag)
+		// Treasury's tax source watch: rate statements from a fetched page, free model class,
+		// every candidate checked against the page in code (approval happens in treasury).
+		r.Post("/tax/extract", handlers.NewTaxExtractHandler(modelRouter, logger).Extract)
 		r.Post("/credits/charge", osHandler.ChargeCredits)
 		r.Post("/credits/forecast", osHandler.ForecastCredits)
 		r.Post("/adintel/scan", adIntelHandler.Scan)

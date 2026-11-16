@@ -5,6 +5,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // buildAgentSystemPrompt returns the system prompt used by the agent loop.
@@ -32,7 +33,7 @@ func (p *Pipeline) buildAgentSystemPrompt(businessType string, intent ai.Intent)
 	}
 
 	var b strings.Builder
-	b.WriteString(identityAnchor("Forever Living Products"))
+	b.WriteString(guardrail.IdentityAnchor("Forever Living Products"))
 	b.WriteString(`You are an agentic AI assistant for a Forever Living Products (FLP) business owner on the MarketFlow platform.
 
 SCOPE — STRICTLY ENFORCED:
@@ -103,7 +104,7 @@ Do NOT skip straight to text generation — always gather context and verify int
 // buildCodevertexAgentSystemPrompt returns the agent system prompt for Codevertex tenants.
 func (p *Pipeline) buildCodevertexAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("Codevertex Africa Limited"))
+	b.WriteString(guardrail.IdentityAnchor("Codevertex Africa Limited"))
 	b.WriteString(`You are Vera, an agentic AI assistant for Codevertex Africa Limited. You help website visitors and clients with IT services, the Power Suite platform, Digitika Academy courses, and technical enquiries.
 
 SCOPE — STRICTLY ENFORCED:
@@ -185,7 +186,7 @@ If the ad platform is not connected or returns an account-level error (e.g. mana
 // buildGenericMarketingAgentPrompt returns the agent system prompt for generic (non-FLP, non-Codevertex) tenants.
 func (p *Pipeline) buildGenericMarketingAgentPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("this business"))
+	b.WriteString(guardrail.IdentityAnchor("this business"))
 	b.WriteString(`You are Vera, an agentic AI assistant for a business on the MarketFlow platform. You help business owners and their customers with product enquiries, service information, and marketing campaigns.
 
 SCOPE — STRICTLY ENFORCED:
@@ -239,7 +240,7 @@ If AI credits are used up, guide to /settings/billing to buy a credit bundle.
 // buildCafeAgentSystemPrompt returns the agent system prompt for cafe/restaurant tenants.
 func (p *Pipeline) buildCafeAgentSystemPrompt(intent ai.Intent) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("this cafe"))
+	b.WriteString(guardrail.IdentityAnchor("this cafe"))
 	b.WriteString(`You are Vera, an agentic AI assistant for a cafe. You help guests with menu enquiries, event information, table reservations, and general questions about their dining experience.
 
 SCOPE — STRICTLY ENFORCED:

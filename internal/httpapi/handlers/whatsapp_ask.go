@@ -10,7 +10,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/assistgate"
-	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/team"
 	"github.com/google/uuid"
@@ -142,10 +142,14 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	if blocked, reply := rag.ScreenInput(req.Text); blocked {
+	if blocked, reply := guardrail.ScreenInput(req.Text); blocked {
 		out.Reply, out.Route = reply, "blocked"
 		writeJSON(w, http.StatusOK, out)
 		return
+	}
+	// The sender is a verified owner or admin (marketflow-api found them by verified phone).
+	if uid, err := uuid.Parse(req.UserID); err == nil {
+		ctx = guardrail.WithActor(ctx, guardrail.Actor{UserID: uid, Origin: guardrail.OriginWhatsApp})
 	}
 	sink, ok := h.whatsAppTurn(ctx, r, tenantID, req, askRequest{Text: req.Text, viaWhatsApp: true,
 		userID: req.UserID, sender: req.Sender, tenantSlug: req.TenantSlug, portalURL: req.PortalURL}, &out)

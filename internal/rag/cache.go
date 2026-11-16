@@ -37,24 +37,39 @@ func newCacheLayer(r *redis.Client, ns string, logger *zap.Logger) *cacheLayer {
 
 // answerCacheVersion is part of every cached answer's key. Raise it when answers change in a way
 // old ones must not be served: v2 (2026-11-09) added business facts and the no-guessing rule, after
-// a cached answer invented a cafe's location. Old keys expire on their own TTL.
-const answerCacheVersion = "v2"
+// a cached answer invented a cafe's location; v3 (2026-11-16) split answers by audience and added
+// the price and commitment checks. Old keys expire on their own TTL.
+const answerCacheVersion = "v3"
 
-func (c *cacheLayer) exactKey(tenantID uuid.UUID, question string) string {
-	h := sha256.Sum256([]byte(tenantID.String() + ":" + normalizeQ(question)))
+// Audiences. A public visitor never receives an answer written for a signed-in person (which may
+// carry CRM or business data), and the other way round (Sprint 26, owner decision G8).
+const (
+	audiencePublic  = "pub"
+	audiencePrivate = "prv"
+)
+
+func audienceOf(input ChatInput) string {
+	if input.PublicMode {
+		return audiencePublic
+	}
+	return audiencePrivate
+}
+
+func (c *cacheLayer) exactKey(tenantID uuid.UUID, audience, question string) string {
+	h := sha256.Sum256([]byte(tenantID.String() + ":" + audience + ":" + normalizeQ(question)))
 	return c.namespace + ":chat:" + answerCacheVersion + ":exact:" + hex.EncodeToString(h[:16])
 }
 
-func (c *cacheLayer) getExact(ctx context.Context, tenantID uuid.UUID, q string) (string, bool) {
-	v, err := c.redis.Get(ctx, c.exactKey(tenantID, q)).Result()
+func (c *cacheLayer) getExact(ctx context.Context, tenantID uuid.UUID, audience, q string) (string, bool) {
+	v, err := c.redis.Get(ctx, c.exactKey(tenantID, audience, q)).Result()
 	if err != nil || v == "" {
 		return "", false
 	}
 	return v, true
 }
 
-func (c *cacheLayer) setExact(ctx context.Context, tenantID uuid.UUID, q, response string) {
-	_ = c.redis.Set(ctx, c.exactKey(tenantID, q), response, 24*time.Hour).Err()
+func (c *cacheLayer) setExact(ctx context.Context, tenantID uuid.UUID, audience, q, response string) {
+	_ = c.redis.Set(ctx, c.exactKey(tenantID, audience, q), response, 24*time.Hour).Err()
 }
 
 // ── L2: semantic response cache (embedding-based, threshold 0.92) ───────
@@ -64,61 +79,68 @@ type semCacheEntry struct {
 	Embedding []float32 `json:"e"`
 }
 
-func (c *cacheLayer) semPrefix(tenantID uuid.UUID) string {
-	return c.namespace + ":chat:" + answerCacheVersion + ":sem:" + tenantID.String() + ":"
+func (c *cacheLayer) semPrefix(tenantID uuid.UUID, audience string) string {
+	return c.namespace + ":chat:" + answerCacheVersion + ":sem:" + tenantID.String() + ":" + audience + ":"
 }
 
-func (c *cacheLayer) getSemantic(ctx context.Context, tenantID uuid.UUID, embedding []float32) (string, bool) {
+// semIndexKey is a sorted set of the tenant's recent semantic entries for one audience (score =
+// time written). Reading it costs one ZREVRANGE plus one MGET whatever the size of Redis, where the
+// old SCAN walked the whole keyspace on every question.
+func (c *cacheLayer) semIndexKey(tenantID uuid.UUID, audience string) string {
+	return c.semPrefix(tenantID, audience) + "idx"
+}
+
+const (
+	semCandidates = 50  // entries compared per question
+	semIndexCap   = 200 // entries kept in the index
+	semTTL        = 48 * time.Hour
+)
+
+func (c *cacheLayer) getSemantic(ctx context.Context, tenantID uuid.UUID, audience string, embedding []float32) (string, bool) {
 	if len(embedding) == 0 {
 		return "", false
 	}
-	pattern := c.semPrefix(tenantID) + "*"
-	// Use SCAN instead of KEYS to avoid blocking Redis on large keyspaces.
-	// Stop after inspecting 50 candidates — sufficient for semantic matching.
-	const scanLimit = 50
-	var cursor uint64
-	checked := 0
-	for {
-		keys, next, err := c.redis.Scan(ctx, cursor, pattern, 20).Result()
-		if err != nil {
-			return "", false
-		}
-		for _, k := range keys {
-			raw, err := c.redis.Get(ctx, k).Result()
-			if err != nil || raw == "" {
-				continue
-			}
-			var entry semCacheEntry
-			if json.Unmarshal([]byte(raw), &entry) != nil || len(entry.Embedding) == 0 {
-				continue
-			}
-			sim := cosineSim(embedding, entry.Embedding)
-			if sim >= 0.92 {
-				c.logger.Debug("semantic cache hit", zap.Float64("sim", sim), zap.String("key", k))
-				return entry.Response, true
-			}
-			checked++
-			if checked >= scanLimit {
-				return "", false
-			}
-		}
-		if next == 0 {
-			break
-		}
-		cursor = next
+	keys, err := c.redis.ZRevRange(ctx, c.semIndexKey(tenantID, audience), 0, semCandidates-1).Result()
+	if err != nil || len(keys) == 0 {
+		return "", false
 	}
-	return "", false
+	vals, err := c.redis.MGet(ctx, keys...).Result()
+	if err != nil {
+		return "", false
+	}
+	best, bestSim := "", 0.0
+	for i, v := range vals {
+		raw, ok := v.(string)
+		if !ok || raw == "" {
+			continue
+		}
+		var entry semCacheEntry
+		if json.Unmarshal([]byte(raw), &entry) != nil || len(entry.Embedding) == 0 {
+			continue
+		}
+		if sim := cosineSim(embedding, entry.Embedding); sim >= 0.92 && sim > bestSim {
+			best, bestSim = entry.Response, sim
+			c.logger.Debug("semantic cache hit", zap.Float64("sim", sim), zap.String("key", keys[i]))
+		}
+	}
+	return best, best != ""
 }
 
-func (c *cacheLayer) setSemantic(ctx context.Context, tenantID uuid.UUID, q string, embedding []float32, response string) {
+func (c *cacheLayer) setSemantic(ctx context.Context, tenantID uuid.UUID, audience, q string, embedding []float32, response string) {
 	if len(embedding) == 0 {
 		return
 	}
-	h := sha256.Sum256([]byte(tenantID.String() + ":" + normalizeQ(q)))
-	key := c.semPrefix(tenantID) + hex.EncodeToString(h[:16])
+	h := sha256.Sum256([]byte(tenantID.String() + ":" + audience + ":" + normalizeQ(q)))
+	key := c.semPrefix(tenantID, audience) + hex.EncodeToString(h[:16])
 	entry := semCacheEntry{Response: response, Embedding: embedding}
 	data, _ := json.Marshal(entry)
-	_ = c.redis.Set(ctx, key, string(data), 48*time.Hour).Err()
+	idx := c.semIndexKey(tenantID, audience)
+	pipe := c.redis.TxPipeline()
+	pipe.Set(ctx, key, string(data), semTTL)
+	pipe.ZAdd(ctx, idx, redis.Z{Score: float64(time.Now().Unix()), Member: key})
+	pipe.ZRemRangeByRank(ctx, idx, 0, -semIndexCap-1)
+	pipe.Expire(ctx, idx, semTTL)
+	_, _ = pipe.Exec(ctx)
 }
 
 // ── L3: classification cache ────────────────────────────────────────────

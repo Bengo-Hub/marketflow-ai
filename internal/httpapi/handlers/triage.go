@@ -8,8 +8,13 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"go.uber.org/zap"
 )
+
+// triageInjectedCap is the highest confidence a ticket carrying an injection phrase can get, so it
+// always goes to a person (the review bar is 0.85).
+const triageInjectedCap = 0.8
 
 const triageSystemPrompt = `You are a support ticket classifier. Given a ticket subject and description, classify it.
 
@@ -130,12 +135,14 @@ func (h *TriageHandler) classify(ctx context.Context, subject, description strin
 	if description != "" {
 		text = fmt.Sprintf("Subject: %s\n\nDescription: %s", subject, description)
 	}
+	// A ticket is written by whoever opened it, often a public visitor: fenced as data and masked.
+	injected := guardrail.LooksInjected(text)
 
 	resp, err := h.groqClient.Chat(ctx, ai.ChatRequest{
 		Model: h.routerModel,
 		Messages: []ai.Message{
-			{Role: "system", Content: triageSystemPrompt},
-			{Role: "user", Content: text},
+			{Role: "system", Content: triageSystemPrompt + "\n" + guardrail.UntrustedRule},
+			{Role: "user", Content: guardrail.Quote("ticket", guardrail.MaskPII(text))},
 		},
 		Temperature: 0.1,
 		MaxTokens:   256,
@@ -163,16 +170,25 @@ func (h *TriageHandler) classify(ctx context.Context, subject, description strin
 		Reasoning  string  `json:"reasoning"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		h.logger.Warn("failed to parse triage JSON", zap.String("raw", raw), zap.Error(err))
+		h.logger.Warn("failed to parse triage JSON", zap.Error(err))
 		return &TriageResult{Category: "general", Priority: "normal", Confidence: 0, RequiresHumanReview: true}, nil
 	}
 
+	// The model's confidence is its own claim, and an injected ticket can claim 0.99. It is
+	// capped at 0.8, below the 0.85 review bar, whenever the text carries an injection phrase.
+	conf := parsed.Confidence
+	if conf < 0 || conf > 1 {
+		conf = 0
+	}
+	if injected && conf > triageInjectedCap {
+		conf = triageInjectedCap
+	}
 	result := &TriageResult{
 		Category:            sanitizeCategory(parsed.Category),
 		Priority:            sanitizePriority(parsed.Priority),
-		Confidence:          parsed.Confidence,
+		Confidence:          conf,
 		Reasoning:           parsed.Reasoning,
-		RequiresHumanReview: parsed.Confidence < 0.85,
+		RequiresHumanReview: conf < 0.85,
 	}
 	return result, nil
 }

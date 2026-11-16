@@ -9,6 +9,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"go.uber.org/zap"
 )
@@ -29,9 +30,9 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	started := time.Now()
 
 	// ── Jailbreak / prompt-injection guard ───────────────────────────────
-	if blocked, resp := ScreenInput(input.Question); blocked {
-		p.logger.Info("jailbreak attempt blocked", zap.String("tenant", input.TenantSlug))
-		return &ChatResult{Response: resp, Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
+	if s := guardrail.Check(input.Question); s.Blocked {
+		p.logger.Info("input guard blocked a message", zap.String("tenant", input.TenantSlug), zap.String("kind", s.Kind))
+		return &ChatResult{Response: s.Reply, Intent: "blocked", Confidence: 1.0, Model: "guard"}, nil
 	}
 
 	// ── Niche auto-detection ──────────────────────────────────────────────
@@ -64,7 +65,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	input.formTurn = IntegrationForm(input.BusinessType, "", input.Question) != nil
 	skipCache := len(input.History) > 0 || input.formTurn
 	if !skipCache {
-		if resp, ok := p.cache.getExact(ctx, input.TenantID, input.Question); ok {
+		if resp, ok := p.cache.getExact(ctx, input.TenantID, audienceOf(input), input.Question); ok {
 			p.logger.Debug("L1 exact cache hit", zap.Duration("latency", time.Since(started)))
 			filtered := p.applyFilter(resp, input.BusinessType)
 			return &ChatResult{Response: filtered, RawResponse: resp, Cached: true, Intent: "cached"}, nil
@@ -114,7 +115,10 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			return &ChatResult{Response: resp, Intent: string(intent), Confidence: confidence, Model: "template"}, nil
 		}
 	case ai.IntentTaskExecute:
-		if p.taskExecutor != nil {
+		// Content tasks (ad copy, posts, emails) are for signed-in people only. A public visitor
+		// asking for one gets a normal answer below: the widget must not write marketing copy for
+		// anyone on the business's credits (audit 2026-11-16, H-task).
+		if p.taskExecutor != nil && !input.PublicMode {
 			var ragCtx string
 			emb := p.cachedEmbed(ctx, input.Question)
 			if emb != nil {
@@ -128,8 +132,13 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			if err != nil {
 				return nil, fmt.Errorf("task execution failed: %w", err)
 			}
+			// The same output rules as every chat answer, applied to each text field.
+			p.guardTaskContent(result.Content, input.BusinessType)
 			respJSON, _ := json.Marshal(result)
 			return &ChatResult{Response: string(respJSON), Intent: "task_execute", Confidence: confidence, Model: result.Model}, nil
+		}
+		if input.PublicMode {
+			intent = ai.IntentProductQA
 		}
 	}
 
@@ -138,7 +147,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 
 	// ── L2: semantic cache (check before KB search) ──────────────────────
 	if !skipCache && embedding != nil {
-		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, embedding); ok {
+		if resp, ok := p.cache.getSemantic(ctx, input.TenantID, audienceOf(input), embedding); ok {
 			// Semantic hit — apply per-request filter (raw responses are cached).
 			p.logger.Debug("L2 semantic cache hit", zap.Duration("latency", time.Since(started)))
 			filtered := p.applyFilter(resp, input.BusinessType)
@@ -242,10 +251,16 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		}
 		ares, aerr := p.agentLoop.Run(ctx, agentInput)
 		if aerr == nil && ares != nil && ares.Answer != "" {
-			ares.Answer = ScreenOutput(ares.Answer)
-			// A blocked answer gets one rewrite with the broken rules (rewrite.go) before the filter.
-			ares.Answer = p.rewriteIfBlocked(ctx, input, rewriteMessages(sys, input), ares.Answer)
-			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding)
+			tools := ares.ToolResults()
+			ares.Answer = guardrail.ScreenOutput(ares.Answer)
+			// A blocked answer, or one with a price or commitment the business never gave, gets one
+			// rewrite with the broken rules (rewrite.go) before the filter.
+			ares.Answer = p.rewriteIfBlocked(ctx, input, rewriteMessages(sys, input, tools), ares.Answer,
+				allowedFigures(input, sys, tools))
+			ares.Answer = guardrail.SafeMarkdown(ares.Answer, tools)
+			// Only a public answer that read no outside text may be reused; a signed-in answer can
+			// carry the business's own records (owner decision G8).
+			filtered := p.filterAndCache(ctx, input, ares.Answer, embedding, input.PublicMode && !ares.Tainted)
 			p.logger.Info("agentic chat completed",
 				zap.Int("iterations", ares.Iterations),
 				zap.Int("tool_calls", ares.ToolCallsN),
@@ -290,10 +305,11 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 	}
 	model := call.Model
 
-	raw := ScreenOutput(resp.Choices[0].Message.Content)
+	raw := guardrail.ScreenOutput(resp.Choices[0].Message.Content)
 	// A blocked answer gets one rewrite with the broken rules (rewrite.go) before the filter.
-	raw = p.rewriteIfBlocked(ctx, input, messages, raw)
-	filtered := p.filterAndCache(ctx, input, raw, embedding)
+	raw = p.rewriteIfBlocked(ctx, input, messages, raw, allowedFigures(input, systemPrompt, nil))
+	raw = guardrail.SafeMarkdown(raw, nil)
+	filtered := p.filterAndCache(ctx, input, raw, embedding, true)
 	p.logger.Debug("single-shot completed", zap.Duration("latency", time.Since(started)))
 	return &ChatResult{
 		Response: filtered, RawResponse: raw,

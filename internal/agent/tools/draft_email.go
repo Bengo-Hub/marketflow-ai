@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -40,7 +41,7 @@ func NewDraftEmail(cfg DraftEmailConfig) *DraftEmail {
 		serviceKey: cfg.ServiceKey,
 		llm:        cfg.LLMClient,
 		llmModel:   cfg.LLMModel,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.draft_email"),
 	}
 }
@@ -109,7 +110,11 @@ func (t *DraftEmail) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 
 Write a short (3 paragraphs max) %s email for the FBO to send to %s.
 Purpose: %s
-Contact context: %s
+Contact context:
+%s
+
+%s
+Never promise a price, discount, refund or result that is not in the purpose or the contact context.
 
 Format your response as valid JSON with exactly these fields:
 {
@@ -118,7 +123,9 @@ Format your response as valid JSON with exactly these fields:
 }
 
 Do not include any text outside the JSON.`,
-		args.Tone, contactName, args.Purpose, truncate(profileJSON, 800),
+		args.Tone, contactName, args.Purpose,
+		// Contact details stay out of the provider's hands; the name is enough to write the email.
+		guardrail.Quote("crm_profile", guardrail.MaskPII(truncate(profileJSON, 800))), guardrail.UntrustedRule,
 	)
 
 	resp, err := t.llm.Chat(ctx, ai.ChatRequest{
@@ -173,7 +180,6 @@ Do not include any text outside the JSON.`,
 	t.logger.Info("email drafted via agent tool",
 		zap.String("tenant", tenantID.String()),
 		zap.String("entity_id", args.EntityID),
-		zap.String("purpose", args.Purpose),
 	)
 	return string(out), nil
 }

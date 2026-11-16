@@ -9,6 +9,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // collect drains a guarded stream with a timeout so a missing Done fails the test instead of hanging.
@@ -87,7 +88,7 @@ func TestGuardStreamFinalizesWhenUpstreamClosesWithoutDone(t *testing.T) {
 func TestStreamComplianceMatchesNonStreamingPath(t *testing.T) {
 	p := &Pipeline{filter: compliance.NewFilter(), logger: zap.NewNop()}
 	finalize := func(bt string) func(string) string {
-		return func(s string) string { return p.applyFilter(ScreenOutput(s), bt) }
+		return func(s string) string { return p.applyFilter(guardrail.ScreenOutput(s), bt) }
 	}
 
 	t.Run("flp cure claim is replaced", func(t *testing.T) {

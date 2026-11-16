@@ -26,7 +26,7 @@ func NewCheckIntegrations(apiBaseURL, apiKey string, logger *zap.Logger) *CheckI
 	return &CheckIntegrations{
 		apiBaseURL: apiBaseURL,
 		apiKey:     apiKey,
-		http:       &http.Client{Timeout: 10 * time.Second},
+		http:       serviceHTTP(10 * time.Second),
 		logger:     logger.Named("tool.check_integrations"),
 	}
 }

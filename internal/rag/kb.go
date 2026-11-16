@@ -86,33 +86,59 @@ func (p *Pipeline) applyFilter(raw, businessType string) string {
 	filtered, blocked, reason := p.filter.CheckForTenant(raw, businessType)
 	if blocked {
 		p.logger.Warn("response blocked by compliance filter", zap.String("reason", reason))
-		switch businessType {
-		case "flp":
-			return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
-		case "codevertex":
-			return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexafrica.com or contact our team at info@codevertexafrica.com."
-		case "cafe":
-			return "I appreciate your question! For the most accurate information, please contact the cafe directly or visit us in person."
-		default:
-			return "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
-		}
+		return FallbackReply(businessType)
 	}
 	return filtered
 }
 
-// filterAndCache writes the RAW (pre-filter) response to L1 + L2 caches so that
-// future cache hits receive the correct filter for their own businessType. Skips
-// cache writes when the request has conversation history (session-specific responses
-// must not be recycled). Returns the compliance-filtered response for this request.
-func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32) string {
-	if len(input.History) == 0 && !input.formTurn {
-		p.cache.setExact(ctx, input.TenantID, input.Question, raw)
-		p.cache.setSemantic(ctx, input.TenantID, input.Question, emb, raw)
+// HistoryText is the assistant text to store in a conversation: the checked answer before the
+// compliance filter (so later turns do not repeat disclaimers), unless the answer was replaced by
+// the fallback, in which case the fallback is stored and the blocked draft never returns as context.
+func HistoryText(result *ChatResult) string {
+	if result == nil {
+		return ""
 	}
-	return p.applyFilter(raw, input.BusinessType)
+	if result.RawResponse == "" || IsFallback(result.Response) {
+		return result.Response
+	}
+	return result.RawResponse
 }
 
-// cacheKey kept for back-compat with ChatStream; delegates to cache layer.
-func (p *Pipeline) cacheKey(tenantID uuid.UUID, question string) string {
-	return p.cache.exactKey(tenantID, question)
+// IsFallback reports whether a reply is one of the fallback replies (the answer was blocked or
+// needed facts the assistant did not have).
+func IsFallback(reply string) bool {
+	for _, bt := range []string{"flp", "codevertex", "cafe", ""} {
+		if reply == FallbackReply(bt) {
+			return true
+		}
+	}
+	return false
+}
+
+// FallbackReply is the safe answer when a reply cannot be sent: it points to the business itself.
+func FallbackReply(businessType string) string {
+	switch businessType {
+	case "flp":
+		return "I appreciate your question! For the most accurate and up-to-date information, please visit foreverliving.com or speak directly with your Forever Business Owner."
+	case "codevertex":
+		return "I appreciate your question! For the most accurate information about Codevertex Africa Limited services, please visit codevertexafrica.com or contact our team at info@codevertexafrica.com."
+	case "cafe":
+		return "I appreciate your question! For the most accurate information, please contact the cafe directly or visit us in person."
+	default:
+		return "I appreciate your question! Please contact the business directly for the most accurate and up-to-date information."
+	}
+}
+
+// filterAndCache writes the checked (pre-compliance-filter) response to the L1 and L2 caches of
+// the request's audience, so future hits get the filter for their own businessType, and returns
+// the compliance-filtered response. Nothing is cached when the request has history or is a form
+// turn (session-specific), or when cacheable is false: an agent answer that read tools or outside
+// text is never reused for someone else.
+func (p *Pipeline) filterAndCache(ctx context.Context, input ChatInput, raw string, emb []float32, cacheable bool) string {
+	if cacheable && len(input.History) == 0 && !input.formTurn {
+		aud := audienceOf(input)
+		p.cache.setExact(ctx, input.TenantID, aud, input.Question, raw)
+		p.cache.setSemantic(ctx, input.TenantID, aud, input.Question, emb, raw)
+	}
+	return p.applyFilter(raw, input.BusinessType)
 }

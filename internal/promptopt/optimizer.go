@@ -23,6 +23,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/decide"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/redis/go-redis/v9"
@@ -146,6 +147,10 @@ func (o *Optimizer) Optimize(ctx context.Context, tenantID, text string, tc Cont
 	spec.CostUSD += usage.CostUSD
 	if derr != nil {
 		o.logger.Warn("route decision failed, using keyword routing", zap.Error(derr))
+	}
+	// A known injection phrase counts as suspected even when the classifier misses it or is down.
+	if guardrail.LooksInjected(text) {
+		spec.InjectionSuspected = true
 	}
 
 	spec.Playbook, spec.Confidence, spec.Route = o.choosePlaybook(answers, keyword, policy.Threshold("route"))
@@ -281,7 +286,7 @@ func (o *Optimizer) extract(ctx context.Context, spec *TaskSpec, fields []string
 	resp, call, err := o.router.Complete(ctx, llm.Nano, ai.ChatRequest{
 		Messages: []ai.Message{
 			{Role: "system", Content: extractSystem},
-			{Role: "user", Content: "Fields wanted: " + strings.Join(fields, ", ") + "\nRequest:\n<<<\n" + spec.Original + "\n>>>"},
+			{Role: "user", Content: "Fields wanted: " + strings.Join(fields, ", ") + "\nRequest:\n" + guardrail.Quote("owner_request", spec.Original)},
 		},
 		Temperature:    0,
 		MaxTokens:      300,

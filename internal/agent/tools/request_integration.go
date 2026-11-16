@@ -38,7 +38,7 @@ func NewRequestIntegration(cfg RequestIntegrationConfig) *RequestIntegration {
 	return &RequestIntegration{
 		authAPIURL: strings.TrimSuffix(cfg.AuthAPIURL, "/"),
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.request_integration"),
 	}
 }
@@ -132,8 +132,7 @@ func (t *RequestIntegration) Invoke(ctx context.Context, tenantID uuid.UUID, arg
 
 	if resp.StatusCode >= 300 {
 		t.logger.Warn("request_integration api error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("body", respBody))
+			zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("auth-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 

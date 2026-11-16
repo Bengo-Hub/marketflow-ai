@@ -91,7 +91,7 @@ func NewPosters(keys KeySource, store Store, logger *zap.Logger) *Posters {
 		logger = zap.NewNop()
 	}
 	return &Posters{router: NewRouter(PosterRoutes), keys: keys, store: store, queue: newQueueClient(),
-		fetch: &http.Client{Timeout: 20 * time.Second}, logger: logger.Named("media.posters"), budget: 120 * time.Second}
+		fetch: fetchClient(20 * time.Second), logger: logger.Named("media.posters"), budget: 120 * time.Second}
 }
 
 // ErrNoRoute means no poster route could run (no keys, or every route failed).

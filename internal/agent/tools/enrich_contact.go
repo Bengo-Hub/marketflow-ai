@@ -38,7 +38,7 @@ func NewEnrichContact(cfg EnrichContactConfig) *EnrichContact {
 	return &EnrichContact{
 		apiBaseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 10 * time.Second},
+		http:       serviceHTTP(10 * time.Second),
 		logger:     cfg.Logger.Named("tool.enrich_contact"),
 	}
 }

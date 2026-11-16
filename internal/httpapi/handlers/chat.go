@@ -15,6 +15,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/chatallowance"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
@@ -243,6 +244,13 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "X-Tenant-ID does not match your account")
 		return
 	}
+	// The public widget answers only for a real business. An unknown slug used to get a free,
+	// unbilled model turn (with web search), which made the route an open AI proxy (audit
+	// 2026-11-16). Without a session store the check cannot run and the old path stays.
+	if strings.Contains(r.URL.Path, "/public/") && h.sessions != nil && !persist {
+		writeError(w, http.StatusNotFound, "unknown business")
+		return
+	}
 
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -295,7 +303,15 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Every model call of this message is metered, so a refund is only given when
 	// no paid model was used (see refundable).
 	meter := &llm.Meter{}
-	r = r.WithContext(llm.WithMeter(r.Context(), meter))
+	origin := guardrail.OriginChat
+	if isPublic {
+		origin = guardrail.OriginPublic
+	}
+	actor := actorFor(r, origin)
+	if isPublic {
+		actor.Said = visitorSaid(req.Question, history)
+	}
+	r = r.WithContext(guardrail.WithActor(llm.WithMeter(r.Context(), meter), actor))
 
 	if req.Stream {
 		h.handleStream(w, r, input, persist, tenantID, chargeKey)
@@ -316,12 +332,9 @@ func (h *ChatHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		h.refund(r, tenantID, chargeKey)
 	}
 
-	// Persist user + assistant turns using the raw (pre-filter) response so
-	// subsequent turns in the same session don't see FLP disclaimer boilerplate.
-	savedAssistant := result.RawResponse
-	if savedAssistant == "" {
-		savedAssistant = result.Response
-	}
+	// Persist user + assistant turns using the checked response before the compliance filter, so
+	// later turns do not repeat disclaimers; a blocked answer is stored as its fallback (HistoryText).
+	savedAssistant := rag.HistoryText(result)
 	if persist && h.sessions != nil {
 		_ = h.sessions.AppendMessages(r.Context(), tenantID, sessionID,
 			ai.Message{Role: "user", Content: req.Question},
@@ -527,7 +540,9 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 		if !llm.MeterFrom(r.Context()).Paid() {
 			h.refund(r, tenantID, chargeKey)
 		}
-		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
+		// Provider errors can echo prompt text, so the caller gets a fixed message.
+		h.logger.Warn("chat stream failed", zap.Error(err))
+		fmt.Fprint(w, "data: {\"error\": \"AI processing failed\"}\n\n")
 		flusher.Flush()
 		return
 	}

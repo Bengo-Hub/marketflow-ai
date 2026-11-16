@@ -29,7 +29,7 @@ type FBOProfileConfig struct {
 func NewGetFBOProfile(cfg FBOProfileConfig) *GetFBOProfile {
 	return &GetFBOProfile{
 		apiBaseURL: cfg.APIBaseURL,
-		http:       &http.Client{Timeout: 10 * time.Second},
+		http:       serviceHTTP(10 * time.Second),
 		logger:     cfg.Logger.Named("tool.get_fbo_profile"),
 	}
 }
@@ -45,23 +45,29 @@ func (*GetFBOProfile) Schema() map[string]any {
 	}
 }
 
-func (t *GetFBOProfile) Invoke(ctx context.Context, tenantID uuid.UUID, _ string) (string, error) {
-	// Only the calling tenant's own profile. There is no fallback to another tenant's
-	// profile: a missing profile is reported as missing.
+// profileOf reads the calling tenant's own public profile (nil when it cannot be read). There is
+// no fallback to another tenant's profile.
+func (t *GetFBOProfile) profileOf(ctx context.Context, tenantID uuid.UUID) map[string]any {
 	var profile map[string]any
 	url := fmt.Sprintf("%s/api/v1/public/profile/%s", t.apiBaseURL, tenantID.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil
 	}
 	resp, err := t.http.Do(req)
-	if err == nil {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			_ = json.Unmarshal(body, &profile)
-		}
+	if err != nil {
+		return nil
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		_ = json.Unmarshal(body, &profile)
+	}
+	return profile
+}
+
+func (t *GetFBOProfile) Invoke(ctx context.Context, tenantID uuid.UUID, _ string) (string, error) {
+	profile := t.profileOf(ctx, tenantID)
 	if profile == nil {
 		return fmt.Sprintf(`{"error":"profile not found for tenant %s"}`, tenantID), nil
 	}

@@ -14,9 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// CreateCampaign calls marketflow-api POST /api/v1/campaigns to create a new
-// campaign record. When the tenant has a connected Meta/Google/TikTok account,
-// the API will mirror the campaign to that ad platform.
+// CreateCampaign calls marketflow-api POST /api/v1/campaigns to save a campaign as a draft.
+// Nothing reaches an ad platform and nothing is spent: the owner reviews the draft and launches
+// it from Ads (owner decision G5, 2026-11-16). Only the fields in campaignArgs are forwarded.
 type CreateCampaign struct {
 	apiBaseURL string
 	apiKey     string
@@ -28,14 +28,14 @@ func NewCreateCampaign(apiBaseURL, apiKey string, logger *zap.Logger) *CreateCam
 	return &CreateCampaign{
 		apiBaseURL: apiBaseURL,
 		apiKey:     apiKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     logger.Named("tool.create_campaign"),
 	}
 }
 
 func (*CreateCampaign) Name() string { return "create_campaign" }
 func (*CreateCampaign) Description() string {
-	return "Creates a new marketing campaign. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. IMPORTANT: Before calling this, use calculate_ad_cost to show the quote: the ad budget, which the platform bills to the tenant's own ad account at its own price with no MarketFlow fee, and the AI credits for making the ads. Use check_integrations first to verify the ad platform is connected."
+	return "Saves a new marketing campaign as a DRAFT for the owner to review and launch from Ads; it spends nothing and does not go live. Provide the campaign name, platform (meta/google/tiktok/linkedin/manual), type (lead_gen/conversion/awareness), daily budget (USD), currency, and duration in days. IMPORTANT: Before calling this, use calculate_ad_cost to show the quote: the ad budget, which the platform bills to the tenant's own ad account at its own price with no MarketFlow fee, and the AI credits for making the ads. Use check_integrations first to verify the ad platform is connected."
 }
 func (*CreateCampaign) Schema() map[string]any {
 	return map[string]any{
@@ -62,14 +62,98 @@ func (*CreateCampaign) Schema() map[string]any {
 	}
 }
 
+// campaignArgs are the only fields the model may set. Ad platform ids, metrics, status and
+// metadata never come from a model (the raw argument map used to be forwarded as it was).
+type campaignArgs struct {
+	Name           string         `json:"name"`
+	Platform       string         `json:"platform"`
+	CampaignType   string         `json:"campaign_type"`
+	BudgetDaily    float64        `json:"budget_daily"`
+	Currency       string         `json:"currency"`
+	DurationDays   int            `json:"duration_days"`
+	TargetAudience map[string]any `json:"target_audience"`
+	Description    string         `json:"description"`
+}
+
+var (
+	campaignPlatforms = map[string]bool{"meta": true, "google": true, "tiktok": true, "linkedin": true, "manual": true}
+	campaignTypes     = map[string]bool{"lead_gen": true, "conversion": true, "awareness": true, "traffic": true}
+)
+
+// maxDraftDailyBudget bounds a draft's daily budget (in its currency). A draft spends nothing, the
+// owner sets the real amount when launching; the bound only stops absurd values reaching reports.
+const maxDraftDailyBudget = 10_000_000
+
+// campaignBody validates the model's arguments and builds the API body: always a draft, marked as
+// prepared by the assistant, with start and end dates from the duration.
+func campaignBody(a campaignArgs, now time.Time) (map[string]any, error) {
+	a.Name = strings.TrimSpace(a.Name)
+	if a.Name == "" || len([]rune(a.Name)) > 120 {
+		return nil, fmt.Errorf("name is required (at most 120 characters)")
+	}
+	a.Platform = strings.ToLower(strings.TrimSpace(a.Platform))
+	if !campaignPlatforms[a.Platform] {
+		return nil, fmt.Errorf("platform must be meta, google, tiktok, linkedin or manual")
+	}
+	if a.CampaignType != "" && !campaignTypes[a.CampaignType] {
+		return nil, fmt.Errorf("campaign_type must be lead_gen, conversion, awareness or traffic")
+	}
+	if a.BudgetDaily < 0 || a.BudgetDaily > maxDraftDailyBudget {
+		return nil, fmt.Errorf("budget_daily is out of range")
+	}
+	cur := strings.ToUpper(strings.TrimSpace(a.Currency))
+	if cur != "KES" {
+		cur = "USD"
+	}
+	if a.DurationDays < 0 || a.DurationDays > 90 {
+		return nil, fmt.Errorf("duration_days must be between 1 and 90")
+	}
+	body := map[string]any{
+		"name":     a.Name,
+		"platform": a.Platform,
+		"currency": cur,
+		"metadata": map[string]any{"created_by": "ai_assistant", "needs_review": true, "description": trimText(a.Description, 1000)},
+	}
+	if a.CampaignType != "" {
+		body["campaign_type"] = a.CampaignType
+	}
+	if a.BudgetDaily > 0 {
+		body["budget_daily"] = a.BudgetDaily
+		if a.DurationDays > 0 {
+			body["budget_total"] = a.BudgetDaily * float64(a.DurationDays)
+		}
+	}
+	if a.DurationDays > 0 {
+		start := now.UTC()
+		body["start_date"] = start.Format(time.RFC3339)
+		body["end_date"] = start.AddDate(0, 0, a.DurationDays).Format(time.RFC3339)
+	}
+	if len(a.TargetAudience) > 0 {
+		body["target_audience"] = a.TargetAudience
+	}
+	return body, nil
+}
+
+func trimText(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) > n {
+		r = r[:n]
+	}
+	return string(r)
+}
+
 func (t *CreateCampaign) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string) (string, error) {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+	var a campaignArgs
+	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
+	}
+	args, err := campaignBody(a, time.Now())
+	if err != nil {
+		return fmt.Sprintf(`{"error":%q}`, err.Error()), nil
 	}
 
 	// Prerequisite: verify the target ad platform is connected before creating.
-	platform, _ := args["platform"].(string)
+	platform := a.Platform
 	if platform != "" && platform != "manual" {
 		connected, checkErr := t.checkPlatformConnected(ctx, tenantID, platform)
 		if checkErr != nil {
@@ -104,12 +188,18 @@ func (t *CreateCampaign) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSO
 		t.logger.Warn("campaign creation failed",
 			zap.String("platform", platform),
 			zap.Int("status", resp.StatusCode),
-			zap.String("error", errMsg),
 		)
 		return actionable, nil
 	}
 
-	t.logger.Info("campaign created", zap.String("tenant", tenantID.String()))
+	t.logger.Info("campaign draft created", zap.String("tenant", tenantID.String()))
+	var created map[string]any
+	if json.Unmarshal(rb, &created) == nil {
+		created["next_step"] = "Saved as a draft. Nothing is spent until the owner reviews and launches it from Ads."
+		if b, err := json.Marshal(created); err == nil {
+			return string(b), nil
+		}
+	}
 	return string(rb), nil
 }
 

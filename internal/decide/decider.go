@@ -3,11 +3,11 @@ package decide
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/breaker"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
@@ -102,7 +102,7 @@ func (d *Decider) Decide(ctx context.Context, name, state string, questions map[
 			return nil, Usage{}, fmt.Errorf("%s/%s: %w", name, id, err)
 		}
 	}
-	state = MaskPII(state)
+	state = guardrail.MaskPII(state)
 	if len(state) > maxStateBytes {
 		state = state[:maxStateBytes]
 	}
@@ -174,30 +174,6 @@ func (d *Decider) record(ctx context.Context, u Usage) {
 }
 
 func (d *Decider) month() string { return d.nowFn().UTC().Format("2006-01") }
-
-var (
-	emailRe = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
-	// Phone-like runs: optional +, then 9 to 15 digits with spaces, dots or dashes.
-	phoneRe = regexp.MustCompile(`\+?\d[\d\s.\-]{7,18}\d`)
-)
-
-// MaskPII replaces emails and phone numbers, so lead contact details never reach
-// a decision provider.
-func MaskPII(s string) string {
-	s = emailRe.ReplaceAllString(s, "[email]")
-	return phoneRe.ReplaceAllStringFunc(s, func(m string) string {
-		digits := 0
-		for _, r := range m {
-			if r >= '0' && r <= '9' {
-				digits++
-			}
-		}
-		if digits < 9 {
-			return m // amounts and short numbers stay
-		}
-		return "[phone]"
-	})
-}
 
 // RedisSpend tracks monthly spend in Redis, shared by every replica.
 type RedisSpend struct {

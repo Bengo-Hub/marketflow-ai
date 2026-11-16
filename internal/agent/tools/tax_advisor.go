@@ -30,7 +30,7 @@ type TaxAdvisorConfig struct {
 func NewTaxAdvisor(cfg TaxAdvisorConfig) *TaxAdvisor {
 	return &TaxAdvisor{
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 20 * time.Second},
+		http:       serviceHTTP(20 * time.Second),
 		logger:     cfg.Logger.Named("tool.tax_advisor"),
 	}
 }

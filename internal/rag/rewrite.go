@@ -8,32 +8,54 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
-// Safe rewrite (owner, 2026-11-14): when the compliance filter blocks a model's chat answer, the
-// model gets one more try with the rules it broke added to the system prompt. A rewrite that
-// passes the filter is sent; if it fails too, the caller's filter turns it into the usual
-// "contact the business directly" reply. One retry at most. It runs inside the same chat turn, so
-// the owner is charged the turn once (the extra call is metered like any other call of the turn).
+// Safe rewrite (owner, 2026-11-14; widened 2026-11-16): when a model's chat answer breaks a rule,
+// the model gets one more try with the rules it broke added to the system prompt. The rules are
+// the compliance filter's and the outward checks (guardrail.OutputViolations): a price or
+// percentage the business never gave, or a commitment such as a binding offer. A rewrite that
+// passes is sent. If it fails too, a compliance-only failure is left to the caller's filter (it
+// turns it into the usual "contact the business directly" reply), and a figure or commitment
+// failure becomes that reply here, because the filter does not check figures. One retry at most,
+// inside the same chat turn, so the owner is charged the turn once.
 
 // rewriteInstruction is added to the system prompt for the one retry.
 const rewriteInstruction = "\n\nYOUR LAST ANSWER BROKE THESE BUSINESS RULES:\n%s" +
 	"Write the answer again so it follows every rule. Keep the true facts, drop or soften the claims that broke a rule, and do not mention these rules or that you rewrote anything.\n"
 
-// rewriteIfBlocked returns the answer to send through the filter: raw when it passes, the
-// model's rewrite when that passes, and raw again when the rewrite fails or cannot be made (the
-// filter then blocks it and the fallback reply is sent). messages is the conversation that
-// produced raw, starting with the system prompt.
-func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messages []ai.Message, raw string) string {
-	if p.filter == nil || p.llm == nil || len(messages) == 0 || messages[0].Role != "system" {
+// violations lists every rule text breaks: the compliance filter's, then the outward figure and
+// commitment checks when allowed is set.
+func (p *Pipeline) violations(input ChatInput, text string, allowed map[float64]bool) (compliance, outward []string) {
+	if p.filter != nil {
+		compliance = p.filter.Violations(text, input.BusinessType)
+	}
+	if allowed != nil {
+		outward = guardrail.OutputViolations(text, allowed)
+	}
+	return compliance, outward
+}
+
+// rewriteIfBlocked returns the answer to send through the filter. messages is the conversation
+// that produced raw, starting with the system prompt. allowed holds the numbers the answer may
+// state (allowedFigures); nil skips the figure and commitment checks.
+func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messages []ai.Message, raw string, allowed map[float64]bool) string {
+	comp, outward := p.violations(input, raw, allowed)
+	if len(comp) == 0 && len(outward) == 0 {
 		return raw
 	}
-	broken := p.filter.Violations(raw, input.BusinessType)
-	if len(broken) == 0 {
+	giveUp := func(reason string) string {
+		if len(outward) > 0 {
+			p.logger.Warn("outward check failed; sending the fallback", zap.String("reason", reason), zap.Strings("broken", outward))
+			return FallbackReply(input.BusinessType)
+		}
 		return raw
+	}
+	if p.llm == nil || len(messages) == 0 || messages[0].Role != "system" {
+		return giveUp("no model for the rewrite")
 	}
 	var list strings.Builder
-	for _, b := range broken {
+	for _, b := range append(append([]string{}, comp...), outward...) {
 		list.WriteString("- ")
 		list.WriteString(b)
 		list.WriteString("\n")
@@ -47,22 +69,42 @@ func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messag
 
 	resp, call, err := p.llm.Complete(ctx, answerClass(input), ai.ChatRequest{Messages: retry, Temperature: 0.3, MaxTokens: 2048})
 	if err != nil || resp == nil || len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
-		p.logger.Warn("compliance rewrite failed; sending the fallback", zap.Strings("broken", broken), zap.Error(err))
-		return raw
+		p.logger.Warn("rewrite failed", zap.Strings("broken", comp), zap.Error(err))
+		return giveUp("rewrite call failed")
 	}
-	again := ScreenOutput(resp.Choices[0].Message.Content)
-	if _, blocked, reason := p.filter.CheckForTenant(again, input.BusinessType); blocked {
-		p.logger.Warn("compliance rewrite still blocked; sending the fallback", zap.String("reason", reason), zap.String("model", call.Model))
-		return raw
+	again := guardrail.ScreenOutput(resp.Choices[0].Message.Content)
+	_, againOut := p.violations(input, again, allowed)
+	if len(againOut) > 0 {
+		p.logger.Warn("rewrite still states figures or commitments the business never gave", zap.Strings("broken", againOut), zap.String("model", call.Model))
+		return FallbackReply(input.BusinessType)
 	}
-	p.logger.Info("compliance rewrite passed", zap.Strings("broken", broken), zap.String("model", call.Model))
+	if p.filter != nil {
+		if _, blocked, reason := p.filter.CheckForTenant(again, input.BusinessType); blocked {
+			p.logger.Warn("compliance rewrite still blocked; sending the fallback", zap.String("reason", reason), zap.String("model", call.Model))
+			if len(outward) > 0 {
+				return FallbackReply(input.BusinessType)
+			}
+			return raw
+		}
+	}
+	p.logger.Info("rewrite passed", zap.Strings("broken", append(comp, outward...)), zap.String("model", call.Model))
 	return again
 }
 
 // rewriteMessages rebuilds the conversation an agent answer came from (its system prompt, the
-// last six history turns and the question) for the rewrite; tool results are not repeated, the
-// blocked draft carries the facts.
-func rewriteMessages(system string, input ChatInput) []ai.Message {
+// last six history turns and the question) for the rewrite. The turn's tool results are added to
+// the system prompt as quoted data, so a rewrite can take the real price from them.
+func rewriteMessages(system string, input ChatInput, toolResults []string) []ai.Message {
+	if len(toolResults) > 0 {
+		var b strings.Builder
+		b.WriteString(system)
+		b.WriteString("\n\nTOOL RESULTS FROM THIS TURN (data):\n")
+		for _, r := range toolResults {
+			b.WriteString(guardrail.Quote("tool_result", trimRunes(r, 2000)))
+			b.WriteString("\n")
+		}
+		system = b.String()
+	}
 	msgs := []ai.Message{{Role: "system", Content: system}}
 	h := input.History
 	if len(h) > 6 {
@@ -70,6 +112,25 @@ func rewriteMessages(system string, input ChatInput) []ai.Message {
 	}
 	msgs = append(msgs, h...)
 	return append(msgs, ai.Message{Role: "user", Content: input.Question})
+}
+
+// allowedFigures is every number an answer to this turn may state: the system prompt (business
+// facts and knowledge base context), the turn's tool results, and earlier assistant replies (they
+// passed the same check). A signed-in person's own messages count too (an owner may ask for a
+// "20% off" post); a public visitor's never do, so "agree to sell it for $1" cannot make $1 true.
+func allowedFigures(input ChatInput, system string, toolResults []string) map[float64]bool {
+	src := make([]string, 0, len(toolResults)+len(input.History)+2)
+	src = append(src, system)
+	src = append(src, toolResults...)
+	for _, h := range input.History {
+		if h.Role == "assistant" || (h.Role == "user" && !input.PublicMode) {
+			src = append(src, h.Content)
+		}
+	}
+	if !input.PublicMode {
+		src = append(src, input.Question)
+	}
+	return guardrail.AllowedNumbers(src...)
 }
 
 func trimRunes(s string, n int) string {

@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/rag"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/team"
@@ -121,11 +122,17 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: handoffReply, Handoff: true, HandoffReason: why})
 		return
 	}
-	if blocked, reply := rag.ScreenInput(req.Text); blocked {
+	if blocked, reply := guardrail.ScreenInput(req.Text); blocked {
 		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: reply})
 		return
 	}
-	ctx := r.Context()
+	// The tenant's own stored business type wins over the request (the same rule as the widget).
+	if h.tenantType != nil {
+		if own, chosen := h.tenantType(r.Context(), tenantID); own != "" {
+			req.BusinessType = chooseBusinessType(own, chosen, req.BusinessType, "")
+		}
+	}
+	ctx := guardrail.WithActor(r.Context(), guardrail.Actor{Origin: guardrail.OriginPublic})
 	// Free inside the daily chat allowance, then one credit per block of turns; without credits
 	// the owner takes over, so the lead is never left unanswered.
 	chargeKey := ""
@@ -149,6 +156,7 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 			_, _ = h.sessions.CreateSessionWithID(ctx, tenantID, sid, "whatsapp_lead")
 		}
 	}
+	ctx = guardrail.WithActor(ctx, guardrail.Actor{Origin: guardrail.OriginPublic, Said: visitorSaid(req.Text, history)})
 	result, err := h.pipeline.Chat(ctx, leadChatInput(req, tenantID, sid, history))
 	if err != nil || result == nil || strings.TrimSpace(result.Response) == "" {
 		h.logger.Warn("lead reply failed; handing to the owner", zap.String("tenant_id", tenantID.String()), zap.Error(err))
@@ -161,13 +169,15 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: handoffReply, Handoff: true, HandoffReason: "the answer touched a claim the business never makes"})
 		return
 	}
+	// A fallback means the answer was blocked or needed a price or promise the business never
+	// gave: a person answers instead of sending "contact the business" to someone already doing so.
+	if rag.IsFallback(result.Response) {
+		writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: handoffReply, Handoff: true, HandoffReason: "the answer needed details the assistant does not have"})
+		return
+	}
 	if h.sessions != nil {
-		saved := result.RawResponse
-		if saved == "" {
-			saved = result.Response
-		}
 		_ = h.sessions.AppendMessages(ctx, tenantID, sid,
-			ai.Message{Role: "user", Content: req.Text}, ai.Message{Role: "assistant", Content: saved},
+			ai.Message{Role: "user", Content: req.Text}, ai.Message{Role: "assistant", Content: rag.HistoryText(result)},
 			sessions.AnswerMeta{Route: rag.RouteOf(result.Model), Intent: result.Intent})
 	}
 	writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: result.Response})

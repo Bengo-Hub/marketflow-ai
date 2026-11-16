@@ -52,6 +52,26 @@ type Result struct {
 	Model        string       `json:"model"`
 	StoppedEarly bool         `json:"stopped_early,omitempty"`
 	StopReason   string       `json:"stop_reason,omitempty"`
+	// Tainted is true when the turn read third-party text, so writing tools were withdrawn
+	// (taint.go). Callers also use it to keep the answer out of shared caches.
+	Tainted bool `json:"tainted,omitempty"`
+}
+
+// ToolResults returns every tool output of the run, for the output checks that compare an
+// answer's prices and images with what the tools actually returned.
+func (r *Result) ToolResults() []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	for _, e := range r.Trace {
+		for _, c := range e.ToolCalls {
+			if c.Result != "" {
+				out = append(out, c.Result)
+			}
+		}
+	}
+	return out
 }
 
 // Input is the per-conversation input to the loop.
@@ -66,4 +86,7 @@ type Input struct {
 	// AllowedTools limits the run to these tool names (a custom agent's
 	// allowed_tools). Empty means every registered tool the mode permits.
 	AllowedTools []string
+	// Tainted starts the turn with writing tools withdrawn: the question itself is third-party
+	// text (a lead's WhatsApp message, an event's trigger data). See taint.go.
+	Tainted bool
 }

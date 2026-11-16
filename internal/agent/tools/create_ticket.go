@@ -35,7 +35,7 @@ func NewCreateTicket(cfg CreateTicketConfig) *CreateTicket {
 	return &CreateTicket{
 		ticketingURL: strings.TrimSuffix(cfg.TicketingURL, "/"),
 		serviceKey:   cfg.ServiceKey,
-		http:         &http.Client{Timeout: 15 * time.Second},
+		http:         serviceHTTP(15 * time.Second),
 		logger:       cfg.Logger.Named("tool.create_ticket"),
 	}
 }
@@ -160,8 +160,7 @@ func (t *CreateTicket) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 
 	if resp.StatusCode >= 300 {
 		t.logger.Warn("create_ticket api error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("body", respBody))
+			zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("ticketing-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -40,7 +41,7 @@ func NewAnalyzeDeal(cfg AnalyzeDealConfig) *AnalyzeDeal {
 		serviceKey: cfg.ServiceKey,
 		llm:        cfg.LLMClient,
 		llmModel:   cfg.LLMModel,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.analyze_deal"),
 	}
 }
@@ -82,10 +83,12 @@ func (t *AnalyzeDeal) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON s
 
 	// Run LLM analysis.
 	prompt := fmt.Sprintf(
-		`You are a CRM sales analyst. Analyze this deal and provide a structured assessment.
+		`You are a CRM sales analyst. Analyze this deal and provide a structured assessment. `+guardrail.UntrustedRule+`
 
-Deal: %s
-Recent activities timeline: %s
+Deal:
+%s
+Recent activities timeline:
+%s
 
 Analyze and respond with valid JSON only (no markdown, no extra text):
 {
@@ -95,8 +98,8 @@ Analyze and respond with valid JSON only (no markdown, no extra text):
   "concerns": ["<concern1>", "<concern2>"],
   "summary": "<2-3 sentence deal summary and assessment>"
 }`,
-		truncate(dealJSON, 600),
-		truncate(timelineJSON, 600),
+		guardrail.Quote("crm_deal", guardrail.MaskPII(truncate(dealJSON, 600))),
+		guardrail.Quote("crm_timeline", guardrail.MaskPII(truncate(timelineJSON, 600))),
 	)
 
 	resp, err := t.llm.Chat(ctx, ai.ChatRequest{

@@ -14,6 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxDealValue bounds a deal's value (KES or USD) set by the assistant.
+const maxDealValue = 1_000_000_000
+
 // CreateDeal creates a CRM deal for a contact via S2S call to marketflow-api.
 type CreateDeal struct {
 	apiBaseURL string
@@ -33,7 +36,7 @@ func NewCreateDeal(cfg CreateDealConfig) *CreateDeal {
 	return &CreateDeal{
 		apiBaseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.create_deal"),
 	}
 }
@@ -90,26 +93,40 @@ func (t *CreateDeal) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
-	if args.ContactID == "" || args.Title == "" {
+	if args.ContactID == "" || strings.TrimSpace(args.Title) == "" {
 		return "", fmt.Errorf("contact_id and title are required")
 	}
-	if args.Currency == "" {
-		args.Currency = "KES"
+	// Ids go to the API only in canonical form (marketflow-api also checks they belong to the
+	// tenant); a value is bounded so a model cannot fill reports with absurd figures.
+	contactID, err := uuid.Parse(strings.TrimSpace(args.ContactID))
+	if err != nil {
+		return `{"error":"contact_id must be a contact id from get_contact_360 or the CRM"}`, nil
+	}
+	if args.Value < 0 || args.Value > maxDealValue {
+		return `{"error":"value is out of range"}`, nil
+	}
+	cur := strings.ToUpper(strings.TrimSpace(args.Currency))
+	if cur != "USD" {
+		cur = "KES"
 	}
 
 	body := map[string]any{
-		"contact_id": args.ContactID,
-		"title":      args.Title,
-		"currency":   args.Currency,
+		"contact_id": contactID.String(),
+		"title":      trimText(args.Title, 200),
+		"currency":   cur,
 	}
 	if args.Value > 0 {
 		body["value"] = args.Value
 	}
 	if args.PipelineID != "" {
-		body["pipeline_id"] = args.PipelineID
+		pid, err := uuid.Parse(strings.TrimSpace(args.PipelineID))
+		if err != nil {
+			return `{"error":"pipeline_id must be a pipeline id"}`, nil
+		}
+		body["pipeline_id"] = pid.String()
 	}
 	if args.Notes != "" {
-		body["notes"] = args.Notes
+		body["notes"] = trimText(args.Notes, 2000)
 	}
 
 	payload, _ := json.Marshal(body)
@@ -130,9 +147,7 @@ func (t *CreateDeal) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 300 {
-		t.logger.Warn("create_deal api error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("body", respBody))
+		t.logger.Warn("create_deal api error", zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("marketflow-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 

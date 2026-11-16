@@ -34,7 +34,7 @@ func NewScoreLead(cfg ScoreLeadConfig) *ScoreLead {
 	return &ScoreLead{
 		apiBaseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.score_lead"),
 	}
 }
@@ -87,8 +87,7 @@ func (t *ScoreLead) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON str
 
 	if resp.StatusCode >= 300 {
 		t.logger.Warn("score_lead api error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("body", respBody))
+			zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("marketflow-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 

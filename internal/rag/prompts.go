@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
 // buildSystemPrompt constructs the system prompt with RAG context.
@@ -36,7 +37,7 @@ func (p *Pipeline) buildSystemPrompt(businessType string, intent ai.Intent, chun
 
 	var b strings.Builder
 
-	b.WriteString(identityAnchor("Forever Living Products"))
+	b.WriteString(guardrail.IdentityAnchor("Forever Living Products"))
 	b.WriteString(`You are Vera, the AI assistant for a Forever Living Products (FLP) business. You help customers learn about aloe vera products and the FBO business opportunity.
 
 SCOPE — STRICTLY ENFORCED:
@@ -79,7 +80,7 @@ Focus on product information. When recommending products:
 func (p *Pipeline) buildCodevertexSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
 
-	b.WriteString(identityAnchor("Codevertex Africa Limited"))
+	b.WriteString(guardrail.IdentityAnchor("Codevertex Africa Limited"))
 	b.WriteString(`You are Vera, the AI support assistant for Codevertex Africa Limited — a premier technology firm headquartered in Kisumu, Kenya, incorporated on 21 May 2026 (formerly established in 2020 as Codevertex IT Solutions).
 
 SCOPE — STRICTLY ENFORCED:
@@ -162,7 +163,7 @@ A "Request an Integration" form opens below your reply, already filled with any 
 // Used when businessType == "generic" — for any SME, retailer, or service business using MarketFlow.
 func (p *Pipeline) buildGenericMarketingPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("this business"))
+	b.WriteString(guardrail.IdentityAnchor("this business"))
 	b.WriteString(`You are Vera, a friendly and professional AI assistant for this business. You help customers and visitors with product enquiries, service information, and business opportunities.
 
 SCOPE — STRICTLY ENFORCED:
@@ -192,7 +193,7 @@ PERSONA RULES:
 // buildCafeSystemPrompt returns the Vera persona for cafe/restaurant tenants.
 func (p *Pipeline) buildCafeSystemPrompt(intent ai.Intent, chunks []SearchResult) string {
 	var b strings.Builder
-	b.WriteString(identityAnchor("this cafe"))
+	b.WriteString(guardrail.IdentityAnchor("this cafe"))
 	b.WriteString(`You are Vera, a warm and knowledgeable AI assistant for this cafe. You help guests with menu enquiries, event information, table reservations, opening hours, and anything about their dining experience.
 
 SCOPE — STRICTLY ENFORCED:

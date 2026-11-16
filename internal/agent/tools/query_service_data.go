@@ -123,7 +123,7 @@ func NewQueryServiceData(cfg QueryServiceDataConfig) *QueryServiceData {
 		serviceKey:   cfg.ServiceKey,
 		apiURL:       strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		apiKey:       cfg.APIKey,
-		http:         &http.Client{Timeout: 20 * time.Second},
+		http:         serviceHTTP(20 * time.Second),
 		logger:       cfg.Logger.Named("tool.query_service_data"),
 		allowedBases: bases,
 		cache:        map[uuid.UUID]discoveredSet{},

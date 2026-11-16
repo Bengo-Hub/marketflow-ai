@@ -33,7 +33,7 @@ func NewGetContact360(cfg GetContact360Config) *GetContact360 {
 	return &GetContact360{
 		apiBaseURL: strings.TrimSuffix(cfg.APIBaseURL, "/"),
 		serviceKey: cfg.ServiceKey,
-		http:       &http.Client{Timeout: 15 * time.Second},
+		http:       serviceHTTP(15 * time.Second),
 		logger:     cfg.Logger.Named("tool.get_contact_360"),
 	}
 }
@@ -85,8 +85,7 @@ func (t *GetContact360) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON
 
 	if resp.StatusCode >= 300 {
 		t.logger.Warn("get_contact_360 api error",
-			zap.Int("status", resp.StatusCode),
-			zap.ByteString("body", respBody))
+			zap.Int("status", resp.StatusCode))
 		return "", fmt.Errorf("marketflow-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
