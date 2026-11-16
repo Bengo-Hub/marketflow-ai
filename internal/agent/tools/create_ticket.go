@@ -42,6 +42,17 @@ func NewCreateTicket(cfg CreateTicketConfig) *CreateTicket {
 
 func (*CreateTicket) Name() string { return "create_ticket" }
 
+// ticketPriority maps the model's priority to a ticketing-api priority (low, normal, high,
+// urgent); anything else, including the older "medium", is normal.
+func ticketPriority(p string) string {
+	switch p {
+	case "low", "high", "urgent":
+		return p
+	default:
+		return "normal"
+	}
+}
+
 func (*CreateTicket) Description() string {
 	return "Creates a support ticket in the Codevertex ticketing system. Use this when: (1) a user explicitly asks to open/create/submit a ticket, (2) you cannot resolve a technical issue from the knowledge base, or (3) the intent is classified as 'escalate' or 'support_request'. Always collect a title, description, and optionally the requester's name and email before calling this tool."
 }
@@ -60,9 +71,9 @@ func (*CreateTicket) Schema() map[string]any {
 			},
 			"priority": map[string]any{
 				"type":        "string",
-				"enum":        []string{"low", "medium", "high", "urgent"},
-				"description": "Ticket priority; default 'medium'",
-				"default":     "medium",
+				"enum":        []string{"low", "normal", "high", "urgent"},
+				"description": "Ticket priority; default 'normal'",
+				"default":     "normal",
 			},
 			"category": map[string]any{
 				"type":        "string",
@@ -108,20 +119,20 @@ func (t *CreateTicket) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 	if len(args.Title) > 120 {
 		args.Title = args.Title[:120]
 	}
-	if args.Priority == "" {
-		args.Priority = "medium"
-	}
+	args.Priority = ticketPriority(args.Priority)
 	if args.Category == "" {
 		args.Category = "general"
 	}
 
+	// ticketing-api internal create: the tenant travels in X-Tenant-ID, the title is "subject",
+	// and a Vera chat ticket is on the chat channel.
 	body := map[string]any{
-		"title":       args.Title,
+		"subject":     args.Title,
 		"description": args.Description,
 		"priority":    args.Priority,
 		"category":    args.Category,
 		"source":      "vera_ai",
-		"tenant_id":   tenantID.String(),
+		"channel":     "chat",
 	}
 	if args.RequesterName != "" {
 		body["requester_name"] = args.RequesterName
@@ -138,6 +149,7 @@ func (t *CreateTicket) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.serviceKey)
+	req.Header.Set("X-Tenant-ID", tenantID.String())
 
 	resp, err := t.http.Do(req)
 	if err != nil {
@@ -153,24 +165,23 @@ func (t *CreateTicket) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 		return "", fmt.Errorf("ticketing-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
-	var m map[string]any
-	_ = json.Unmarshal(respBody, &m)
-
-	ticketRef, _ := m["ticket_ref"].(string)
-	if ticketRef == "" {
-		if id, ok := m["id"].(string); ok {
-			ticketRef = "CVX-" + id[:8]
-		} else {
-			ticketRef = "CVX-???"
-		}
+	var created struct {
+		ID           string `json:"id"`
+		TicketNumber string `json:"ticket_number"`
+		Status       string `json:"status"`
 	}
+	if err := json.Unmarshal(respBody, &created); err != nil || created.TicketNumber == "" {
+		return "", fmt.Errorf("create_ticket: unexpected ticketing-api answer: %s", truncate(string(respBody), 200))
+	}
+	ticketRef := created.TicketNumber
 
+	// The reply promises no response time: the tenant's SLA policy, not this tool, sets it.
 	summary := map[string]any{
-		"success":        true,
-		"ticket_id":      m["id"],
-		"ticket_ref":     ticketRef,
-		"status":         m["status"],
-		"message":        fmt.Sprintf("Ticket %s created. Our team will respond within 2–4 business hours.", ticketRef),
+		"success":    true,
+		"ticket_id":  created.ID,
+		"ticket_ref": ticketRef,
+		"status":     created.Status,
+		"message":    fmt.Sprintf("Ticket %s created. Our team will follow up on it.", ticketRef),
 	}
 	if args.RequesterEmail != "" {
 		summary["confirmation_sent_to"] = args.RequesterEmail
