@@ -18,6 +18,10 @@ func TestReviewNotesOnlyForSignedIn(t *testing.T) {
 	if got := reviewNotes(ChatInput{PublicMode: true}, sys, pushy); got != nil {
 		t.Fatalf("public visitor got review notes: %v", got)
 	}
+	// The lead reply is public but goes back to the business, so the owner gets the notes.
+	if got := reviewNotes(ChatInput{PublicMode: true, OwnerReview: true}, sys, pushy); len(got) == 0 {
+		t.Fatalf("owner-review public answer got no notes")
+	}
 	if got := reviewNotes(ChatInput{}, sys, "Fresh mandazi every morning in Kisumu."); len(got) != 0 {
 		t.Fatalf("plain answer got notes: %v", got)
 	}

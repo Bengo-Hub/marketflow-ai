@@ -580,6 +580,11 @@ func (h *ChatHandler) handleStream(w http.ResponseWriter, r *http.Request, input
 	for delta := range ch {
 		if delta.Done {
 			settle()
+			// Marketing-law notes on the finished answer, for a signed-in person only (advice).
+			if meta != nil && len(meta.ReviewNotes) > 0 {
+				notesJSON, _ := json.Marshal(meta.ReviewNotes)
+				fmt.Fprintf(w, "data: {\"type\":\"review\",\"notes\":%s}\n\n", notesJSON)
+			}
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			h.persistStreamTurn(r.Context(), input, assembled.String(), persist, meta)

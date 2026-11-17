@@ -82,6 +82,10 @@ type ChatInput struct {
 	History      []ai.Message // previous messages in this session
 	BusinessType string       // "flp" | "codevertex" | "cafe" | "generic"
 	PublicMode   bool         // true for /public/chat — prefer cache/KB, avoid agent loops
+	// OwnerReview asks for review notes on a public answer whose caller is the business, not the
+	// visitor (the WhatsApp lead reply goes back to marketflow-api's worker). Never set it on a
+	// route a visitor reads.
+	OwnerReview bool
 	// formTurn is set by the pipeline when the reply comes with a prefilled form: such a reply
 	// is written for this visitor's details, so it is neither read from nor written to the caches.
 	formTurn bool

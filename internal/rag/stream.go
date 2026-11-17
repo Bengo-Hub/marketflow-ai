@@ -119,6 +119,8 @@ func (p *Pipeline) ChatStream(ctx context.Context, input ChatInput) (<-chan ai.S
 		// it as a replace delta like any other filtered text.
 		// The same price and commitment checks as Chat (guardrail.OutputViolations).
 		checked := p.rewriteIfBlocked(cacheCtx, input, messages, guardrail.ScreenOutput(text), allowedFigures(input, systemPrompt, nil))
+		// Seen by the handler at Done, like Model above: the marketing-law notes for a signed-in person.
+		meta.ReviewNotes = reviewNotes(input, messages, checked)
 		return p.filterAndCache(cacheCtx, input, guardrail.SafeMarkdown(checked, nil), embedding, true)
 	}), meta, nil
 }

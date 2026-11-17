@@ -50,6 +50,8 @@ func leadChatInput(req leadReplyRequest, tenantID, sid uuid.UUID, history []ai.M
 	return rag.ChatInput{
 		TenantID: tenantID, TenantSlug: req.TenantSlug, SessionID: sid, Question: req.Text,
 		History: history, PublicMode: true, BusinessType: req.BusinessType,
+		// The reply comes back to marketflow-api's worker, so the owner may see the review notes.
+		OwnerReview: true,
 	}
 }
 
@@ -58,6 +60,9 @@ type LeadReplyResponse struct {
 	Reply         string `json:"reply"`
 	Handoff       bool   `json:"handoff"`
 	HandoffReason string `json:"handoff_reason,omitempty"`
+	// ReviewNotes are the marketing-law notes on Reply (advice for the owner, never sent to the
+	// lead): urgency, scarcity or a "was" price with no fact behind it.
+	ReviewNotes []string `json:"review_notes,omitempty"`
 }
 
 const handoffReply = "Thank you. I have asked the team to get back to you personally shortly."
@@ -180,5 +185,5 @@ func (h *ChatHandler) LeadReply(w http.ResponseWriter, r *http.Request) {
 			ai.Message{Role: "user", Content: req.Text}, ai.Message{Role: "assistant", Content: rag.HistoryText(result)},
 			sessions.AnswerMeta{Route: rag.RouteOf(result.Model), Intent: result.Intent})
 	}
-	writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: result.Response})
+	writeJSON(w, http.StatusOK, LeadReplyResponse{Reply: result.Response, ReviewNotes: result.ReviewNotes})
 }
