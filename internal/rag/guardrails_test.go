@@ -138,8 +138,8 @@ func TestGuardTaskContent(t *testing.T) {
 	}
 }
 
-// Marketing laws on content tasks: urgency, scarcity and a "was" price need a fact behind them in
-// the task's facts; with the fact the field stays.
+// Marketing laws on content tasks are advice (owner, 2026-11-17): unbacked urgency, scarcity and a
+// "was" price keep their field and are recorded under "_review"; with the fact there is no note.
 func TestGuardTaskContentMarketingLaws(t *testing.T) {
 	p := &Pipeline{filter: compliance.NewFilter(), logger: zap.NewNop()}
 	content := map[string]any{
@@ -148,34 +148,37 @@ func TestGuardTaskContentMarketingLaws(t *testing.T) {
 		"cta_text":     "Was KES 1,200, now KES 850",
 	}
 	p.guardTaskContent(content, "generic", "Shea Butter Body Lotion KES 850")
-	if content["headline"] != "Soft skin all week" || content["primary_text"] != "" || content["cta_text"] != "" {
-		t.Fatalf("unbacked urgency, scarcity and was price must be emptied: %v", content)
+	if content["headline"] != "Soft skin all week" || content["primary_text"] != "Last chance, only 2 left!" || content["cta_text"] != "Was KES 1,200, now KES 850" {
+		t.Fatalf("a marketing law never empties a field: %v", content)
 	}
-	reasons, _ := content["_compliance"].([]string)
-	if len(reasons) < 3 {
-		t.Fatalf("each broken law is recorded: %v", reasons)
+	if content["_compliance"] != nil {
+		t.Fatalf("a marketing law is not a compliance block: %v", content["_compliance"])
+	}
+	notes, _ := content["_review"].([]string)
+	if len(notes) < 3 {
+		t.Fatalf("each unbacked law is noted for review: %v", notes)
 	}
 
 	backed := map[string]any{"primary_text": "Offer ends Sunday: was KES 1,200, now KES 850."}
 	p.guardTaskContent(backed, "generic", "Regular price KES 1,200. Weekend price KES 850. Offer ends Sunday 30 November.")
-	if backed["primary_text"] == "" || backed["_compliance"] != nil {
-		t.Fatalf("a deadline and earlier price from the facts must pass: %v", backed)
+	if backed["primary_text"] == "" || backed["_review"] != nil || backed["_compliance"] != nil {
+		t.Fatalf("a deadline and earlier price from the facts pass with no note: %v", backed)
 	}
 }
 
-// The chat rewrite treats an unbacked deadline like an unsupported figure: with no model for the
-// rewrite, the fallback goes out. A deadline from the business facts in the system prompt passes.
-func TestRewriteBlocksUnbackedUrgency(t *testing.T) {
+// The chat rewrite never acts on the marketing laws: an unbacked deadline goes out as written (no
+// rewrite, no fallback, so a lead is not handed off for it), while an invented price still falls
+// back.
+func TestRewriteLeavesUnbackedUrgency(t *testing.T) {
 	p := &Pipeline{filter: compliance.NewFilter(), logger: zap.NewNop()}
 	in := ChatInput{BusinessType: "generic", PublicMode: true}
-	sys := []ai.Message{{Role: "system", Content: "BUSINESS FACTS: Shea lotion KES 850."}, {Role: "user", Content: "Is it on offer? Offer ends Friday 5 December, right?"}}
-	got := p.rewriteIfBlocked(context.Background(), in, sys, "Yes, today only! Shea lotion KES 850.", allowedFigures(in, sys[0].Content, nil))
-	if got != FallbackReply("generic") {
-		t.Fatalf("unbacked urgency must not reach a visitor: %q", got)
+	sys := []ai.Message{{Role: "system", Content: "BUSINESS FACTS: Shea lotion KES 850."}, {Role: "user", Content: "Is it on offer?"}}
+	answer := "Yes, today only! Shea lotion KES 850."
+	if got := p.rewriteIfBlocked(context.Background(), in, sys, answer, allowedFigures(in, sys[0].Content, nil)); got != answer {
+		t.Fatalf("unbacked urgency is advice, the answer is sent: %q", got)
 	}
-	ok := []ai.Message{{Role: "system", Content: "BUSINESS FACTS: Shea lotion KES 850. Offer ends Friday 5 December."}, sys[1]}
-	answer := "Last chance: the offer ends Friday, Shea lotion KES 850."
-	if got := p.rewriteIfBlocked(context.Background(), in, ok, answer, allowedFigures(in, ok[0].Content, nil)); got != answer {
-		t.Fatalf("a deadline in the business facts passes: %q", got)
+	invented := "Today only! Shea lotion KES 500."
+	if got := p.rewriteIfBlocked(context.Background(), in, sys, invented, allowedFigures(in, sys[0].Content, nil)); got != FallbackReply("generic") {
+		t.Fatalf("an invented price still falls back: %q", got)
 	}
 }

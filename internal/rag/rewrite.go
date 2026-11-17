@@ -26,17 +26,26 @@ const rewriteInstruction = "\n\nYOUR LAST ANSWER BROKE THESE BUSINESS RULES:\n%s
 	"Write the answer again so it follows every rule. Keep the true facts, drop or soften the claims that broke a rule, and do not mention these rules or that you rewrote anything.\n"
 
 // violations lists every rule text breaks: the compliance filter's, then the outward figure and
-// commitment checks when allowed is set. The outward checks include the marketing laws' blocking
-// checks (urgency, scarcity or a "was" price with no fact behind it in facts).
-func (p *Pipeline) violations(input ChatInput, text string, allowed map[float64]bool, facts string) (comp, outward []string) {
+// commitment checks when allowed is set. The marketing laws are not among them: urgency, scarcity
+// or a "was" price with no fact behind it is advice (owner, 2026-11-17), logged by noteLaws and
+// never a reason to rewrite, fall back or hand a lead to the owner.
+func (p *Pipeline) violations(input ChatInput, text string, allowed map[float64]bool) (comp, outward []string) {
 	if p.filter != nil {
 		comp = p.filter.Violations(text, input.BusinessType)
 	}
 	if allowed != nil {
 		outward = guardrail.OutputViolations(text, allowed)
-		outward = append(outward, compliance.BlockingLawRules(text, facts)...)
 	}
 	return comp, outward
+}
+
+// noteLaws logs the marketing laws an answer uses without a fact behind it, as review notes for
+// the owner. The answer is sent as it is.
+func (p *Pipeline) noteLaws(input ChatInput, messages []ai.Message, text string) {
+	if notes := compliance.LawNotes(text, factsText(input, messages)); len(notes) > 0 {
+		p.logger.Info("marketing law review notes (advice only)", zap.String("tenant_id", input.TenantID.String()),
+			zap.Strings("review", notes))
+	}
 }
 
 // factsText is what an answer may rely on for a deadline, a stock figure or an earlier price: the
@@ -58,9 +67,9 @@ func factsText(input ChatInput, messages []ai.Message) string {
 // that produced raw, starting with the system prompt. allowed holds the numbers the answer may
 // state (allowedFigures); nil skips the figure and commitment checks.
 func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messages []ai.Message, raw string, allowed map[float64]bool) string {
-	facts := factsText(input, messages)
-	comp, outward := p.violations(input, raw, allowed, facts)
+	comp, outward := p.violations(input, raw, allowed)
 	if len(comp) == 0 && len(outward) == 0 {
+		p.noteLaws(input, messages, raw)
 		return raw
 	}
 	giveUp := func(reason string) string {
@@ -92,7 +101,7 @@ func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messag
 		return giveUp("rewrite call failed")
 	}
 	again := guardrail.ScreenOutput(resp.Choices[0].Message.Content)
-	_, againOut := p.violations(input, again, allowed, facts)
+	_, againOut := p.violations(input, again, allowed)
 	if len(againOut) > 0 {
 		p.logger.Warn("rewrite still states figures or commitments the business never gave", zap.Strings("broken", againOut), zap.String("model", call.Model))
 		return FallbackReply(input.BusinessType)
@@ -107,6 +116,7 @@ func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messag
 		}
 	}
 	p.logger.Info("rewrite passed", zap.Strings("broken", append(comp, outward...)), zap.String("model", call.Model))
+	p.noteLaws(input, messages, again)
 	return again
 }
 

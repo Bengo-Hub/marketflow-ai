@@ -12,32 +12,30 @@ import (
 // "_compliance", so the owner sees why a field is missing instead of receiving a blocked claim.
 // Content tasks run only for signed-in people (flow.go).
 //
-// The marketing laws' blocking checks run on each field too: a field that uses urgency, scarcity
-// or a "was" price with no fact behind it in facts (the knowledge base context of the task and the
-// owner's own request) is emptied the same way, with the rule as the reason.
+// The marketing laws' checks run on each field too, as advice (owner, 2026-11-17): a field that
+// uses urgency, scarcity, a "was" price or an unproven "best" with no fact behind it in facts (the
+// knowledge base context of the task and the owner's own request) is kept as written, and the
+// note is recorded under "_review" so the owner can check it before sending.
 func (p *Pipeline) guardTaskContent(content map[string]any, businessType, facts string) {
 	if content == nil {
 		return
 	}
-	var reasons []string
+	var reasons, review []string
 	var walk func(v any) any
 	walk = func(v any) any {
 		switch t := v.(type) {
 		case string:
 			s := guardrail.SafeMarkdown(guardrail.ScreenOutput(t), nil)
-			if rules := compliance.BlockingLawRules(s, facts); len(rules) > 0 {
-				reasons = append(reasons, rules...)
-				return ""
+			if p.filter != nil {
+				filtered, blocked, reason := p.filter.CheckForTenant(s, businessType)
+				if blocked {
+					reasons = append(reasons, reason)
+					return ""
+				}
+				s = filtered
 			}
-			if p.filter == nil {
-				return s
-			}
-			filtered, blocked, reason := p.filter.CheckForTenant(s, businessType)
-			if blocked {
-				reasons = append(reasons, reason)
-				return ""
-			}
-			return filtered
+			review = append(review, compliance.LawNotes(s, facts)...)
+			return s
 		case map[string]any:
 			for k, inner := range t {
 				t[k] = walk(inner)
@@ -58,5 +56,8 @@ func (p *Pipeline) guardTaskContent(content map[string]any, businessType, facts 
 	if len(reasons) > 0 {
 		content["_compliance"] = reasons
 		p.logger.Warn("task content fields blocked by compliance", zap.Strings("reasons", reasons))
+	}
+	if len(review) > 0 {
+		content["_review"] = review
 	}
 }

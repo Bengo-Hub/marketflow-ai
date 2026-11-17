@@ -88,10 +88,11 @@ baseline:
 #
 # checks are the deterministic part. A draft that matches pattern needs a fact behind it: the
 # facts (brand context, business facts, knowledge base, the owner's own request, tool results)
-# must match supported_by, or, with same_phrase, contain the matched words themselves. A check
-# with block: true is handled like a banned claim: one rewrite with the rule spelled out, then
-# the draft is blocked (team review) or the chat answer falls back. block: false is a finding
-# for the owner (severity review) and a rewrite hint, never a block.
+# must match supported_by, or, with same_phrase, contain the matched words themselves. Every
+# check is advice only (owner, 2026-11-17): a match is a finding for the owner (severity review),
+# never a block, a rewrite, a fallback, an emptied field or a lead hand-off. The writer still gets
+# the guidance above in its prompt. Invented prices and percentages, commitments, banned claims
+# and the compliance blocks stay blocking; they are checked elsewhere, not here.
 marketing_laws:
   guidance:
     - 'Attention: open with the hook in the first line or first 2 seconds (the buyer''s specific problem, a surprising true number from the facts, or the result). The rest must pay off the hook.'
@@ -107,7 +108,6 @@ marketing_laws:
     - 'Loss aversion: where it fits, show the true cost of waiting (a penalty, lost sales, hours spent), in proportion. Never a loss the facts do not show.'
   checks:
     - law: urgency
-      block: true
       reason: urgency the facts do not back with a real deadline
       fix: Remove the deadline words, or use the real end date from the facts.
       pattern: '(?i)\btoday only\b|\bone day only\b|\blast chance\b|\bends? (today|tonight|soon|at midnight)\b|\boffer ends\b|\blimited[- ]time\b|\bhurry (up|now|while|before)\b|\bact (now|fast)\b|\bdon[''’]?t miss (out|this)\b|\bbefore it[''’]?s too late\b|\bcountdown\b|\bonly \d+ (days?|hours?) (left|to go)\b|\bleo tu\b|\bmwisho (ni )?leo\b|\bharakisha\b|\bofa inaisha\b|\bsiku ya mwisho\b'
@@ -115,19 +115,16 @@ marketing_laws:
       # "starts Saturday"); "open until 9pm, Monday to Friday" is opening hours, not a deadline.
       supported_by: '(?i)\b(ends?|ending|until|till|by|before|deadline|closes?|closing|expires?|valid (till|until|to)|last day|event|launch(es)?|starts?|hadi|mwisho|tarehe)\b[\s:,-]*(on\s+|this\s+|next\s+|ya\s+)?(\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(/\d{2,4})?\b|(mon|tues|wednes|thurs|fri|satur|sun)day\b|jumamosi\b|jumapili\b|ijumaa\b)'
     - law: scarcity
-      block: true
       reason: scarcity the facts do not back with a real stock or capacity figure
       fix: Remove the stock claim, or state the real figure from the facts.
       pattern: '(?i)\bonly \d+ (left|remaining|available|in stock|spots?|slots?|seats?|places?|pieces?|units?)\b|\b\d+ (left|remaining) in stock\b|\blimited (stock|spots?|slots?|seats?|places?|units?|edition|quantities)\b|\bselling (out )?fast\b|\balmost (gone|sold out)\b|\b(few|last few) (left|remaining|pieces|units)\b|\bwhile (stocks?|supplies) lasts?\b|\bstock (inaisha|ni chache)\b|\bzimebaki\b|\bchache tu\b'
       supported_by: '(?i)\b\d+\s*(left|in stock|remaining|available|seats? left|slots? left)\b|\b(stock|in stock|capacity|seats|slots|places|tickets)\s*(left|available|remaining)?\s*[:=]\s*\d+|\blimited edition\b|\bzimebaki\s+\d+'
     - law: contrast
-      block: true
       reason: a "was" price or discount the facts do not give
       fix: Remove the earlier price or discount, or use the real one from the facts.
       pattern: '(?i)\bwas\s+(kes|ksh|sh\.?|\$)?\s?\d|\b(down|reduced) from\b|\bslashed\b|\b(regular|original|usual|normal|old) price\b|\bsave (kes|ksh|sh\.?)\s?\d|\b\d+\s?% off\b|\bhalf price\b|\bbei ya zamani\b|\bpunguzo la\b|\bilikuwa (kes|ksh|sh)?\s?\d'
       supported_by: '(?i)\b(was|previous(ly)?|regular|original|usual|normal|before|old|ilikuwa)\s+(price\s+)?(was\s+)?[:=]?\s*(kes|ksh|sh\.?|\$)?\s?\d|\b\d[\d,.]*\s?%?\s?off\b|\b(discount|punguzo|sale price|offer price)\b[^.\n]{0,40}\d|\bhalf price\b'
     - law: superlative
-      block: false
       same_phrase: true
       reason: a "best" or "No. 1" claim the facts do not prove
       fix: Say what is specifically good, or cite the award or ranking from the facts.

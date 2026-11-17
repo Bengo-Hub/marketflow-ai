@@ -15,8 +15,8 @@ import (
 // The Reviewer runs on every outward-facing step:
 //  1. deterministic rules - the tenant's compliance filter, AI tells, for
 //     presenter scripts any first-person claim of using the product, and the
-//     marketing laws (laws_review.go): pressure without a fact blocks, a missing
-//     hook or a vague or double call to action is advice;
+//     marketing laws (laws_review.go): pressure without a fact, a missing hook or
+//     a vague or double call to action is advice (never a block);
 //  2. one decide call scoring every variant (fit and honest persuasion) and checking
 //     unsupported claims, for UGC personal-use claims, and for a campaign whether the
 //     drafts share one core message;
@@ -64,18 +64,9 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 				findings = append(findings, Finding{Quote: claim, Issue: "makes a claim this business never makes", Severity: "high", Fix: "Remove the claim; it is on the brand context's banned list."})
 				st.Text = ""
 				st.Error = "blocked by the business's banned claims"
-			} else if lf, block := lawFindingsFor("text", st.Text, facts); len(lf) > 0 {
-				// Copy the owner sends as it is (a WhatsApp message, an email) is blocked like a banned
-				// claim; advice such as a plan only gets the findings.
-				if block && lawChecked(st) {
-					st.Text = ""
-					st.Error = "blocked by the marketing laws: pressure the facts do not back"
-				} else {
-					for i := range lf {
-						lf[i].Severity = "review"
-					}
-				}
-				findings = append(findings, lf...)
+			} else {
+				// The marketing laws are advice: the text is kept and the owner sees the findings.
+				findings = append(findings, lawFindingsFor("text", st.Text, facts)...)
 			}
 		}
 		return nil, findings
@@ -85,15 +76,11 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 	ugc := st.Playbook == "ugc-video" || st.Playbook == "video-script"
 	refs := referenceTexts(tc.MarketSignals)
 	blocked := map[string]bool{}
-	advised := map[string]bool{} // an unproven "best" or similar: ranked lower, not blocked
+	advised := map[string]bool{} // a marketing law the facts do not back: ranked lower, never blocked
 	for _, it := range items {
-		if lf, block := lawFindingsFor(it.id, it.text, facts); len(lf) > 0 {
+		if lf := lawFindingsFor(it.id, it.text, facts); len(lf) > 0 {
 			findings = append(findings, lf...)
-			if block {
-				blocked[it.id] = true
-			} else {
-				advised[it.id] = true
-			}
+			advised[it.id] = true
 		}
 		if copied, shared := copiedFrom(it.text, refs); copied {
 			blocked[it.id] = true

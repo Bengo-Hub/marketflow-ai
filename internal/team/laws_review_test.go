@@ -80,7 +80,8 @@ func findingWith(fs []Finding, quotePrefix, issue, severity string) bool {
 	return false
 }
 
-// Pressure without a fact blocks a variant; an unproven "best" and the format checks are advice.
+// Every marketing law is advice (owner, 2026-11-17): pressure without a fact and an unproven
+// "best" are review findings and rank the variant lower, never drop it; the format checks are low.
 func TestReviewAppliesMarketingLaws(t *testing.T) {
 	r, _ := newRuntime(promptopt.TaskSpec{}, func(string, string) string { return "" }, nil)
 	variants := []AdVariant{
@@ -93,22 +94,27 @@ func TestReviewAppliesMarketingLaws(t *testing.T) {
 		{ID: "v7", Hook: "Dry skin?", Headline: "Soft skin", PrimaryText: "Shea butter, KES 850.", CTA: "Learn more"},
 	}
 	tc := TenantContext{BusinessType: "generic", MarketingContext: `{"offers":["Shea Butter Body Lotion KES 850"]}`}
-	shortlist, findings := r.review(context.Background(), adBatch(t, variants...), &promptopt.TaskSpec{}, tc, 10)
+	st := adBatch(t, variants...)
+	shortlist, findings := r.review(context.Background(), st, &promptopt.TaskSpec{}, tc, 10)
 
 	kept := strings.Join(shortlist, ",")
-	for _, id := range []string{"v2", "v3"} {
-		if strings.Contains(kept, id) {
-			t.Errorf("%s uses pressure the facts do not back and must be dropped: %v", id, shortlist)
+	for _, id := range []string{"v1", "v2", "v3", "v4", "v5", "v6", "v7"} {
+		if !strings.Contains(kept, id) {
+			t.Errorf("%s: a marketing law never drops a variant: %v", id, shortlist)
 		}
 	}
-	for _, id := range []string{"v1", "v4", "v5", "v6", "v7"} {
-		if !strings.Contains(kept, id) {
-			t.Errorf("%s breaks no blocking law and stays: %v", id, shortlist)
+	var out AdCopyBatch
+	if err := json.Unmarshal(st.Output, &out); err != nil || len(out.Variants) != len(variants) || st.Error != "" {
+		t.Fatalf("every variant stays in the output: %d of %d, error %q", len(out.Variants), len(variants), st.Error)
+	}
+	for _, f := range findings {
+		if strings.HasPrefix(f.Issue, "marketing law (") && f.Severity != "review" {
+			t.Errorf("a marketing law finding is review, never %q: %+v", f.Severity, f)
 		}
 	}
 	checks := []struct{ quote, issue, sev string }{
-		{"v2", "marketing law (urgency)", "high"},
-		{"v3", "marketing law (contrast)", "high"},
+		{"v2", "marketing law (urgency)", "review"},
+		{"v3", "marketing law (contrast)", "review"},
 		{"v4", "marketing law (superlative)", "review"},
 		{"v5", "more than one next step", "low"},
 		{"v6", "no hook", "low"},
@@ -123,55 +129,56 @@ func TestReviewAppliesMarketingLaws(t *testing.T) {
 	if findingWith(findings, "v1", "", "") {
 		t.Errorf("the clean variant got findings: %+v", findings)
 	}
-	// The unproven superlative ranks below an otherwise equal clean variant.
+	// A variant with an unbacked law ranks below an otherwise equal clean variant.
 	if strings.Index(kept, "v4") < strings.Index(kept, "v1") {
 		t.Errorf("v4 should rank below v1: %v", shortlist)
 	}
 
-	// With the real deadline in the facts, the same urgency is honest and stays.
+	// With the real deadline in the facts, the same urgency is honest and gets no finding.
 	tc.MarketingContext = `{"offers":["Shea Butter Body Lotion KES 850. Offer ends: 30 November 2026"]}`
-	shortlist, _ = r.review(context.Background(), adBatch(t, variants[1]), &promptopt.TaskSpec{}, tc, 10)
-	if len(shortlist) != 1 {
-		t.Fatalf("urgency backed by a real end date passes: %v", shortlist)
+	_, f := r.review(context.Background(), adBatch(t, variants[1]), &promptopt.TaskSpec{}, tc, 10)
+	if findingWith(f, "v2", "marketing law (urgency)", "") {
+		t.Fatalf("urgency backed by a real end date has no finding: %+v", f)
 	}
 	// The owner's own request counts as a fact (a Studio brief carries the promotion's end date).
 	tc.MarketingContext = ""
-	shortlist, _ = r.review(context.Background(), adBatch(t, variants[1]), &promptopt.TaskSpec{OptimisedBrief: "Offer ends: 30 November 2026"}, tc, 10)
-	if len(shortlist) != 1 {
-		t.Fatalf("urgency backed by the brief passes: %v", shortlist)
+	_, f = r.review(context.Background(), adBatch(t, variants[1]), &promptopt.TaskSpec{OptimisedBrief: "Offer ends: 30 November 2026"}, tc, 10)
+	if findingWith(f, "v2", "marketing law (urgency)", "") {
+		t.Fatalf("urgency backed by the brief has no finding: %+v", f)
 	}
 }
 
-// Copy the owner sends as it is is blocked like a banned claim; advice only gets findings.
+// Plain-text copy (a WhatsApp message, a plan) keeps its text; the law is a review finding.
 func TestReviewMarketingLawsOnPlainText(t *testing.T) {
 	r, _ := newRuntime(promptopt.TaskSpec{}, func(string, string) string { return "" }, nil)
 	tc := TenantContext{BusinessType: "generic"}
-	msg := &Step{Playbook: "whatsapp-sms", Text: "Hurry up, only 2 left!"}
-	_, f := r.review(context.Background(), msg, &promptopt.TaskSpec{}, tc, 3)
-	if msg.Text != "" || msg.Error == "" || !findingWith(f, "text", "marketing law (scarcity)", "high") {
-		t.Fatalf("a WhatsApp message with invented scarcity is blocked: %+v %+v", msg, f)
-	}
-	plan := &Step{Playbook: "marketing-plan", Text: "Week 2: a post saying only 2 left once stock is low."}
-	_, f = r.review(context.Background(), plan, &promptopt.TaskSpec{}, tc, 3)
-	if plan.Text == "" || plan.Error != "" || !findingWith(f, "text", "marketing law (scarcity)", "review") {
-		t.Fatalf("advice is not blocked, only flagged: %+v %+v", plan, f)
+	for _, st := range []*Step{
+		{Playbook: "whatsapp-sms", Text: "Hurry up, only 2 left!"},
+		{Playbook: "marketing-plan", Text: "Week 2: a post saying only 2 left once stock is low."},
+	} {
+		text := st.Text
+		_, f := r.review(context.Background(), st, &promptopt.TaskSpec{}, tc, 3)
+		if st.Text != text || st.Error != "" || !findingWith(f, "text", "marketing law (scarcity)", "review") {
+			t.Fatalf("%s: kept as written with a review finding: %+v %+v", st.Playbook, st, f)
+		}
 	}
 }
 
-// A copy step with unbacked pressure gets the one rewrite, with the law spelled out.
-func TestStepViolationsIncludeMarketingLaws(t *testing.T) {
+// Unbacked pressure never triggers the safe rewrite; a banned claim still does.
+func TestStepViolationsSkipMarketingLaws(t *testing.T) {
 	r, _ := newRuntime(promptopt.TaskSpec{}, func(string, string) string { return "" }, nil)
-	st := adBatch(t, AdVariant{ID: "v1", Hook: "Today only!", Headline: "Soft skin", PrimaryText: "KES 850", CTA: "Order on WhatsApp"})
-	v := r.stepViolations(st, TenantContext{BusinessType: "generic"}, "")
-	if len(v) != 1 || !strings.Contains(v[0], "Today only") {
-		t.Fatalf("violations = %v", v)
+	st := adBatch(t, AdVariant{ID: "v1", Hook: "Today only!", Headline: "Soft skin", PrimaryText: "Only 2 left. Was KES 1,200.", CTA: "Order on WhatsApp"})
+	if v := r.stepViolations(st, TenantContext{BusinessType: "generic"}); len(v) != 0 {
+		t.Fatalf("a marketing law is not a violation: %v", v)
 	}
-	if v := r.stepViolations(st, TenantContext{BusinessType: "generic"}, "Offer ends Friday 5 December"); len(v) != 0 {
-		t.Fatalf("a real deadline in the facts is not a violation: %v", v)
+	msg := &Step{Playbook: "whatsapp-sms", Text: "Last chance, only 2 left!"}
+	if v := r.stepViolations(msg, TenantContext{BusinessType: "generic"}); len(v) != 0 {
+		t.Fatalf("a marketing law is not a violation on plain copy either: %v", v)
 	}
-	plan := &Step{Playbook: "marketing-plan", Text: "Use a last chance post."}
-	if v := r.stepViolations(plan, TenantContext{BusinessType: "generic"}, ""); len(v) != 0 {
-		t.Fatalf("advice does not trigger the copy rewrite: %v", v)
+	banned := adBatch(t, AdVariant{ID: "v1", Hook: "Dry skin?", Headline: "Soft skin", PrimaryText: "It cures eczema.", CTA: "Order on WhatsApp"})
+	tc := TenantContext{BusinessType: "generic", MarketingContext: `{"banned_claims":["cures eczema"]}`}
+	if v := r.stepViolations(banned, tc); len(v) == 0 {
+		t.Fatal("a banned claim still triggers the rewrite")
 	}
 }
 

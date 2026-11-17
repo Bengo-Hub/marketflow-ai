@@ -11,6 +11,11 @@ import (
 // through PromptRules or MarketingLaws, and every reviewer applies the same checks through
 // LawFindings. A law is used only in its honest form: urgency needs a real deadline, scarcity a
 // real stock figure, a "was" price a real earlier price, and a "best" claim proof.
+//
+// Every finding is advice (owner, 2026-11-17): it is shown to the owner as a review finding and
+// never blocks, empties or replaces a draft. Invented prices and percentages
+// (guardrail.OutputViolations), commitments, banned claims and the compliance blocks stay blocking;
+// they are checked elsewhere.
 
 // LawCheck is one deterministic check: a draft matching Pattern needs a fact behind it.
 type LawCheck struct {
@@ -20,27 +25,33 @@ type LawCheck struct {
 	// SamePhrase also accepts the facts when they contain the matched words themselves (an
 	// award title such as "Best Nyama Choma 2025").
 	SamePhrase bool   `yaml:"same_phrase"`
-	Block      bool   `yaml:"block"`
 	Reason     string `yaml:"reason"`
 	Fix        string `yaml:"fix"`
 	re         *regexp.Regexp
 	support    *regexp.Regexp
 }
 
-// LawFinding is one place a draft uses a law without the fact behind it.
+// LawFinding is one place a draft uses a law without the fact behind it. It is advice for the
+// owner, never a block.
 type LawFinding struct {
 	Law    string
 	Quote  string
 	Reason string
 	Fix    string
-	// Block is true when the draft must not go out as it is (handled like a banned claim);
-	// false is advice for the owner.
-	Block bool
 }
 
-// Rule is the finding as a rule line for a rewrite instruction.
-func (f LawFinding) Rule() string {
-	return fmt.Sprintf("%s: %q", f.Reason, f.Quote)
+// Note is the finding as one line for the owner's review notes or a log.
+func (f LawFinding) Note() string {
+	return fmt.Sprintf("marketing law (%s): %s: %q", f.Law, f.Reason, f.Quote)
+}
+
+// LawNotes is the note line of every finding on text, for a review list or a log.
+func LawNotes(text, facts string) []string {
+	var out []string
+	for _, f := range LawFindings(text, facts) {
+		out = append(out, f.Note())
+	}
+	return out
 }
 
 func compileLawChecks(checks []LawCheck) error {
@@ -108,19 +119,7 @@ func LawFindings(text, facts string) []LawFinding {
 		if c.SamePhrase && strings.Contains(lowerFacts, strings.ToLower(m)) {
 			continue
 		}
-		out = append(out, LawFinding{Law: c.Law, Quote: m, Reason: c.Reason, Fix: c.Fix, Block: c.Block})
-	}
-	return out
-}
-
-// BlockingLawRules is the rule line of every blocking finding, for a rewrite instruction or an
-// outward check.
-func BlockingLawRules(text, facts string) []string {
-	var out []string
-	for _, f := range LawFindings(text, facts) {
-		if f.Block {
-			out = append(out, f.Rule())
-		}
+		out = append(out, LawFinding{Law: c.Law, Quote: m, Reason: c.Reason, Fix: c.Fix})
 	}
 	return out
 }

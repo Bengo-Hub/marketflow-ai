@@ -39,7 +39,7 @@ func TestMarketingLawsInEveryPrompt(t *testing.T) {
 // back a pressure claim by itself.
 func TestLawGuidanceIsNotAFact(t *testing.T) {
 	for _, draft := range []string{"Offer ends today, last chance!", "Only 3 left in stock.", "Was KES 1,200, now KES 900.", "Half price this week."} {
-		if len(BlockingLawRules(draft, PromptRules("generic"))) == 0 {
+		if len(LawNotes(draft, PromptRules("generic"))) == 0 {
 			t.Errorf("the prompt rules alone let %q through", draft)
 		}
 	}
@@ -49,33 +49,32 @@ func TestLawFindings(t *testing.T) {
 	cases := []struct {
 		name, text, facts string
 		wantLaw           string // "" means no finding
-		wantBlock         bool
 	}{
 		// Urgency
-		{"invented today only", "Today only: 2 for KES 1,000!", "Shea lotion KES 850", "urgency", true},
-		{"last chance without a date", "Last chance to book your table.", "", "urgency", true},
-		{"swahili leo tu", "Ofa hii ni leo tu!", "", "urgency", true},
-		{"offer ends with a real date", "Offer ends Sunday, order now.", "Promotion code: SUN10\nOffer ends: 30 November 2026", "", false},
-		{"deadline in a weekday", "Last chance: the class starts Saturday.", "Next intake starts Saturday 6 December", "", false},
-		{"opening hours are not a deadline", "Hurry up, offer ends soon!", "Open until 9pm, Monday to Friday", "urgency", true},
-		{"calm copy", "Fresh mandazi every morning in Kisumu.", "", "", false},
+		{"invented today only", "Today only: 2 for KES 1,000!", "Shea lotion KES 850", "urgency"},
+		{"last chance without a date", "Last chance to book your table.", "", "urgency"},
+		{"swahili leo tu", "Ofa hii ni leo tu!", "", "urgency"},
+		{"offer ends with a real date", "Offer ends Sunday, order now.", "Promotion code: SUN10\nOffer ends: 30 November 2026", ""},
+		{"deadline in a weekday", "Last chance: the class starts Saturday.", "Next intake starts Saturday 6 December", ""},
+		{"opening hours are not a deadline", "Hurry up, offer ends soon!", "Open until 9pm, Monday to Friday", "urgency"},
+		{"calm copy", "Fresh mandazi every morning in Kisumu.", "", ""},
 		// Scarcity
-		{"invented stock", "Only 3 left, grab yours.", "Shea lotion KES 850", "scarcity", true},
-		{"selling fast", "These are selling fast!", "", "scarcity", true},
-		{"real stock figure", "Only 3 left at this price.", "Stock: 3 left", "", false},
-		{"real seats", "Limited seats for Saturday's class.", "Capacity: 20 seats left", "", false},
-		{"pieces in a pack are not stock", "Only 3 pieces left!", "Pack of 3 pieces, KES 450", "scarcity", true},
+		{"invented stock", "Only 3 left, grab yours.", "Shea lotion KES 850", "scarcity"},
+		{"selling fast", "These are selling fast!", "", "scarcity"},
+		{"real stock figure", "Only 3 left at this price.", "Stock: 3 left", ""},
+		{"real seats", "Limited seats for Saturday's class.", "Capacity: 20 seats left", ""},
+		{"pieces in a pack are not stock", "Only 3 pieces left!", "Pack of 3 pieces, KES 450", "scarcity"},
 		// Contrast (was price, percent off)
-		{"invented was price", "Was KES 1,200, now KES 900.", "Price: KES 900", "contrast", true},
-		{"invented percent off", "Get 20% off this week.", "Price: KES 900", "contrast", true},
-		{"real promotion percent", "Get 20% off with code SUN10.", "About it: 20% off. Weekend promo", "", false},
-		{"real earlier price", "Was KES 1,200, now KES 900.", "Regular price KES 1,200; sale price KES 900", "", false},
-		{"swahili bei ya zamani", "Bei ya zamani 1500, sasa 1000!", "", "contrast", true},
-		// Superlatives are advice, never a block
-		{"unproven best", "The best chapati in Kisumu.", "", "superlative", false},
-		{"number one", "Kenya's No. 1 POS for dukas.", "", "superlative", false},
-		{"award in the facts", "The best nyama choma in town.", "Winner, Best Nyama Choma 2025 (Kisumu Food Awards)", "", false},
-		{"same phrase in the facts", "Our best-selling lotion.", "Shea lotion is our best-selling product", "", false},
+		{"invented was price", "Was KES 1,200, now KES 900.", "Price: KES 900", "contrast"},
+		{"invented percent off", "Get 20% off this week.", "Price: KES 900", "contrast"},
+		{"real promotion percent", "Get 20% off with code SUN10.", "About it: 20% off. Weekend promo", ""},
+		{"real earlier price", "Was KES 1,200, now KES 900.", "Regular price KES 1,200; sale price KES 900", ""},
+		{"swahili bei ya zamani", "Bei ya zamani 1500, sasa 1000!", "", "contrast"},
+		// Superlatives
+		{"unproven best", "The best chapati in Kisumu.", "", "superlative"},
+		{"number one", "Kenya's No. 1 POS for dukas.", "", "superlative"},
+		{"award in the facts", "The best nyama choma in town.", "Winner, Best Nyama Choma 2025 (Kisumu Food Awards)", ""},
+		{"same phrase in the facts", "Our best-selling lotion.", "Shea lotion is our best-selling product", ""},
 	}
 	for _, c := range cases {
 		got := LawFindings(c.text, c.facts)
@@ -89,10 +88,7 @@ func TestLawFindings(t *testing.T) {
 		for _, f := range got {
 			if f.Law == c.wantLaw {
 				found = true
-				if f.Block != c.wantBlock {
-					t.Errorf("%s: block = %v, want %v", c.name, f.Block, c.wantBlock)
-				}
-				if f.Quote == "" || f.Fix == "" || !strings.Contains(f.Rule(), f.Quote) {
+				if f.Quote == "" || f.Fix == "" || !strings.Contains(f.Note(), f.Quote) {
 					t.Errorf("%s: finding lacks a quote or fix: %+v", c.name, f)
 				}
 			}
@@ -103,12 +99,14 @@ func TestLawFindings(t *testing.T) {
 	}
 }
 
-func TestBlockingLawRulesSkipsAdvice(t *testing.T) {
-	if r := BlockingLawRules("The best chapati in Kisumu.", ""); len(r) != 0 {
-		t.Fatalf("a superlative is advice, not a blocking rule: %v", r)
+// Every law is a note for the owner, one per law, naming the law and the words.
+func TestLawNotes(t *testing.T) {
+	if r := LawNotes("Fresh mandazi every morning in Kisumu.", ""); len(r) != 0 {
+		t.Fatalf("calm copy has no notes: %v", r)
 	}
-	if r := BlockingLawRules("Last chance, only 2 left!", ""); len(r) != 2 {
-		t.Fatalf("urgency and scarcity both block: %v", r)
+	r := LawNotes("Last chance, only 2 left!", "")
+	if len(r) != 2 || !strings.Contains(r[0], "marketing law (urgency)") || !strings.Contains(r[1], "marketing law (scarcity)") {
+		t.Fatalf("urgency and scarcity are both noted: %v", r)
 	}
 }
 

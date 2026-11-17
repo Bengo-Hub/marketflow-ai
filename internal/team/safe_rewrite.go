@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 )
 
@@ -16,10 +15,10 @@ import (
 // when it breaks none of them; otherwise the first draft goes on to the review, which blocks it
 // with its findings as before. One retry at most, metered like any other call of the turn.
 
-// stepViolations lists the rules a step's drafts break: the business type's blocks, the brand's
-// banned claims and, for copy, the marketing laws' blocking checks (urgency, scarcity or a "was"
-// price the facts do not back), with the words that broke them.
-func (r *Runtime) stepViolations(st *Step, tc TenantContext, facts string) []string {
+// stepViolations lists the rules a step's drafts break: the business type's blocks and the brand's
+// banned claims, with the words that broke them. The marketing laws are not here: they are advice
+// (owner, 2026-11-17), reported by the review and never a reason to rewrite.
+func (r *Runtime) stepViolations(st *Step, tc TenantContext) []string {
 	if st.Error != "" || r.filter == nil {
 		return nil
 	}
@@ -48,14 +47,6 @@ func (r *Runtime) stepViolations(st *Step, tc TenantContext, facts string) []str
 				out = append(out, v)
 			}
 		}
-		if lawChecked(st) {
-			for _, v := range compliance.BlockingLawRules(t, facts) {
-				if !seen[v] {
-					seen[v] = true
-					out = append(out, v)
-				}
-			}
-		}
 	}
 	return out
 }
@@ -77,15 +68,14 @@ func rewriteInstruction(violations []string) string {
 // the broken rules spelled out; the clean rewrite replaces the first draft.
 func (r *Runtime) runStepSafe(ctx context.Context, tenantID uuid.UUID, st plannedStep, spec *promptopt.TaskSpec, tc TenantContext, earlier string, n int) Step {
 	first := r.runStep(ctx, tenantID, st, spec, tc, earlier, n)
-	facts := lawFacts(tc, spec)
-	violations := r.stepViolations(&first, tc, facts)
+	violations := r.stepViolations(&first, tc)
 	if len(violations) == 0 || timeLeft(ctx) < minStepTime {
 		return first
 	}
 	retry := st
 	retry.task = st.task + rewriteInstruction(violations)
 	second := r.runStep(ctx, tenantID, retry, spec, tc, earlier, n)
-	if second.Error != "" || len(r.stepViolations(&second, tc, facts)) > 0 {
+	if second.Error != "" || len(r.stepViolations(&second, tc)) > 0 {
 		return first
 	}
 	second.Task = st.task // the step reads as asked, not with the rewrite note

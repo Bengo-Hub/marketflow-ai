@@ -14,17 +14,14 @@ import (
 
 // The owner's marketing laws (2026-11-17) in the review. The guidance reaches the writer through
 // compliance.PromptRules; here the review checks the parts code can check:
-//   - pressure without a fact (compliance.LawFindings): urgency, scarcity or a "was" price the
-//     facts do not back is handled like a banned claim (one rewrite, then blocked); an unproven
-//     "best" or "No. 1" is a finding for the owner;
+//   - pressure without a fact (compliance.LawFindings): urgency, scarcity, a "was" price or an
+//     unproven "best" the facts do not back is a finding for the owner (severity review) and
+//     ranks the draft lower. It never blocks, rewrites or empties a draft (owner, 2026-11-17);
+//     invented prices, banned claims and the compliance blocks still block;
 //   - format (lawFormatFindings): every draft opens with a hook and ends with one specific call
 //     to action on one channel; a poster headline is short. These are advice (severity low).
 // The rest (relevance, emotion, identity, perceived value, repetition) is scored by the decide
 // call in review.go and only moves the ranking.
-
-// copyPlaybooks are plain-text playbooks whose answer is copy the owner sends as it is, so the
-// marketing laws' blocking checks apply to them like to the structured drafts.
-var copyPlaybooks = map[string]bool{"copywriting": true, "copy-editing": true, "emails": true, "whatsapp-sms": true, "sales-enablement": true}
 
 // lawFacts is what a draft may rely on for a deadline, a stock figure, an earlier price or a
 // ranking: the brand context and the owner's request as the optimiser wrote it (which carries the
@@ -45,22 +42,15 @@ func lawFacts(tc TenantContext, spec *promptopt.TaskSpec) string {
 	return b.String()
 }
 
-// lawChecked reports whether a step's drafts get the marketing laws' blocking checks.
-func lawChecked(st *Step) bool {
-	return outward[st.Contract] || copyPlaybooks[st.Playbook]
-}
-
-// lawFindingsFor turns the pressure checks on one draft into review findings. blocked is true when
-// one of them must block the draft.
-func lawFindingsFor(id, text, facts string) (out []Finding, blocked bool) {
+// lawFindingsFor turns the pressure checks on one draft into review findings, all of severity
+// review: the owner sees them (marketflow-api's FlaggedForReview holds an autopilot video for
+// them) and the draft is kept as written.
+func lawFindingsFor(id, text, facts string) []Finding {
+	var out []Finding
 	for _, f := range compliance.LawFindings(text, facts) {
-		sev := "review"
-		if f.Block {
-			sev, blocked = "high", true
-		}
-		out = append(out, Finding{Quote: id + ": " + f.Quote, Issue: "marketing law (" + f.Law + "): " + f.Reason, Severity: sev, Fix: f.Fix})
+		out = append(out, Finding{Quote: id + ": " + f.Quote, Issue: "marketing law (" + f.Law + "): " + f.Reason, Severity: "review", Fix: f.Fix})
 	}
-	return out, blocked
+	return out
 }
 
 // channelRes caches the compiled channel patterns per list entry (reviews run concurrently).
