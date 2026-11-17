@@ -7,7 +7,7 @@ replace github.com/Bengo-Hub/shared-auth-client => github.com/Bengo-Hub/auth-cli
 
 require (
 	github.com/Bengo-Hub/cache v0.5.7
-	github.com/Bengo-Hub/httpware v0.18.0
+	github.com/Bengo-Hub/httpware v0.23.0
 	github.com/Bengo-Hub/shared-auth-client v0.4.1
 	github.com/Bengo-Hub/shared-events v0.11.0
 	github.com/Bengo-Hub/shared-ratelimit v0.3.1
@@ -33,7 +33,9 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
+	github.com/gen2brain/webp v0.6.4 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/gin-gonic/gin v1.11.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

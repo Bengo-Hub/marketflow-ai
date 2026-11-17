@@ -82,7 +82,8 @@ The model proposes; code decides.
 
 ## Outbound fetches
 
-- **Media downloads** (scene, actor and music URLs) go through `guardrail.SafeHTTPClient`:
+- **One shared rule:** marketflow-ai media downloads and marketflow-api's website fetches (publicweb) both use the shared `httpware/netguard` package (httpware v0.23.0).
+- **Media downloads** (scene, actor and music URLs) go through `guardrail.SafeHTTPClient`, a thin wrapper over `netguard`:
   - http(s) only, on ports 80 and 443, with at most 5 redirects;
   - every connection is checked at dial time against private, loopback, link-local (cloud metadata), shared and reserved ranges, so DNS rebinding cannot reach them;
   - a download that turns out to be a playlist or concat list is refused before ffmpeg reads it.

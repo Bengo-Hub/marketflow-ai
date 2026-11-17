@@ -300,7 +300,7 @@ func (c *Clips) save(ctx context.Context, url, path string) error {
 // downloadTo streams url into path, refusing more than limit bytes; what names
 // the file in errors.
 func downloadTo(ctx context.Context, hc *http.Client, url, path string, limit int64, what string) error {
-	if err := guardrail.CheckFetchURL(ctx, url); err != nil {
+	if err := guardrail.CheckFetchURLWith(ctx, url, allowPrivateFetch); err != nil {
 		return fmt.Errorf("download %s: %w", what, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

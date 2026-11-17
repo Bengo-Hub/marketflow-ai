@@ -2,8 +2,8 @@ github.com/Bengo-Hub/auth-client v0.15.1 h1:lz3vQSew1gR+kJn5716muvKaauTgQkF8FnKp
 github.com/Bengo-Hub/auth-client v0.15.1/go.mod h1:i+YzG6wPeBk/KXh+FSOdA1GPEhbcNB7E4FD2LB+tlqk=
 github.com/Bengo-Hub/cache v0.5.7 h1:lqB2kBiEdIOPzfzc0UiE9yq7SKfacXTQJRRY1RFA4xo=
 github.com/Bengo-Hub/cache v0.5.7/go.mod h1:E84NxTCaQD5/Z+9aFlFrg02E+EQaAfYP4UmzxRHgp2A=
-github.com/Bengo-Hub/httpware v0.18.0 h1:eKTmkUlrzfl4Y1/tsKeo0X+0KBsDhDBp9FD1KapwdSs=
-github.com/Bengo-Hub/httpware v0.18.0/go.mod h1:fQZJsyAaX8EjY5k57p36IbagSyOah/xKEAYrwgjz0Ec=
+github.com/Bengo-Hub/httpware v0.23.0 h1:5DsMVg04IWa4/KF/eAeNMgX59zkfhRwp5oOtt2LkOHI=
+github.com/Bengo-Hub/httpware v0.23.0/go.mod h1:DVl7z6zy4Zy0HZgDabwexmHrQSya1yFssci2Y40lYcI=
 github.com/Bengo-Hub/shared-events v0.11.0 h1:4ARROvi7hRDIM1iIFRxWVv2cryeOKj68LlbdPrwkN3Q=
 github.com/Bengo-Hub/shared-events v0.11.0/go.mod h1:yL2IdQYZP9ITesXzKL0Bx9yQsLMAUxk8lPnfM5cJ90g=
 github.com/Bengo-Hub/shared-ratelimit v0.3.1 h1:Tz+3QYZgDLzKv6wDQJBA1148Q2390z5MH92Bp5DC5nA=
@@ -33,8 +33,12 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/rVNCu3HqELle0jiPLLBs70cWOduZpkS1E78=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
+github.com/ebitengine/purego v0.10.1 h1:dewVBCBT2GaMu1SrNTYxQhgQBethzfhiwvZiLGP/qyY=
+github.com/ebitengine/purego v0.10.1/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
 github.com/gabriel-vasile/mimetype v1.4.8 h1:FfZ3gj38NjllZIeJAmMhr+qKL8Wu+nOoI3GqacKw1NM=
 github.com/gabriel-vasile/mimetype v1.4.8/go.mod h1:ByKUIKGjh1ODkGM1asKUbQZOLGrPjydw3hYPU2YU9t8=
+github.com/gen2brain/webp v0.6.4 h1:SUDdmxADOAiPQ+5ylNmuHhuYf2dOi0KgKZHL5vpVCNU=
+github.com/gen2brain/webp v0.6.4/go.mod h1:iGWMaCSw7t3I/Cv9llzEKmpnR36S8lS8VL/ZVjxU0JE=
 github.com/gin-contrib/sse v1.1.0 h1:n0w2GMuUpWDVp7qSpvze6fAu9iRxJY4Hmj6AmBOU05w=
 github.com/gin-contrib/sse v1.1.0/go.mod h1:hxRZ5gVpWMT7Z0B0gSNYqqsSCNIJMjzvm6fqCz9vjwM=
 github.com/gin-gonic/gin v1.11.0 h1:OW/6PLjyusp2PPXtyxKHU0RbX6I/l28FTdDlae5ueWk=
