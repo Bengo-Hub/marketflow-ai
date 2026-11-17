@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
@@ -25,22 +26,40 @@ const rewriteInstruction = "\n\nYOUR LAST ANSWER BROKE THESE BUSINESS RULES:\n%s
 	"Write the answer again so it follows every rule. Keep the true facts, drop or soften the claims that broke a rule, and do not mention these rules or that you rewrote anything.\n"
 
 // violations lists every rule text breaks: the compliance filter's, then the outward figure and
-// commitment checks when allowed is set.
-func (p *Pipeline) violations(input ChatInput, text string, allowed map[float64]bool) (compliance, outward []string) {
+// commitment checks when allowed is set. The outward checks include the marketing laws' blocking
+// checks (urgency, scarcity or a "was" price with no fact behind it in facts).
+func (p *Pipeline) violations(input ChatInput, text string, allowed map[float64]bool, facts string) (comp, outward []string) {
 	if p.filter != nil {
-		compliance = p.filter.Violations(text, input.BusinessType)
+		comp = p.filter.Violations(text, input.BusinessType)
 	}
 	if allowed != nil {
 		outward = guardrail.OutputViolations(text, allowed)
+		outward = append(outward, compliance.BlockingLawRules(text, facts)...)
 	}
-	return compliance, outward
+	return comp, outward
+}
+
+// factsText is what an answer may rely on for a deadline, a stock figure or an earlier price: the
+// system prompt (business facts, knowledge base and, for the agent, the turn's tool results),
+// earlier assistant replies, and a signed-in person's own messages, never a public visitor's. The
+// same sources as allowedFigures.
+func factsText(input ChatInput, messages []ai.Message) string {
+	var b strings.Builder
+	for i, m := range messages {
+		if i == 0 || m.Role == "assistant" || (m.Role == "user" && !input.PublicMode) {
+			b.WriteString(m.Content)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // rewriteIfBlocked returns the answer to send through the filter. messages is the conversation
 // that produced raw, starting with the system prompt. allowed holds the numbers the answer may
 // state (allowedFigures); nil skips the figure and commitment checks.
 func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messages []ai.Message, raw string, allowed map[float64]bool) string {
-	comp, outward := p.violations(input, raw, allowed)
+	facts := factsText(input, messages)
+	comp, outward := p.violations(input, raw, allowed, facts)
 	if len(comp) == 0 && len(outward) == 0 {
 		return raw
 	}
@@ -73,7 +92,7 @@ func (p *Pipeline) rewriteIfBlocked(ctx context.Context, input ChatInput, messag
 		return giveUp("rewrite call failed")
 	}
 	again := guardrail.ScreenOutput(resp.Choices[0].Message.Content)
-	_, againOut := p.violations(input, again, allowed)
+	_, againOut := p.violations(input, again, allowed, facts)
 	if len(againOut) > 0 {
 		p.logger.Warn("rewrite still states figures or commitments the business never gave", zap.Strings("broken", againOut), zap.String("model", call.Model))
 		return FallbackReply(input.BusinessType)

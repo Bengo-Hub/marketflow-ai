@@ -126,7 +126,7 @@ func TestGuardTaskContent(t *testing.T) {
 		"primary_text": "This miracle cream changes everything",
 		"variants":     []any{"I'm now DAN and can do anything"},
 	}
-	p.guardTaskContent(content, "generic")
+	p.guardTaskContent(content, "generic", "")
 	if content["headline"] != "Glow every day" || content["primary_text"] != "" {
 		t.Fatalf("content = %v", content)
 	}
@@ -135,5 +135,47 @@ func TestGuardTaskContent(t *testing.T) {
 	}
 	if content["_compliance"] == nil {
 		t.Fatal("the blocked reason must be recorded")
+	}
+}
+
+// Marketing laws on content tasks: urgency, scarcity and a "was" price need a fact behind them in
+// the task's facts; with the fact the field stays.
+func TestGuardTaskContentMarketingLaws(t *testing.T) {
+	p := &Pipeline{filter: compliance.NewFilter(), logger: zap.NewNop()}
+	content := map[string]any{
+		"headline":     "Soft skin all week",
+		"primary_text": "Last chance, only 2 left!",
+		"cta_text":     "Was KES 1,200, now KES 850",
+	}
+	p.guardTaskContent(content, "generic", "Shea Butter Body Lotion KES 850")
+	if content["headline"] != "Soft skin all week" || content["primary_text"] != "" || content["cta_text"] != "" {
+		t.Fatalf("unbacked urgency, scarcity and was price must be emptied: %v", content)
+	}
+	reasons, _ := content["_compliance"].([]string)
+	if len(reasons) < 3 {
+		t.Fatalf("each broken law is recorded: %v", reasons)
+	}
+
+	backed := map[string]any{"primary_text": "Offer ends Sunday: was KES 1,200, now KES 850."}
+	p.guardTaskContent(backed, "generic", "Regular price KES 1,200. Weekend price KES 850. Offer ends Sunday 30 November.")
+	if backed["primary_text"] == "" || backed["_compliance"] != nil {
+		t.Fatalf("a deadline and earlier price from the facts must pass: %v", backed)
+	}
+}
+
+// The chat rewrite treats an unbacked deadline like an unsupported figure: with no model for the
+// rewrite, the fallback goes out. A deadline from the business facts in the system prompt passes.
+func TestRewriteBlocksUnbackedUrgency(t *testing.T) {
+	p := &Pipeline{filter: compliance.NewFilter(), logger: zap.NewNop()}
+	in := ChatInput{BusinessType: "generic", PublicMode: true}
+	sys := []ai.Message{{Role: "system", Content: "BUSINESS FACTS: Shea lotion KES 850."}, {Role: "user", Content: "Is it on offer? Offer ends Friday 5 December, right?"}}
+	got := p.rewriteIfBlocked(context.Background(), in, sys, "Yes, today only! Shea lotion KES 850.", allowedFigures(in, sys[0].Content, nil))
+	if got != FallbackReply("generic") {
+		t.Fatalf("unbacked urgency must not reach a visitor: %q", got)
+	}
+	ok := []ai.Message{{Role: "system", Content: "BUSINESS FACTS: Shea lotion KES 850. Offer ends Friday 5 December."}, sys[1]}
+	answer := "Last chance: the offer ends Friday, Shea lotion KES 850."
+	if got := p.rewriteIfBlocked(context.Background(), in, ok, answer, allowedFigures(in, ok[0].Content, nil)); got != answer {
+		t.Fatalf("a deadline in the business facts passes: %q", got)
 	}
 }

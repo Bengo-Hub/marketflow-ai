@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/guardrail"
 )
 
@@ -72,6 +73,9 @@ Focus on product information. When recommending products:
 `)
 	}
 
+	// FLP keeps its own compliance text above instead of PromptRules, so it takes the marketing
+	// laws alone from the same central source.
+	b.WriteString(compliance.MarketingLaws())
 	appendKBContext(&b, chunks)
 	return b.String()
 }
@@ -121,22 +125,17 @@ POWER SUITE PRODUCTS:
 - Ordering: https://ordering.codevertexafrica.com
 - Logistics: https://logistics.codevertexafrica.com
 
-DIGITIKA COURSES (KES):
-Code-Starter Bootcamp: 30,000 (10 weeks, hybrid Kisumu + Zoom)
-Full-Stack Web Dev: 45,000 | Mobile Dev: 38,000 | DevOps & Cloud: 42,000 | Cybersecurity: 28,000
-ICDL Core: 12,000 | Advanced: 18,000 | Professional: 24,000 | Digital Citizen: 6,500
-CCNA v7 Part 1–3: 22,000 each | Exam Prep: 15,000
-AI Fundamentals: 14,000 | ML with Python: 32,000 | GenAI/LLM: 38,000 | AI for Business: 9,000
-Data Python: 28,000 | Power BI: 16,000 | SQL: 12,000 | Advanced Analytics: 22,000
+DIGITIKA ACADEMY: courses in coding, ICDL, CCNA, AI and data. Course names, fees and dates change in the course catalogue, so quote them only from the knowledge base context or a tool result; otherwise point to the course page on codevertexafrica.com.
 
 PAYMENTS: M-Pesa and card via Treasury Gateway at https://books.codevertexafrica.com
-PRICING PLANS (KES/month): Starter 4,999 | Growth 14,999 | Enterprise: Custom
+PRICING: product and plan prices come only from the knowledge base context (which carries the current list prices) or a tool result. If neither has the price, say so and point to https://codevertexafrica.com/pricing; never quote a price from memory.
 
 PERSONA RULES:
 - Warm and professional, like a knowledgeable Kenyan tech consultant
 - Keep responses concise (2–4 sentences unless listing items)
 - Always end with a helpful next step or a call to action
 - Never make up information; offer to connect with the team if unsure
+- When someone is weighing a purchase, sell with the MARKETING LAWS below: open with their problem, show the outcome (time saved, sales gained, KRA or eTIMS penalties avoided) before features, compare honestly with doing it by hand, and end with one next step (a WhatsApp message, a demo booking or the signup link). Prices, discounts, deadlines and results come only from this prompt, the knowledge base or a tool; never invent a price, a discount or a promise
 `)
 
 	switch intent {

@@ -13,10 +13,13 @@ import (
 )
 
 // The Reviewer runs on every outward-facing step:
-//  1. deterministic rules - the tenant's compliance filter, AI tells, and for
-//     presenter scripts any first-person claim of using the product;
-//  2. one decide call scoring every variant (fit) and checking unsupported claims
-//     and, for UGC, personal-use claims;
+//  1. deterministic rules - the tenant's compliance filter, AI tells, for
+//     presenter scripts any first-person claim of using the product, and the
+//     marketing laws (laws_review.go): pressure without a fact blocks, a missing
+//     hook or a vague or double call to action is advice;
+//  2. one decide call scoring every variant (fit and honest persuasion) and checking
+//     unsupported claims, for UGC personal-use claims, and for a campaign whether the
+//     drafts share one core message;
 //  3. ranking: blocked items drop, the rest sort by fit, the top K are the shortlist.
 
 var (
@@ -34,6 +37,10 @@ var (
 // outward contracts get the full review; others only the compliance filter.
 var outward = map[string]bool{"ad_copy_batch": true, "video_script": true, "poster_brief": true, "social_posts": true, "content_calendar": true}
 
+// repetitionChecked are the contracts whose drafts form one campaign and should share one core
+// message (the marketing laws' repetition).
+var repetitionChecked = map[string]bool{"ad_copy_batch": true, "social_posts": true, "content_calendar": true}
+
 type reviewItem struct {
 	id     string
 	text   string
@@ -46,6 +53,7 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 	}
 	var findings []Finding
 	banned := BannedClaims(tc.MarketingContext)
+	facts := lawFacts(tc, spec)
 	if !outward[st.Contract] {
 		if st.Text != "" {
 			if _, blocked, reason := r.filter.CheckForTenant(st.Text, tc.BusinessType); blocked {
@@ -56,6 +64,18 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 				findings = append(findings, Finding{Quote: claim, Issue: "makes a claim this business never makes", Severity: "high", Fix: "Remove the claim; it is on the brand context's banned list."})
 				st.Text = ""
 				st.Error = "blocked by the business's banned claims"
+			} else if lf, block := lawFindingsFor("text", st.Text, facts); len(lf) > 0 {
+				// Copy the owner sends as it is (a WhatsApp message, an email) is blocked like a banned
+				// claim; advice such as a plan only gets the findings.
+				if block && lawChecked(st) {
+					st.Text = ""
+					st.Error = "blocked by the marketing laws: pressure the facts do not back"
+				} else {
+					for i := range lf {
+						lf[i].Severity = "review"
+					}
+				}
+				findings = append(findings, lf...)
 			}
 		}
 		return nil, findings
@@ -65,7 +85,16 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 	ugc := st.Playbook == "ugc-video" || st.Playbook == "video-script"
 	refs := referenceTexts(tc.MarketSignals)
 	blocked := map[string]bool{}
+	advised := map[string]bool{} // an unproven "best" or similar: ranked lower, not blocked
 	for _, it := range items {
+		if lf, block := lawFindingsFor(it.id, it.text, facts); len(lf) > 0 {
+			findings = append(findings, lf...)
+			if block {
+				blocked[it.id] = true
+			} else {
+				advised[it.id] = true
+			}
+		}
 		if copied, shared := copiedFrom(it.text, refs); copied {
 			blocked[it.id] = true
 			findings = append(findings, Finding{Quote: shared, Issue: "repeats the words of a reference ad", Severity: "high", Fix: "Keep the idea, write it in this business's own words."})
@@ -108,20 +137,37 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 			}
 			fmt.Fprintf(&state, "[%s] %s\n", it.id, trimTo(it.text, 900))
 			qs["fit_"+it.id] = decide.Score(fmt.Sprintf("How well does draft %s fit the facts and how specific is it?", it.id), "weak", "fair", "strong")
+			// The marketing laws code cannot check: advice and ranking only.
+			qs["laws_"+it.id] = decide.Score(fmt.Sprintf("How well does draft %s persuade honestly: a hook in its first line, written to one audience's real situation, "+
+				"the outcome and how it feels before the features, true value or contrast from the facts, and one clear next step?", it.id), "weak", "fair", "strong")
 			qs["unsupported_"+it.id] = decide.Noul(fmt.Sprintf("Does draft %s state a price, number, result or claim that the facts do not support?", it.id))
 			if ugc {
 				qs["personal_"+it.id] = decide.Noul(fmt.Sprintf("In draft %s, does the speaker claim to have used, tried or tested the product, or describe their own result?", it.id))
 			}
 		}
+		if len(items)-len(blocked) > 1 && repetitionChecked[st.Contract] {
+			qs["mixed_message"] = decide.Noul("Do these drafts push different core messages instead of repeating one shared, true promise in fresh words?")
+		}
 		if len(qs) > 0 {
 			answers, _, err := r.decider.Decide(ctx, "qc", state.String(), qs)
 			if err == nil {
+				if a, ok := answers["mixed_message"]; ok && a.Yes(0.75) {
+					findings = append(findings, Finding{Quote: "", Issue: "marketing law (repetition): the drafts do not share one core message", Severity: "low",
+						Fix: "Pick the one promise that matters most and carry it through every draft in different words."})
+				}
 				for _, it := range items {
 					if blocked[it.id] {
 						continue
 					}
 					if a, ok := answers["fit_"+it.id]; ok {
 						fit[it.id] = a.Score * a.Confidence
+					}
+					if a, ok := answers["laws_"+it.id]; ok {
+						fit[it.id] += 0.5 * a.Score * a.Confidence
+						if a.Label == "weak" && a.Confident(0.6) {
+							findings = append(findings, Finding{Quote: it.id, Issue: "persuades weakly (hook, audience, outcome or next step)", Severity: "low",
+								Fix: "Open with the buyer's problem or result, speak to one audience, lead with the outcome and end on one next step."})
+						}
 					}
 					if a, ok := answers["unsupported_"+it.id]; ok && a.Yes(0.75) {
 						findings = append(findings, Finding{Quote: it.id, Issue: "possibly unsupported claim", Severity: "review", Fix: "Check the claim against the catalog or brand context, or remove it."})
@@ -139,8 +185,14 @@ func (r *Runtime) review(ctx context.Context, st *Step, spec *promptopt.TaskSpec
 	var ranked []string
 	for _, it := range items {
 		if !blocked[it.id] {
+			if advised[it.id] {
+				fit[it.id] -= 0.5
+			}
 			ranked = append(ranked, it.id)
 		}
+	}
+	if r.lib != nil {
+		findings = append(findings, lawFormatFindings(st, r.lib.Quality)...)
 	}
 	sort.SliceStable(ranked, func(i, j int) bool { return fit[ranked[i]] > fit[ranked[j]] })
 	if k > 0 && len(ranked) > k {

@@ -32,6 +32,11 @@ quality:
   max_scene_s: 6          # longer static scenes lose the viewer
   max_caption_chars: 42   # two short lines on a phone screen
   weak_ctas: [learn more, click here, get started, find out more, check it out, contact us, sign up, buy now, shop now, jifunze zaidi, wasiliana nasi]
+  # The channels a call to action can name (marketing laws, friction: one next step). A call to
+  # action naming two or more different channels asks for two actions. Each entry is one channel;
+  # words separated by "|" are the same channel. Actions done through a channel (book, order,
+  # sign up) are not channels: "Call 0712 to book" is one next step.
+  cta_channels: [whatsapp|wa.me, call|phone|piga simu, sms|text us, m-pesa|mpesa|paybill|till number, visit|come to|tembelea, dm|inbox|direct message, email, website|link in bio|click the link|tap the link, form|fill in]
 
 templates:
   - key: educate

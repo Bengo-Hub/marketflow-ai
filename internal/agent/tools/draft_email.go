@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -79,6 +80,36 @@ func (*DraftEmail) Schema() map[string]any {
 	}
 }
 
+// draftEmailPrompt is the email writer's prompt. It was written for Forever Living owners only
+// until 2026-11-17; every business uses this tool, so it is neutral now and carries the owner's
+// marketing laws (compliance.MarketingLaws) like every other writer.
+func draftEmailPrompt(tone, contactName, purpose, profileJSON string) string {
+	return fmt.Sprintf(
+		`You are an AI assistant helping a business owner draft a sales or relationship email.
+
+Write a short (3 paragraphs max) %s email for the owner to send to %s.
+Purpose: %s
+Contact context:
+%s
+
+%s
+Never promise a price, discount, refund or result that is not in the purpose or the contact context.
+The first sentence is the hook (their situation or the result for them), and the email ends with one call to action.
+%s
+Format your response as valid JSON with exactly these fields:
+{
+  "subject": "<email subject line>",
+  "body": "<full email body with greeting, main message, and sign-off>"
+}
+
+Do not include any text outside the JSON.`,
+		tone, contactName, purpose,
+		// Contact details stay out of the provider's hands; the name is enough to write the email.
+		guardrail.Quote("crm_profile", guardrail.MaskPII(truncate(profileJSON, 800))), guardrail.UntrustedRule,
+		compliance.MarketingLaws(),
+	)
+}
+
 func (t *DraftEmail) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string) (string, error) {
 	var args struct {
 		EntityType string `json:"entity_type"`
@@ -104,29 +135,7 @@ func (t *DraftEmail) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 	_ = json.Unmarshal([]byte(profileJSON), &profile)
 	contactName := extractName(profile)
 
-	// Build LLM prompt.
-	prompt := fmt.Sprintf(
-		`You are an AI assistant helping a Forever Living Products FBO (Field Business Owner) draft a sales/relationship email.
-
-Write a short (3 paragraphs max) %s email for the FBO to send to %s.
-Purpose: %s
-Contact context:
-%s
-
-%s
-Never promise a price, discount, refund or result that is not in the purpose or the contact context.
-
-Format your response as valid JSON with exactly these fields:
-{
-  "subject": "<email subject line>",
-  "body": "<full email body with greeting, main message, and sign-off>"
-}
-
-Do not include any text outside the JSON.`,
-		args.Tone, contactName, args.Purpose,
-		// Contact details stay out of the provider's hands; the name is enough to write the email.
-		guardrail.Quote("crm_profile", guardrail.MaskPII(truncate(profileJSON, 800))), guardrail.UntrustedRule,
-	)
+	prompt := draftEmailPrompt(args.Tone, contactName, args.Purpose, profileJSON)
 
 	resp, err := t.llm.Chat(ctx, ai.ChatRequest{
 		Model: t.llmModel,

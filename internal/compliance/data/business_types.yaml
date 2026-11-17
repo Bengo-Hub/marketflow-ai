@@ -53,10 +53,9 @@ baseline:
   guidance:
     - Use only the facts, prices and offers the business gave you. Never invent a price, discount, stock level, award, certification, licence or review.
     - Never promise a result the business cannot deliver to every customer. Where results differ from person to person, say so.
-    - A discount or "was" price must be a real earlier price. Never invent countdowns, scarcity or limited time pressure.
+    - A discount or "was" price must be a real earlier price.
     - Reviews, testimonials and before and after pictures must come from real customers who agreed to be shown.
     - Give prices in KES with what is included, and name any extra cost such as delivery, VAT or a booking fee.
-    - Do not run down competitors or make comparisons the business cannot prove.
   blocks:
     - pattern: '(?i)\bcure[sd]?\b|\bcuring\b'
       reason: claims that something cures a condition
@@ -77,10 +76,70 @@ baseline:
     - pattern: '(?i)\bdouble\s+your\s+(money|investment)\b'
       reason: doubling money promises
 
+# The owner's marketing laws (2026-11-17), in their honest form only. PromptRules sends the
+# guidance with every chat answer, caption, script, post and sales reply, for every business type
+# (the FLP personas get it through MarketingLaws), so it is kept short: one law per line, the
+# instruction first and the line it must not cross second. Wording checked with the
+# marketing-psychology kit (dark-pattern-check rows DP-01 deadlines, DP-05 "was" prices, DP-13
+# expiry; persuasion-audit ledger: scarcity works only when the limit is real and its reason is
+# visible, repetition helps in moderation and with varied wording, loss framing is design
+# dependent, so it is a choice and never a rule). The guidance must never contain a date, a
+# weekday or a stock figure itself: the checks below read the whole prompt as facts in chat.
+#
+# checks are the deterministic part. A draft that matches pattern needs a fact behind it: the
+# facts (brand context, business facts, knowledge base, the owner's own request, tool results)
+# must match supported_by, or, with same_phrase, contain the matched words themselves. A check
+# with block: true is handled like a banned claim: one rewrite with the rule spelled out, then
+# the draft is blocked (team review) or the chat answer falls back. block: false is a finding
+# for the owner (severity review) and a rewrite hint, never a block.
+marketing_laws:
+  guidance:
+    - 'Attention: open with the hook in the first line or first 2 seconds (the buyer''s specific problem, a surprising true number from the facts, or the result). The rest must pay off the hook.'
+    - 'Relevance: write to one audience and their real situation (place, work, season, M-Pesa and WhatsApp habits). Never pretend to know the reader personally.'
+    - 'Emotion: lead with how the outcome feels, then back it with facts (price, proof, terms). Never use fear about illness, debt, grief or children.'
+    - 'Friction: give one next step only (one WhatsApp message, one M-Pesa payment or one short form) and say what they get. Never hide a cost to make it look easier.'
+    - 'Urgency and scarcity: only a deadline or limit the facts give (an event, an offer end, real stock), the same for everyone, with its reason. Never invent "today only", "last chance", countdowns or "only N left".'
+    - 'Identity: show who the customer becomes (the shop owner who closes the day early). Never shame people who do not buy.'
+    - 'Contrast: compare with a true costlier or slower alternative (doing it by hand, a pricier option). No "was" price or percent off unless the facts give the real earlier price; never name and run down a competitor; no claim to be the top or cheapest unless the facts prove it.'
+    - 'Repetition: keep one core message and repeat it across the posts, ads and messages of a campaign, in fresh words each time. Repeat only what is true.'
+    - 'Association: link the brand only to real customers, places, partners and credentials in the facts. No invented endorsements, logos or reviews.'
+    - 'Perceived value: sell the outcome (time saved, sales gained, worry removed) with numbers the facts prove, rather than a list of features.'
+    - 'Loss aversion: where it fits, show the true cost of waiting (a penalty, lost sales, hours spent), in proportion. Never a loss the facts do not show.'
+  checks:
+    - law: urgency
+      block: true
+      reason: urgency the facts do not back with a real deadline
+      fix: Remove the deadline words, or use the real end date from the facts.
+      pattern: '(?i)\btoday only\b|\bone day only\b|\blast chance\b|\bends? (today|tonight|soon|at midnight)\b|\boffer ends\b|\blimited[- ]time\b|\bhurry (up|now|while|before)\b|\bact (now|fast)\b|\bdon[''’]?t miss (out|this)\b|\bbefore it[''’]?s too late\b|\bcountdown\b|\bonly \d+ (days?|hours?) (left|to go)\b|\bleo tu\b|\bmwisho (ni )?leo\b|\bharakisha\b|\bofa inaisha\b|\bsiku ya mwisho\b'
+      # A deadline word followed directly by a real date or weekday ("Offer ends: 30 November",
+      # "starts Saturday"); "open until 9pm, Monday to Friday" is opening hours, not a deadline.
+      supported_by: '(?i)\b(ends?|ending|until|till|by|before|deadline|closes?|closing|expires?|valid (till|until|to)|last day|event|launch(es)?|starts?|hadi|mwisho|tarehe)\b[\s:,-]*(on\s+|this\s+|next\s+|ya\s+)?(\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(/\d{2,4})?\b|(mon|tues|wednes|thurs|fri|satur|sun)day\b|jumamosi\b|jumapili\b|ijumaa\b)'
+    - law: scarcity
+      block: true
+      reason: scarcity the facts do not back with a real stock or capacity figure
+      fix: Remove the stock claim, or state the real figure from the facts.
+      pattern: '(?i)\bonly \d+ (left|remaining|available|in stock|spots?|slots?|seats?|places?|pieces?|units?)\b|\b\d+ (left|remaining) in stock\b|\blimited (stock|spots?|slots?|seats?|places?|units?|edition|quantities)\b|\bselling (out )?fast\b|\balmost (gone|sold out)\b|\b(few|last few) (left|remaining|pieces|units)\b|\bwhile (stocks?|supplies) lasts?\b|\bstock (inaisha|ni chache)\b|\bzimebaki\b|\bchache tu\b'
+      supported_by: '(?i)\b\d+\s*(left|in stock|remaining|available|seats? left|slots? left)\b|\b(stock|in stock|capacity|seats|slots|places|tickets)\s*(left|available|remaining)?\s*[:=]\s*\d+|\blimited edition\b|\bzimebaki\s+\d+'
+    - law: contrast
+      block: true
+      reason: a "was" price or discount the facts do not give
+      fix: Remove the earlier price or discount, or use the real one from the facts.
+      pattern: '(?i)\bwas\s+(kes|ksh|sh\.?|\$)?\s?\d|\b(down|reduced) from\b|\bslashed\b|\b(regular|original|usual|normal|old) price\b|\bsave (kes|ksh|sh\.?)\s?\d|\b\d+\s?% off\b|\bhalf price\b|\bbei ya zamani\b|\bpunguzo la\b|\bilikuwa (kes|ksh|sh)?\s?\d'
+      supported_by: '(?i)\b(was|previous(ly)?|regular|original|usual|normal|before|old|ilikuwa)\s+(price\s+)?(was\s+)?[:=]?\s*(kes|ksh|sh\.?|\$)?\s?\d|\b\d[\d,.]*\s?%?\s?off\b|\b(discount|punguzo|sale price|offer price)\b[^.\n]{0,40}\d|\bhalf price\b'
+    - law: superlative
+      block: false
+      same_phrase: true
+      reason: a "best" or "No. 1" claim the facts do not prove
+      fix: Say what is specifically good, or cite the award or ranking from the facts.
+      pattern: '(?i)\b(no\.?\s?1|number one|the best|best[- ]sell(ing|er)|the cheapest|lowest prices?|cheapest in|the leading|leading provider|most trusted|most popular|unbeatable|bora zaidi|nambari moja|bei nafuu zaidi)\b|(^|\s)#1\b'
+      supported_by: '(?i)\b(award(ed)?|winner|ranked|rated|voted|certified best|tuzo)\b'
+
 types:
   - key: generic
     label: Other business
     description: Any business not listed here. It follows the shared honesty rules every business gets.
+    guidance:
+      - "Sell by: lead with the customer's question, give the price in KES with what it includes, one next step on WhatsApp or M-Pesa, and real proof or none."
 
   - key: flp
     label: Forever Living (FBO)
@@ -91,6 +150,7 @@ types:
       - Never promise income. Results vary, and income talk carries the Forever income disclaimer.
       - Never call a product FDA approved, a miracle or a wonder drug.
       - Suggest a healthcare professional for any medical question.
+      - "Sell by: show the product and how to order it, answer fast, and send buyers to the distributor's own Forever shop link."
 
   - key: restaurant
     label: Restaurant or cafe
@@ -101,6 +161,7 @@ types:
       - Be honest about allergens. Call a dish nut free, gluten free, dairy free, halal or vegan only when the business confirmed it, and tell guests with allergies to ask the staff.
       - Menu items, portions, prices and opening hours must match what the business gave you.
       - Say "fresh", "homemade" or "organic" only when the business said so.
+      - "Sell by: real dishes from the kitchen, price per plate, delivery time and area, open now; urgency only from a special the kitchen named or a dated event; next step: WhatsApp your order or order online with M-Pesa."
     blocks:
       - pattern: '(?i)\ballerg(en|y)[\s-]free\b|\bsafe\s+for\s+(all|any|every)\s+allerg(y|ies)\b|\b100\s*%\s*(nut|peanut|gluten|dairy|lactose)[\s-]free\b'
         reason: absolute allergen safety claims
@@ -116,6 +177,7 @@ types:
       - A "was" price must be a price the item really sold at before. Otherwise show only the current price.
       - Say "original" or "genuine" only when the business confirmed it, and never claim a KEBS mark the product does not carry.
       - State delivery cost and area, and the return and refund terms, or say where to find them.
+      - "Sell by: price, genuine goods and pickup or delivery; trust from the till or paybill name and the shop location; urgency only from a dated offer or a restock that really arrived; next step: WhatsApp to check stock."
     blocks:
       - pattern: '(?i)\b(cheapest|lowest\s+prices?)\s+in\s+(kenya|nairobi|mombasa|kisumu|town|the\s+country|africa)\b|\b(lowest|best)\s+prices?\s+guaranteed\b|\bguaranteed\s+(lowest|best)\s+prices?\b'
         reason: unprovable lowest price claims
@@ -132,6 +194,7 @@ types:
       - State the delivery cost, areas and time, the payment methods, and the return and refund terms, or link to them.
       - Say "original" or "genuine" only when the business confirmed it.
       - Marketing messages go only to people who agreed to receive them, with a way to stop.
+      - "Sell by: prove the seller is real (business name, a phone that answers, real photos, delivery terms); one product, one link, M-Pesa at checkout; urgency only from a dated sale or a real shipping cut-off."
     blocks:
       - pattern: '(?i)\b(cheapest|lowest\s+prices?)\s+in\s+(kenya|nairobi|mombasa|kisumu|town|the\s+country|africa)\b|\b(lowest|best)\s+prices?\s+guaranteed\b|\bguaranteed\s+(lowest|best)\s+prices?\b'
         reason: unprovable lowest price claims
@@ -146,6 +209,7 @@ types:
       - Never guarantee an outcome the business does not control, such as a visa, a loan, a job, an exam pass or a court case.
       - Name a licence, registration or membership (for example NCA, LSK, EBK or ICPAK) only when the business gave it, and name it exactly.
       - Say what the price includes and what costs extra. Give timelines as estimates unless the business commits to them.
+      - "Sell by: past work shown with the client's permission, the price range and response time; limited slots only when the calendar is really full; next step: book a call or WhatsApp for a quote."
     blocks:
       - pattern: '(?i)\bguaranteed?\s+(visa|approval|job|employment|placement|admission|pass|win|loan|results?|success)\b|\b100\s*%\s+(success|pass|approval)(\s+rate)?\b|\bguaranteed\s+to\s+(win|pass|get)\b'
         reason: guaranteed outcomes
@@ -159,6 +223,7 @@ types:
       - Name a security certification (ISO 27001, SOC 2, PCI DSS) or Data Protection Commissioner registration only when the business holds it. Never call the product unhackable or completely secure.
       - State the trial length, what happens when it ends, the renewal price and how to cancel.
       - Say "unlimited" only when there is no fair use limit.
+      - "Sell by: works with M-Pesa, eTIMS and a phone; the monthly KES price; setup time and who helps when it breaks; real screens, not mockups; urgency only from a dated launch price or an accurately stated statutory deadline; next step: free trial or a WhatsApp demo."
     blocks:
       - pattern: '(?i)\b100\s*%\s+uptime\b|\bzero\s+downtime\b|\bnever\s+goes\s+down\b'
         reason: absolute uptime claims
@@ -174,6 +239,7 @@ types:
       - Before and after pictures only from real clients who agreed in writing, shown without editing.
       - Never promote skin lightening or bleaching products or injections (KEBS bans mercury and hydroquinone in skin products).
       - Never make medical claims about skin, scalp or hair, such as regrowing hair or curing acne.
+      - "Sell by: the stylist's real work, hygiene, price per service and waiting time; urgency from weekend or festive booking slots; next step: book on WhatsApp."
       - Name the products and brands used truthfully.
     blocks:
       - pattern: '(?i)\bguaranteed?\s+(results?|hair\s+growth|clear(er)?\s+skin|weight\s+loss)\b|\bresults\s+guaranteed\b|\b(instant|overnight)\s+results?\b|\bpermanent(ly)?\s+(hair\s+removal|results?)\b'
@@ -227,6 +293,7 @@ types:
       - When a post promotes a specific general sale product, give its generic name next to the brand name, what it is approved for, its main warning, and the line "If symptoms persist, seek medical advice" or "Maumivu yakizidi pata ushauri wa daktari". Every product advert needs the Pharmacy and Poisons Board's written approval before it runs, so add the PPB advert approval reference the business gave you as "PPB approval ref. <reference>" and never invent one. MarketFlow keeps a medicine advert as a draft until the owner has entered that reference.
       # Rule 32 and 33; guideline 8.0.
       - Do not suggest medicines for pregnant or breastfeeding women apart from vitamin and mineral supplements, and then say to consult a health professional first. Never say a product is safe in pregnancy. Never aim health product ads at children under 12 or show a child with a product without an adult.
+      - "Sell by: availability, genuine supply, the pharmacist's advice and opening hours, inside every rule above; urgency only from real opening hours, never fear about illness; next step: ask our pharmacist on WhatsApp."
       # Rule 30 and 31; guideline 7.0 (vitamins) and (weight management).
       - Never say vitamins replace a balanced diet or that health suffers without them. Weight loss or slimming claims must mention diet and exercise and carry the line "This product has not been proven to burn fat or block starch".
       - Tell customers to read the label and to talk to the pharmacist or a doctor about their condition.
@@ -285,6 +352,7 @@ types:
       - Never say rooms are almost gone, selling fast or "only a few left" unless the business gave you live availability.
       - Claim a star rating only when the Tourism Regulatory Authority classified the property at that rating.
       - Pictures and descriptions must show the actual property and rooms, and state check-in, cancellation and deposit terms when they matter.
+      - "Sell by: real photos of the actual room, the total price with taxes, location and cancellation terms; urgency from event dates, seasons or live availability the business gave; next step: check dates on WhatsApp or the booking link."
     blocks:
       - pattern: '(?i)\bonly\s+(\d+|one|two|three|a\s+few)\s+rooms?\s+(left|remaining)\b|\b(last|final)\s+(\d+\s+)?rooms?\s+(left|available|remaining)\b|\balmost\s+(fully\s+)?(booked|sold\s+out)\b|\brooms?\s+(are\s+)?selling\s+fast\b'
         reason: invented room availability

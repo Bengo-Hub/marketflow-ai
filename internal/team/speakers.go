@@ -252,6 +252,10 @@ func QualityFindings(v VideoScript, q library.ScriptQuality) []Finding {
 	case weakCTA(cta, q.WeakCTAs):
 		out = append(out, Finding{Quote: cta, Severity: "low", Issue: "the call to action is generic",
 			Fix: "Name the action, what they get and the channel, for example the WhatsApp word to send."})
+	default:
+		if f, ok := multiCTAFinding(cta, q.CTAChannels); ok {
+			out = append(out, f)
+		}
 	}
 	return out
 }

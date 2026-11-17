@@ -35,10 +35,11 @@ func TestAdTemplatesLoad(t *testing.T) {
 	if lib.Quality.HookMaxChars <= 0 || len(lib.Quality.WeakCTAs) == 0 {
 		t.Fatalf("quality = %+v", lib.Quality)
 	}
-	// The honesty rules for persuasion are part of every specialist's prompt.
+	// The honesty rules for persuasion are part of every specialist's prompt; the laws themselves
+	// come from compliance.PromptRules, so the house rules only point at them.
 	rules := lib.HouseRulesText()
-	for _, want := range []string{"Persuade honestly", "social proof only from real reviews", "never hide a price",
-		"Fear, shame and loss threats", "never claims to be a customer"} {
+	for _, want := range []string{"Persuade honestly", "MARKETING LAWS", "Social proof only from real reviews", "never hide a price",
+		"never claims to be a customer"} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("house rules lack %q", want)
 		}

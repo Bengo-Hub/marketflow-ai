@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"github.com/bengobox/marketflow-ai/internal/compliance"
 	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"go.uber.org/zap"
 )
@@ -10,7 +11,11 @@ import (
 // image allowlist. A field the filter blocks is emptied and the reason is recorded under
 // "_compliance", so the owner sees why a field is missing instead of receiving a blocked claim.
 // Content tasks run only for signed-in people (flow.go).
-func (p *Pipeline) guardTaskContent(content map[string]any, businessType string) {
+//
+// The marketing laws' blocking checks run on each field too: a field that uses urgency, scarcity
+// or a "was" price with no fact behind it in facts (the knowledge base context of the task and the
+// owner's own request) is emptied the same way, with the rule as the reason.
+func (p *Pipeline) guardTaskContent(content map[string]any, businessType, facts string) {
 	if content == nil {
 		return
 	}
@@ -20,6 +25,10 @@ func (p *Pipeline) guardTaskContent(content map[string]any, businessType string)
 		switch t := v.(type) {
 		case string:
 			s := guardrail.SafeMarkdown(guardrail.ScreenOutput(t), nil)
+			if rules := compliance.BlockingLawRules(s, facts); len(rules) > 0 {
+				reasons = append(reasons, rules...)
+				return ""
+			}
 			if p.filter == nil {
 				return s
 			}

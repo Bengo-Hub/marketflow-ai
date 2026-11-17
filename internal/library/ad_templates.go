@@ -57,6 +57,9 @@ type ScriptQuality struct {
 	MaxSceneS       float64  `yaml:"max_scene_s" json:"max_scene_s"`
 	MaxCaptionChars int      `yaml:"max_caption_chars" json:"max_caption_chars"`
 	WeakCTAs        []string `yaml:"weak_ctas" json:"weak_ctas"`
+	// CTAChannels are the channels a call to action can name, one entry per channel with its
+	// words separated by "|" (the marketing laws' one next step: two channels is two actions).
+	CTAChannels []string `yaml:"cta_channels" json:"cta_channels"`
 }
 
 type adTemplateDoc struct {

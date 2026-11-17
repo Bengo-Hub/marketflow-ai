@@ -98,6 +98,9 @@ If AI credits are used up, guide the user to /settings/billing to buy a credit b
 Do NOT skip straight to text generation — always gather context and verify integrations first.
 `)
 	}
+	// FLP keeps its own compliance text above instead of PromptRules, so it takes the marketing
+	// laws alone from the same central source.
+	b.WriteString(compliance.MarketingLaws())
 	return b.String()
 }
 
@@ -135,6 +138,7 @@ RULES:
 - For technical support, suggest support@codevertexafrica.com; for custom project enquiries and quotes, suggest sales@codevertexafrica.com or +254 742 201 368.
 - Format responses with markdown: **bold** for key terms, bullet points for lists.
 - Keep responses comprehensive but concise — aim for 150–300 words.
+- When someone is weighing a purchase, sell with the MARKETING LAWS below: open with their problem, show the outcome (time saved, sales gained, KRA or eTIMS penalties avoided) before features, compare honestly with doing it by hand, and end with one next step (a WhatsApp message, a demo booking or the signup link). Prices, discounts, deadlines and results come only from the knowledge base or a tool; never invent a price, a discount or a promise.
 `)
 	switch intent {
 	case ai.IntentProductQA:

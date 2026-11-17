@@ -15,6 +15,8 @@ playbooks:
     method:
       - Pick 3 to 5 distinct angles (pain, outcome, social proof, comparison, identity, real urgency, curiosity), each a different reason to click.
       - Write the number of variants the Creative Plan allows, spread across the angles; vary structure and opening, not just synonyms.
+      - Every variant opens with its hook in the first line, states the outcome before features, and ends with one call to action on one channel (a WhatsApp message, an M-Pesa payment or one form), never two.
+      - Keep one core message across the batch; the angles are different ways in to the same true promise.
       - When winners are given, double down on their hooks and angles with fresh wording, extend the best two, and test one or two new angles.
       - Keep every field within the platform limits - Meta primary text 125 characters visible and headline 40; TikTok ad text 100; Google headline 30 and description 90.
       - Give each variant a test hypothesis that can lose, naming the metric, the comparison and the expected direction.

@@ -64,12 +64,18 @@ type catalogDoc struct {
 		Guidance []string `yaml:"guidance"`
 		Blocks   []Block  `yaml:"blocks"`
 	} `yaml:"baseline"`
+	MarketingLaws struct {
+		Guidance []string   `yaml:"guidance"`
+		Checks   []LawCheck `yaml:"checks"`
+	} `yaml:"marketing_laws"`
 	Types []typeRules `yaml:"types"`
 }
 
 type catalog struct {
 	baselineGuidance []string
 	baselineBlocks   []Block
+	lawGuidance      []string
+	lawChecks        []LawCheck
 	types            []typeRules
 	byKey            map[string]int // key and alias -> index in types
 }
@@ -101,6 +107,10 @@ func parseCatalog(raw []byte) (*catalog, error) {
 		return nil, err
 	}
 	c.baselineBlocks = doc.Baseline.Blocks
+	if err := compileLawChecks(doc.MarketingLaws.Checks); err != nil {
+		return nil, err
+	}
+	c.lawGuidance, c.lawChecks = doc.MarketingLaws.Guidance, doc.MarketingLaws.Checks
 	for i := range c.types {
 		t := &c.types[i]
 		t.Key = strings.TrimSpace(t.Key)
@@ -200,9 +210,13 @@ func Normalize(businessType string) string {
 }
 
 // PromptRules is the rules block added to every chat, caption and script prompt: the shared
-// honesty baseline plus the business type's own guidance. It starts with a blank line so it
-// can be appended to any prompt.
+// honesty baseline plus the business type's own guidance, then the marketing laws
+// (MarketingLaws). It starts with a blank line so it can be appended to any prompt.
 func PromptRules(businessType string) string {
+	return typeRulesText(businessType) + MarketingLaws()
+}
+
+func typeRulesText(businessType string) string {
 	t := rules.lookup(businessType)
 	var b strings.Builder
 	fmt.Fprintf(&b, "\nBUSINESS RULES (%s). Every answer, caption and script you write must follow them:\n", t.Label)

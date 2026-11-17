@@ -136,7 +136,7 @@ playbooks:
     method:
       - Answer the question asked first, from the catalog and knowledge base.
       - Handle objections with acknowledge, clarify, answer with proof, confirm.
-      - Offer the next step - a booking slot, an order link or a call with the owner.
+      - Offer one next step - a booking slot, an order link or a call with the owner - and name what they get from it.
       - Keep it scannable and tied to the buyer's outcome.
     rules:
       - Only claims a rep can defend; prices from the catalog.

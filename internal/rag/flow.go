@@ -128,12 +128,14 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 					}
 				}
 			}
-			result, err := p.taskExecutor.Execute(ctx, p.llm.Client(llm.Standard), string(llm.Standard), input.Question, ragCtx)
+			result, err := p.taskExecutor.Execute(ctx, p.llm.Client(llm.Standard), string(llm.Standard), input.Question, ragCtx, input.BusinessType)
 			if err != nil {
 				return nil, fmt.Errorf("task execution failed: %w", err)
 			}
-			// The same output rules as every chat answer, applied to each text field.
-			p.guardTaskContent(result.Content, input.BusinessType)
+			// The same output rules as every chat answer, applied to each text field. The facts a
+			// deadline, stock figure or earlier price may come from are the knowledge base context
+			// and the signed-in owner's own request.
+			p.guardTaskContent(result.Content, input.BusinessType, ragCtx+"\n"+input.Question)
 			respJSON, _ := json.Marshal(result)
 			return &ChatResult{Response: string(respJSON), Intent: "task_execute", Confidence: confidence, Model: result.Model}, nil
 		}

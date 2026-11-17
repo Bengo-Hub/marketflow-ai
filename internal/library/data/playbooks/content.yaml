@@ -55,7 +55,8 @@ playbooks:
     optional_inputs: [platforms, audience, period, topic]
     method:
       - Open with a hook that earns the next second - a specific situation, a number, a story or a contrarian take grounded in fact.
-      - One idea per post; end with the point or a real question, not engagement bait.
+      - One idea per post; end with one call to action or a real question, not engagement bait.
+      - Several posts carry the same core message in fresh words, each from a different angle.
       - Adapt length and format per platform; suggest the visual (photo, poster, short video) for each post.
       - For short video give the first 3 seconds, the beats and on-screen text of at most two lines.
     rules:
@@ -138,7 +139,7 @@ playbooks:
     required_inputs: [offering]
     optional_inputs: [platforms, audience, language]
     method:
-      - One message per poster - headline under 8 words, a supporting line and one call to action.
+      - One message per poster - an outcome-first headline under 8 words (what the buyer gets, not the product name alone), a supporting line with the price or proof from the facts, and one call to action on one channel (WhatsApp, M-Pesa or one short form).
       - Pick the layout (product hero, before and after only when allowed, stat callout with a real number, review card with a real review, offer card).
       - Write the image prompt for the background or product scene and the overlay text separately, so text is rendered cleanly.
       - Give sizes needed (1080x1080, 1080x1350, 1080x1920) and the brand colours.
@@ -159,7 +160,7 @@ playbooks:
     required_inputs: [goal]
     optional_inputs: [offering, audience]
     method:
-      - One email, one job; value before the ask.
+      - One email, one job; the first sentence is the hook, value before the ask, and one call to action.
       - For a sequence give each email's day, goal, subject line options, preview text and body.
       - Subject lines are specific and honest.
     rules:
@@ -180,7 +181,7 @@ playbooks:
     optional_inputs: [offering, audience, language]
     method:
       - Every message must pass "would they be glad they got this?".
-      - Name the sender at the start, keep one call to action and one link, and keep SMS within 160 characters.
+      - Name the sender at the start, then the hook in the same first line; keep one call to action and one link (or one reply word), and keep SMS within 160 characters.
       - For WhatsApp, free-form replies only within 24 hours of the customer's last message; outside it use an approved template with links as buttons.
       - Include the opt-out.
     rules:
