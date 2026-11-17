@@ -136,3 +136,19 @@ func TestPlanUnknownBalanceOrganicAndCaps(t *testing.T) {
 		t.Fatal("a text output is not a media tier")
 	}
 }
+
+// Ticketing asks for these outputs by name through the credits forecast; each must exist and cost
+// at least 1, because ticketing treats 0 as invalid.
+func TestTicketingOutputsPriced(t *testing.T) {
+	r := Defaults()
+	want := map[string]int{
+		TicketingClassify: 1, TicketingAutoClassify: 1, TicketingSummary: 2,
+		TicketingReply: 2, TicketingKBSuggestions: 1, TicketingKBDraft: 3,
+	}
+	for key, credits := range want {
+		got, err := r.Credits(key)
+		if err != nil || got != credits {
+			t.Errorf("%s: got %d, %v; want %d", key, got, err, credits)
+		}
+	}
+}

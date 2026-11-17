@@ -81,6 +81,14 @@ const (
 	CinematicFast       = "cinematic_fast_20s"
 	CinematicStandard   = "cinematic_standard_20s"
 	LaunchFee           = "launch_fee"
+	// Ticketing's Vera AI outputs, charged by ticketing-api through the credits forecast and spend
+	// routes (ticketing Sprint 13). Text outputs, priced like the copy batch and script.
+	TicketingClassify      = "ticketing_classify"
+	TicketingAutoClassify  = "ticketing_auto_classify"
+	TicketingSummary       = "ticketing_summary"
+	TicketingReply         = "ticketing_reply"
+	TicketingKBSuggestions = "ticketing_kb_suggestions"
+	TicketingKBDraft       = "ticketing_kb_draft"
 )
 
 // Defaults returns the registry: the Ads Autopilot plan's outputs priced on the
@@ -131,6 +139,14 @@ func Defaults() Registry {
 			CinematicFast:     {Key: CinematicFast, Name: "Cinematic ad 20 s (Fast)", Kind: "media", CostUSD: 6.00, Feature: "ai_video_cinematic", NeedsStoryboard: true},
 			CinematicStandard: {Key: CinematicStandard, Name: "Cinematic ad 20 s (Standard)", Kind: "media", CostUSD: 9.25, Feature: "ai_video_cinematic_premium", NeedsStoryboard: true},
 			LaunchFee:         {Key: LaunchFee, Name: "Paid launch (clients without a plan)", Kind: "fee", Credits: 10},
+			// Ticketing (owner decision 2026-11-17: defaults here, overridable in ai_registry/outputs).
+			// Every price is at least 1: ticketing treats 0 as invalid.
+			TicketingClassify:      {Key: TicketingClassify, Name: "Ticket classification", Kind: "text", Credits: 1},
+			TicketingAutoClassify:  {Key: TicketingAutoClassify, Name: "Automatic ticket classification", Kind: "text", Credits: 1},
+			TicketingSummary:       {Key: TicketingSummary, Name: "Ticket thread summary", Kind: "text", Credits: 2},
+			TicketingReply:         {Key: TicketingReply, Name: "Suggested ticket reply", Kind: "text", Credits: 2},
+			TicketingKBSuggestions: {Key: TicketingKBSuggestions, Name: "Knowledge base suggestions", Kind: "text", Credits: 1},
+			TicketingKBDraft:       {Key: TicketingKBDraft, Name: "Knowledge base article draft", Kind: "text", Credits: 3},
 		},
 		// The AI credit bundles subscriptions-api sells (billing/credit_services.go, 2026-11-11);
 		// only used to suggest a bundle on a short balance. Checkout always prices from
