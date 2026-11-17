@@ -96,6 +96,10 @@ type ChatResult struct {
 	Sources     int     `json:"sources"`
 	Cached      bool    `json:"cached"`
 	Model       string  `json:"model"`
+	// ReviewNotes are the marketing laws the answer uses without a fact behind it (urgency,
+	// scarcity, a "was" price). Advice for a signed-in person only, never set for a public visitor;
+	// the answer is sent as it is.
+	ReviewNotes []string `json:"review_notes,omitempty"`
 }
 
 // NewPipeline creates a new RAG pipeline.

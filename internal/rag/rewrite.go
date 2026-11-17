@@ -48,6 +48,15 @@ func (p *Pipeline) noteLaws(input ChatInput, messages []ai.Message, text string)
 	}
 }
 
+// reviewNotes returns the marketing-law notes for a signed-in person's answer, so the owner sees
+// them next to it. A public visitor never gets them.
+func reviewNotes(input ChatInput, messages []ai.Message, text string) []string {
+	if input.PublicMode {
+		return nil
+	}
+	return compliance.LawNotes(text, factsText(input, messages))
+}
+
 // factsText is what an answer may rely on for a deadline, a stock figure or an earlier price: the
 // system prompt (business facts, knowledge base and, for the agent, the turn's tool results),
 // earlier assistant replies, and a signed-in person's own messages, never a public visitor's. The

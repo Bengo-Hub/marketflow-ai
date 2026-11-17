@@ -209,7 +209,9 @@ type askResponse struct {
 	RunID          string       `json:"run_id"`
 	Result         *team.Result `json:"result"`
 	Answer         string       `json:"answer,omitempty"`
-	CreditsCharged int          `json:"credits_charged"`
+	// AnswerReviewNotes are the marketing-law notes on Answer (advice only, rag.ChatResult).
+	AnswerReviewNotes []string `json:"answer_review_notes,omitempty"`
+	CreditsCharged    int      `json:"credits_charged"`
 }
 
 // Ask handles POST /api/v1/os/ask: one request to the Marketing Manager.
@@ -314,6 +316,7 @@ func (h *OSHandler) runTurn(ctx context.Context, r *http.Request, tenantID uuid.
 			return
 		}
 		out.Answer = chat.Response
+		out.AnswerReviewNotes = chat.ReviewNotes
 	}
 	if turnKey != "" {
 		out.CreditsCharged = 1

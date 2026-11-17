@@ -257,7 +257,8 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			ares.Answer = guardrail.ScreenOutput(ares.Answer)
 			// A blocked answer, or one with a price or commitment the business never gave, gets one
 			// rewrite with the broken rules (rewrite.go) before the filter.
-			ares.Answer = p.rewriteIfBlocked(ctx, input, rewriteMessages(sys, input, tools), ares.Answer,
+			answerMsgs := rewriteMessages(sys, input, tools)
+			ares.Answer = p.rewriteIfBlocked(ctx, input, answerMsgs, ares.Answer,
 				allowedFigures(input, sys, tools))
 			ares.Answer = guardrail.SafeMarkdown(ares.Answer, tools)
 			// Only a public answer that read no outside text may be reused; a signed-in answer can
@@ -273,6 +274,7 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 				Response: filtered, RawResponse: ares.Answer,
 				Intent: string(intent), Confidence: confidence,
 				Sources: len(contextChunks) + ares.ToolCallsN, Model: ares.Model,
+				ReviewNotes: reviewNotes(input, answerMsgs, ares.Answer),
 			}, nil
 		}
 		p.logger.Warn("agent loop failed, falling back to single-shot", zap.Error(aerr))
@@ -317,5 +319,6 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 		Response: filtered, RawResponse: raw,
 		Intent: string(intent), Confidence: confidence,
 		Sources: len(contextChunks), Model: model,
+		ReviewNotes: reviewNotes(input, messages, raw),
 	}, nil
 }
