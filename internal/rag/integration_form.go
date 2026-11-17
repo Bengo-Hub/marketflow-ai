@@ -21,18 +21,37 @@ type FormPrefill struct {
 // FormIntegration is the "Request an Integration" form.
 const FormIntegration = "integration"
 
-// Integration request types and modes accepted by auth-api's integration_requests table.
+// Integration request types offered on the widget's form (marketflow-ui public/widget/chat.js
+// INTEGRATION_TYPES). auth-api stores any lowercase request_type, so this list and the widget's
+// are the whole contract. arduino_iot is the retired "IoT" choice: an old prefill of it is read
+// as plc_automation (see legacyIntegrationTypes).
 var (
 	integrationTypes = map[string]bool{
-		"etims_integration": true, "truload_weighing": true, "camera_systems": true,
-		"plc_automation": true, "arduino_iot": true, "other_integration": true,
+		"etims_integration": true, "payments_integration": true, "notifications_integration": true,
+		"sso_integration": true, "api_integration": true, "data_import": true,
+		"printing_hardware": true, "truload_weighing": true, "camera_systems": true,
+		"plc_automation": true, "other_integration": true,
 	}
+	legacyIntegrationTypes = map[string]string{"arduino_iot": "plc_automation"}
+	// Checked in order, first match wins: eTIMS before payments ("KRA invoices paid by M-Pesa"),
+	// weighing before cameras (a number-plate camera belongs to the weighbridge). Words are
+	// picked so they do not hide inside common words: "email" would match every pasted summary,
+	// "api" sits inside "rapid" and "import" inside "important". A leading space marks a short
+	// word that must start a word (typeFromWords pads the text with one).
 	integrationTypeWords = []struct{ word, requestType string }{
-		{"etims", "etims_integration"}, {"kra", "etims_integration"}, {"fiscal", "etims_integration"},
+		{"etims", "etims_integration"}, {" kra", "etims_integration"}, {"fiscal", "etims_integration"},
+		{"mpesa", "payments_integration"}, {"m-pesa", "payments_integration"}, {"airtel money", "payments_integration"},
+		{"paystack", "payments_integration"}, {"payhero", "payments_integration"}, {"stk push", "payments_integration"},
+		{"whatsapp", "notifications_integration"}, {"bulk sms", "notifications_integration"}, {"send sms", "notifications_integration"},
+		{"single sign", "sso_integration"}, {" sso", "sso_integration"}, {"oidc", "sso_integration"},
+		{"webhook", "api_integration"}, {"rest api", "api_integration"}, {"your api", "api_integration"},
+		{"migrat", "data_import"}, {"data import", "data_import"}, {"import my", "data_import"}, {"import our", "data_import"},
+		{"printer", "printing_hardware"}, {"barcode", "printing_hardware"}, {"label print", "printing_hardware"},
 		{"truload", "truload_weighing"}, {"weighbridge", "truload_weighing"}, {"weighing", "truload_weighing"}, {"axle", "truload_weighing"},
+		{"anpr", "truload_weighing"}, {"number plate", "truload_weighing"}, {"number-plate", "truload_weighing"},
 		{"camera", "camera_systems"}, {"cctv", "camera_systems"},
-		{"plc", "plc_automation"},
-		{"arduino", "arduino_iot"}, {"iot", "arduino_iot"},
+		{"plc", "plc_automation"}, {"sensor", "plc_automation"},
+		{"arduino", "plc_automation"}, {" iot", "plc_automation"},
 	}
 	// requestWords mark a message that asks for an integration, not one that only names one
 	// ("does POS work with eTIMS?" names it; "connect our cameras" asks for it).
@@ -127,6 +146,8 @@ func parseIntegrationPrefill(question string) map[string]string {
 
 	if t := strings.ToLower(strings.ReplaceAll(out["request_type"], " ", "_")); integrationTypes[t] {
 		out["request_type"] = t
+	} else if legacy, ok := legacyIntegrationTypes[t]; ok {
+		out["request_type"] = legacy
 	} else {
 		out["request_type"] = typeFromWords(out["request_type"] + " " + question)
 	}
@@ -149,7 +170,7 @@ func parseIntegrationPrefill(question string) map[string]string {
 }
 
 func typeFromWords(text string) string {
-	t := strings.ToLower(text)
+	t := " " + strings.ToLower(text)
 	for _, w := range integrationTypeWords {
 		if strings.Contains(t, w.word) {
 			return w.requestType

@@ -15,8 +15,8 @@ import (
 )
 
 // RequestIntegration is the agent tool that submits a platform-integration request (eTIMS/KRA
-// tax fiscalization, TruLoad weighing hardware+software, camera/PLC/Arduino/general IoT
-// automation) on the user's behalf, notifying the support team. It calls auth-api's S2S
+// invoicing, payments, messaging, SSO, APIs, data moves, printers, TruLoad weighing, cameras and
+// PLC automation) on the user's behalf, notifying the support team. It calls auth-api's S2S
 // notify-only endpoint rather than the tenant-portal create endpoint, since this tool's caller
 // identity is Vera itself (a service), not a browser session with an optional JWT -- the same
 // path codevertex-website's own lead-capture form uses.
@@ -46,7 +46,7 @@ func NewRequestIntegration(cfg RequestIntegrationConfig) *RequestIntegration {
 func (*RequestIntegration) Name() string { return "request_integration" }
 
 func (*RequestIntegration) Description() string {
-	return "Submits a request to enable a Codevertex platform integration and notifies the support team. Use this when the user expresses interest in connecting/integrating with: eTIMS/KRA tax fiscalization, TruLoad weighing hardware or software, camera systems, PLCs, Arduino programming, or general IoT/automation hardware. Always collect the requester's name and email (and company name if they have one) before calling this tool, and confirm with the user what you're about to submit first -- only call this after they've agreed."
+	return "Submits a request to enable a Codevertex platform integration and notifies the support team. Use this when the user expresses interest in connecting/integrating with: KRA eTIMS invoicing from their POS, ERP or accounting system; M-Pesa, Airtel Money or card payments (PayHero, Paystack); sending SMS, WhatsApp or email from their system; sign-in with Codevertex accounts (SSO); their own app or website talking to our POS, stock or orders APIs and webhooks; moving data from another system; barcode, label or receipt printers; weighbridges and number-plate cameras (TruLoad); CCTV; or machines, sensors and PLCs. Use other_integration when it fits none of these or the user is not sure. Always collect the requester's name and email (and company name if they have one) before calling this tool, and confirm with the user what you're about to submit first -- only call this after they've agreed."
 }
 
 func (*RequestIntegration) Schema() map[string]any {
@@ -54,8 +54,9 @@ func (*RequestIntegration) Schema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"request_type": map[string]any{
-				"type":        "string",
-				"enum":        []string{"etims_integration", "truload_weighing", "camera_systems", "plc_automation", "arduino_iot", "other_integration"},
+				"type": "string",
+				"enum": []string{"etims_integration", "payments_integration", "notifications_integration", "sso_integration",
+					"api_integration", "data_import", "printing_hardware", "truload_weighing", "camera_systems", "plc_automation", "other_integration"},
 				"description": "Which integration the user is interested in",
 			},
 			"integration_mode": map[string]any{

@@ -44,6 +44,27 @@ func TestIntegrationFormPrefill(t *testing.T) {
 			want:     map[string]string{"request_type": "etims_integration"},
 		},
 		{
+			name:     "software integrations get their own type",
+			business: "codevertex",
+			intent:   ai.IntentServiceInquiry,
+			question: "We want to connect M-Pesa payments to our website",
+			want:     map[string]string{"request_type": "payments_integration"},
+		},
+		{
+			name:     "messaging asks are not read as email addresses",
+			business: "codevertex",
+			intent:   ai.IntentIntegrationInterest,
+			question: "Can our system send WhatsApp receipts through you?",
+			want:     map[string]string{"request_type": "notifications_integration"},
+		},
+		{
+			name:     "the retired IoT type maps to machines, sensors and PLCs",
+			business: "codevertex",
+			intent:   ai.IntentIntegrationInterest,
+			question: "type=arduino_iot",
+			want:     map[string]string{"request_type": "plc_automation"},
+		},
+		{
 			name:     "naming an integration is not asking for one",
 			business: "codevertex",
 			intent:   ai.IntentServiceInquiry,
