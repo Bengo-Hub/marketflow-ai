@@ -451,6 +451,9 @@ type agentRunRequest struct {
 	TenantID      string         `json:"tenant_id"`
 	SystemPrompt  string         `json:"system_prompt"`
 	AllowedTools  []string       `json:"allowed_tools"`
+	// NoTools asks for a plain completion with no tools (ticketing's summaries and reply drafts).
+	// An empty allowed_tools still means the read-only knowledge tools.
+	NoTools       bool           `json:"no_tools"`
 	MaxIterations int            `json:"max_iterations"`
 	Context       map[string]any `json:"context"`
 	// Billable is set by the worker for automatic (event and schedule) runs,
@@ -545,6 +548,7 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 		Question:     "Run now. Trigger context:\n" + guardrail.Quote("trigger", triggerText),
 		MaxIters:     iters,
 		AllowedTools: allowed,
+		NoTools:      req.NoTools,
 		Tainted:      tainted,
 	})
 	if err != nil {
@@ -557,7 +561,25 @@ func (h *OSHandler) AgentRun(w http.ResponseWriter, r *http.Request) {
 		"run_id": req.RunID, "status": "completed", "answer": res.Answer, "trace": res.Trace,
 		"total_tokens": res.TotalTokens, "tool_calls": res.ToolCallsN, "iterations": res.Iterations,
 		"stopped_early": res.StoppedEarly, "stop_reason": res.StopReason,
+		"review_notes": agentRunReviewNotes(res, system, string(trigger)),
+		"tainted":      res.Tainted,
 	})
+}
+
+// agentRunReviewNotes runs the outward figure and commitment checks on a run's answer. A run's
+// answer is a draft (a person edits a ticket reply before it is sent; a custom agent acts only
+// through its tools), so the notes are returned for the caller to show, never used to block or
+// rewrite. Figures may come from the owner's instructions, the trigger data and the tool results.
+func agentRunReviewNotes(res *agent.Result, system, trigger string) []string {
+	if res == nil {
+		return []string{}
+	}
+	allowed := guardrail.AllowedNumbers(append([]string{system, trigger}, res.ToolResults()...)...)
+	notes := guardrail.OutputViolations(res.Answer, allowed)
+	if notes == nil {
+		notes = []string{}
+	}
+	return notes
 }
 
 // meetingPrepper is the meeting_prep agent tool: it reads the contact's 360

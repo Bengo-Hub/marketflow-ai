@@ -86,6 +86,9 @@ type Input struct {
 	// AllowedTools limits the run to these tool names (a custom agent's
 	// allowed_tools). Empty means every registered tool the mode permits.
 	AllowedTools []string
+	// NoTools runs the turn with no tools at all, whatever AllowedTools says: a plain completion
+	// (summaries, reply drafts) that still gets the loop's fencing and metering.
+	NoTools bool
 	// Tainted starts the turn with writing tools withdrawn: the question itself is third-party
 	// text (a lead's WhatsApp message, an event's trigger data). See taint.go.
 	Tainted bool

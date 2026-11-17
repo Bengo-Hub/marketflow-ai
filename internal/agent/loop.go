@@ -38,6 +38,9 @@ func PublicTool(name string) bool { return publicTools[name] }
 // allowedFor returns the tool names a run may use: the public allowlist in
 // public mode, intersected with the run's AllowedTools when given.
 func (l *Loop) allowedFor(in Input) map[string]bool {
+	if in.NoTools {
+		return map[string]bool{}
+	}
 	var restrict map[string]bool
 	if len(in.AllowedTools) > 0 {
 		restrict = make(map[string]bool, len(in.AllowedTools))

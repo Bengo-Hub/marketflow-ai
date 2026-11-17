@@ -301,6 +301,24 @@ func TestAgentLoop_AllowedTools(t *testing.T) {
 	}
 }
 
+// TestAgentLoop_NoTools: a no-tools run offers the model nothing and refuses a call it invents,
+// even when allowed_tools names a tool.
+func TestAgentLoop_NoTools(t *testing.T) {
+	kb := &fakeTool{name: "kb_search", response: "{}"}
+	srv := mockGroqServer(t, callThenAnswer("kb_search"))
+	defer srv.Close()
+	loop := New(Config{Client: ai.NewClient(srv.URL, "k", zap.NewNop()), Model: "m", Tools: []Tool{kb}, MaxIters: 3, Logger: zap.NewNop()})
+	if got := loop.allowedFor(Input{NoTools: true, AllowedTools: []string{"kb_search"}}); len(got) != 0 {
+		t.Fatalf("no-tools run allows %v", got)
+	}
+	if _, err := loop.Run(context.Background(), Input{TenantID: uuid.New(), Question: "q", NoTools: true, AllowedTools: []string{"kb_search"}}); err != nil {
+		t.Fatal(err)
+	}
+	if kb.calls.Load() != 0 {
+		t.Fatalf("a no-tools run executed kb_search")
+	}
+}
+
 // TestAgentLoop_MaxIterations verifies that infinite tool-call loops are
 // bounded; when the model keeps calling tools past MaxIters the loop returns
 // a synthesised answer with StoppedEarly=true.

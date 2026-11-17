@@ -38,6 +38,9 @@ type TriageResult struct {
 	Reasoning            string  `json:"reasoning"`
 	SuggestedResolution  string  `json:"suggested_resolution,omitempty"`
 	RequiresHumanReview  bool    `json:"requires_human_review"`
+	// Injected is true when the ticket text carries an injection phrase. Confidence is then capped
+	// at triageInjectedCap and the ticket always goes to a person.
+	Injected bool `json:"injected"`
 }
 
 // TriageHandler handles AI-powered ticket triage.
@@ -171,7 +174,7 @@ func (h *TriageHandler) classify(ctx context.Context, subject, description strin
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		h.logger.Warn("failed to parse triage JSON", zap.Error(err))
-		return &TriageResult{Category: "general", Priority: "normal", Confidence: 0, RequiresHumanReview: true}, nil
+		return &TriageResult{Category: "general", Priority: "normal", Confidence: 0, RequiresHumanReview: true, Injected: injected}, nil
 	}
 
 	// The model's confidence is its own claim, and an injected ticket can claim 0.99. It is
@@ -188,7 +191,8 @@ func (h *TriageHandler) classify(ctx context.Context, subject, description strin
 		Priority:            sanitizePriority(parsed.Priority),
 		Confidence:          conf,
 		Reasoning:           parsed.Reasoning,
-		RequiresHumanReview: conf < 0.85,
+		RequiresHumanReview: conf < 0.85 || injected,
+		Injected:            injected,
 	}
 	return result, nil
 }
