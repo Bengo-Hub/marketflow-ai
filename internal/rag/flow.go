@@ -137,7 +137,10 @@ func (p *Pipeline) Chat(ctx context.Context, input ChatInput) (*ChatResult, erro
 			// and the signed-in owner's own request.
 			p.guardTaskContent(result.Content, input.BusinessType, ragCtx+"\n"+input.Question)
 			respJSON, _ := json.Marshal(result)
-			return &ChatResult{Response: string(respJSON), Intent: "task_execute", Confidence: confidence, Model: result.Model}, nil
+			// Content tasks are for signed-in people only, so the marketing-law notes the guard put
+			// under "_review" also go out as review_notes, which the chat page shows.
+			notes, _ := result.Content["_review"].([]string)
+			return &ChatResult{Response: string(respJSON), Intent: "task_execute", Confidence: confidence, Model: result.Model, ReviewNotes: notes}, nil
 		}
 		if input.PublicMode {
 			intent = ai.IntentProductQA
