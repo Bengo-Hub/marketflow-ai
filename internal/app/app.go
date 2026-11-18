@@ -35,6 +35,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/rag"
+	"github.com/bengobox/marketflow-ai/internal/reqid"
 	"github.com/bengobox/marketflow-ai/internal/sessions"
 	"github.com/bengobox/marketflow-ai/internal/tasks"
 	"github.com/bengobox/marketflow-ai/internal/team"
@@ -60,6 +61,11 @@ type App struct {
 
 // New constructs the application.
 func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, error) {
+	// Calls to other Codevertex services carry the incoming request's X-Request-ID, so logs line
+	// up across marketflow-api, marketflow-ai and the rest; third parties never get it.
+	reqid.Install(reqid.HostsFrom(cfg.AI.MarketFlowAPIURL, cfg.AI.TicketingURL, cfg.AI.AuthAPIURL,
+		cfg.Security.AuthServiceURL, cfg.Security.SubscriptionsURL, cfg.App.TreasuryURL))
+
 	// ── Database (shared with marketflow-api, for pgvector queries) ────────
 	db, err := sql.Open("pgx", cfg.Database.URL)
 	if err != nil {
@@ -518,6 +524,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Use(httpware.RequestID)
 	// Never chi RealIP: it trusts client-sent True-Client-IP/X-Forwarded-For.
 	r.Use(ratelimit.TrustedRealIP)
+	// One access log line per request with its request_id (and tenant when known), the same
+	// middleware marketflow-api uses, so a request can be followed across both services.
+	r.Use(httpware.Logging(logger))
 	r.Use(httpware.Recover(logger))
 	// Longer for AI responses; streamed (SSE) answers end on their own or on disconnect.
 	r.Use(httpware.BypassForStreaming(chimiddleware.Timeout(120 * time.Second)))
