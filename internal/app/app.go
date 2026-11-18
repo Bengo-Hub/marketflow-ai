@@ -446,6 +446,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	adIntelHandler := handlers.NewAdIntelHandler(adintel.NewSearcher(adIntelSettings(resolver), redisClient, cfg.Redis.Namespace), logger).
 		// The Fix step: complaint themes from public reviews through Serper (adintel/serper).
 		WithComplaints(adintel.NewComplaints(complaintSettings(resolver), redisClient, cfg.Redis.Namespace, decider)).
+		// Decide tags on the top winners and the Ads Specialist's summary (tags and shapes only).
+		WithTagging(decider, modelRouter).
 		WithCredits(creditSpender)
 	// Social inbox intent tags (Sprint 22): typed judgments only, no tools.
 	inboxIntentHandler := handlers.NewInboxIntentHandler(decider, logger)
@@ -639,6 +641,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/credits/charge", osHandler.ChargeCredits)
 		r.Post("/credits/forecast", osHandler.ForecastCredits)
 		r.Post("/adintel/scan", adIntelHandler.Scan)
+		r.Get("/adintel/quota", adIntelHandler.Quota)
 		r.Post("/adintel/complaints", adIntelHandler.Complaints)
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)

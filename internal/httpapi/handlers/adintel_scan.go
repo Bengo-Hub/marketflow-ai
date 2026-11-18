@@ -21,7 +21,17 @@ type AdIntelHandler struct {
 	searcher   *adintel.Searcher
 	complaints *adintel.Complaints
 	credits    CreditSpender
+	decider    adintel.Decider
+	models     adintel.Completer
 	logger     *zap.Logger
+}
+
+// WithTagging lets the scan tag its top winners (the decide layer) and summarise them for the Ads
+// Specialist (the model router). Without it the scan returns untagged winners, as before.
+func (h *AdIntelHandler) WithTagging(d adintel.Decider, m adintel.Completer) *AdIntelHandler {
+	h.decider = d
+	h.models = m
+	return h
 }
 
 // WithCredits charges for fresh complaint reports; nil leaves them free (local development).
@@ -109,16 +119,21 @@ func complaintKey(query, country string) string {
 // maxScanQueries bounds one scan; a tenant's monthly share is far smaller anyway.
 const maxScanQueries = 10
 
-// Scan handles POST /api/v1/internal/adintel/scan {tenant_id, queries, region} (S2S, the weekly
-// job): each competitor's winners, top 10. Cached answers are free. A used platform pool stops the
-// scan with quota_used, which stops the job for every tenant. A used tenant share affects only this
-// tenant, with share_used: cached queries are still answered, and the others are left out of
-// results, so the job keeps their earlier winners.
+// Scan handles POST /api/v1/internal/adintel/scan {tenant_id, queries, region, brand} (S2S, the
+// weekly job): each competitor's winners, top 10. Cached answers are free. A used platform pool
+// stops the scan with quota_used, which stops the job for every tenant. A used tenant share affects
+// only this tenant, with share_used: cached queries are still answered, and the others are left out
+// of results, so the job keeps their earlier winners.
+//
+// The top winners across the scan then get decide tags (hook, angle, offer and relevance to brand,
+// the tenant's own brand context) within the separate details budget, and summary is a short brief
+// for the Ads Specialist built from those tags and shapes only. Neither can fail the scan.
 func (h *AdIntelHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TenantID string   `json:"tenant_id"`
 		Queries  []string `json:"queries"`
 		Region   string   `json:"region"`
+		Brand    string   `json:"brand"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil || req.TenantID == "" || len(req.Queries) == 0 {
 		writeError(w, http.StatusBadRequest, "tenant_id and queries are required")
@@ -136,6 +151,7 @@ func (h *AdIntelHandler) Scan(w http.ResponseWriter, r *http.Request) {
 		Results   []result `json:"results"`
 		QuotaUsed bool     `json:"quota_used"`
 		ShareUsed bool     `json:"share_used,omitempty"`
+		Summary   string   `json:"summary,omitempty"`
 	}{Results: []result{}}
 	for _, q := range req.Queries {
 		ads, err := h.searcher.Search(r.Context(), req.TenantID, q, req.Region)
@@ -160,5 +176,33 @@ func (h *AdIntelHandler) Scan(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Results = append(out.Results, res)
 	}
+	if h.decider != nil {
+		var all []*adintel.Ad
+		for i := range out.Results {
+			for j := range out.Results[i].Ads {
+				all = append(all, &out.Results[i].Ads[j])
+			}
+		}
+		if h.searcher.TagWinners(r.Context(), h.decider, req.TenantID, req.Region, req.Brand, all) > 0 {
+			var tagged []adintel.Ad
+			for _, a := range all {
+				if a.Tags != nil {
+					tagged = append(tagged, *a)
+				}
+			}
+			out.Summary = adintel.Summarize(r.Context(), h.models, h.searcher.SummaryClass(r.Context()), tagged)
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// Quota handles GET /api/v1/internal/adintel/quota?tenant_id= (S2S, the research page): this
+// month's scan and details budgets for the tenant, read from the counters without a search.
+func (h *AdIntelHandler) Quota(w http.ResponseWriter, r *http.Request) {
+	tid := r.URL.Query().Get("tenant_id")
+	if _, err := uuid.Parse(tid); err != nil {
+		writeError(w, http.StatusBadRequest, "tenant_id must be a UUID")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.searcher.Quota(r.Context(), tid))
 }

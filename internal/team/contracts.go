@@ -183,6 +183,11 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 			if strings.TrimSpace(a.Headline) == "" && strings.TrimSpace(a.PrimaryText) == "" {
 				continue
 			}
+			// Every variant is a test (ad-creative playbook): one without a hypothesis that could
+			// lose is dropped, the same as one without copy.
+			if strings.TrimSpace(a.Hypothesis) == "" {
+				continue
+			}
 			if tooLong(a.Hook, a.Headline, a.PrimaryText, a.CTA, a.Hypothesis) {
 				return nil, fmt.Errorf("ad_copy_batch: variant %d has an oversized field", i+1)
 			}

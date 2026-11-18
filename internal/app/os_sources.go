@@ -12,6 +12,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/adintel"
 	"github.com/bengobox/marketflow-ai/internal/decide"
 	"github.com/bengobox/marketflow-ai/internal/fxrate"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 	"github.com/bengobox/marketflow-ai/internal/registry"
 	"go.uber.org/zap"
@@ -163,6 +164,9 @@ func complaintSettings(resolver *providers.Resolver) func(ctx context.Context) a
 // adIntelSettings reads the SerpApi row (adintel/serpapi) each call through the resolver's own
 // cache: api_key, paid_enabled with paid_monthly_cap, and tenant_share. Paid use counts only
 // when the platform owner switched it on; code never switches it on (owner rule, 2026-10-22).
+// The details budget for winner tags is details_per_tenant, details_platform_monthly and
+// details_k (defaults 3, 50 and 3; 0 turns details off), and summary_model_class picks the
+// summary's model class (nano by default).
 func adIntelSettings(resolver *providers.Resolver) func(ctx context.Context) adintel.Settings {
 	return func(ctx context.Context) adintel.Settings {
 		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -171,11 +175,28 @@ func adIntelSettings(resolver *providers.Resolver) func(ctx context.Context) adi
 		if err != nil {
 			return adintel.Settings{}
 		}
-		out := adintel.Settings{Key: m["api_key"]}
-		if strings.EqualFold(m["paid_enabled"], "true") {
-			out.PaidCap, _ = strconv.Atoi(m["paid_monthly_cap"])
-		}
-		out.TenantShare, _ = strconv.Atoi(m["tenant_share"])
-		return out
+		return parseAdIntelSettings(m)
 	}
+}
+
+// parseAdIntelSettings turns the provider row's raw fields into settings.
+func parseAdIntelSettings(m map[string]string) adintel.Settings {
+	out := adintel.Settings{Key: m["api_key"], Details: adintel.DefaultDetailSettings(), SummaryClass: llm.Class(strings.TrimSpace(m["summary_model_class"]))}
+	if strings.EqualFold(m["paid_enabled"], "true") {
+		out.PaidCap, _ = strconv.Atoi(m["paid_monthly_cap"])
+	}
+	out.TenantShare, _ = strconv.Atoi(m["tenant_share"])
+	// A field left empty keeps its default; a set field, 0 included, is used as given.
+	for field, dst := range map[string]*int{
+		"details_per_tenant":       &out.Details.PerTenant,
+		"details_platform_monthly": &out.Details.PlatformMonthly,
+		"details_k":                &out.Details.K,
+	} {
+		if v := strings.TrimSpace(m[field]); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				*dst = n
+			}
+		}
+	}
+	return out
 }

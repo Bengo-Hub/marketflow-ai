@@ -39,6 +39,7 @@ Quoted sources:
 - the owner request in field extraction
 - tickets in triage
 - CRM data in CRM AI, draft email, deal analysis and meeting prep
+- competitor ad words in the winner tags (`internal/adintel/tags.go`, Sprint 24): masked with `guardrail.MaskPII`, then quoted. Only the fixed tags leave the package; the words stay in a 30-day shared cache, and the Ads Specialist's summary is built from the tags and shapes alone, so no competitor text reaches a writer
 
 ## Layer 3: actions (plain code at the tool)
 

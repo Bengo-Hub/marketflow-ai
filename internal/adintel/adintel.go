@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/bengobox/marketflow-ai/internal/llm"
 )
 
 // Ad is one competitor creative.
@@ -35,6 +37,8 @@ type Ad struct {
 	DetailsLink  string    `json:"details_link"`
 	Score        float64   `json:"score"`
 	StillRunning bool      `json:"still_running"`
+	// Tags are the decide labels for a top winner (tags.go). The ad's words never travel with it.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // ErrQuota means the platform's searches for the month are used, so nobody can search.
@@ -59,6 +63,35 @@ type Settings struct {
 	PaidCap int
 	// TenantShare is each tenant's searches a month (0 = DefaultTenantShare).
 	TenantShare int
+	// Details is the separate budget for ad-details reads, the call that returns a winner's
+	// words for tagging (details.go).
+	Details DetailSettings
+	// SummaryClass is the model class of the winners' summary for the Ads Specialist (summary.go),
+	// from the row's summary_model_class; empty means nano.
+	SummaryClass llm.Class
+}
+
+// summaryClass is the configured class, nano when unset or unknown.
+func (cfg Settings) summaryClass() llm.Class {
+	for _, c := range llm.Classes {
+		if c == cfg.SummaryClass {
+			return c
+		}
+	}
+	return llm.Nano
+}
+
+// SummaryClass is the model class the scan's summary uses now.
+func (s *Searcher) SummaryClass(ctx context.Context) llm.Class {
+	return s.Settings(ctx).summaryClass()
+}
+
+// poolLimit is the month's platform pool: the free 250, or the paid cap the owner set.
+func (cfg Settings) poolLimit() int {
+	if cfg.PaidCap > 0 {
+		return cfg.PaidCap
+	}
+	return FreeMonthlySearches
 }
 
 // Searcher is the SerpApi client.
@@ -114,52 +147,72 @@ func (s *Searcher) Search(ctx context.Context, tenantID, query, region string) (
 // reserve takes one search from the month's platform pool and the tenant's share; release gives
 // both back.
 func (s *Searcher) reserve(ctx context.Context, tenantID string, cfg Settings) (func(), error) {
-	limit := FreeMonthlySearches
-	if cfg.PaidCap > 0 {
-		limit = cfg.PaidCap
+	return reserveQuota(ctx, s.Redis, s.NS, "serpapi", tenantID, s.now(), 1, cfg.poolLimit(), cfg.tenantShare())
+}
+
+// tenantShare is the tenant's searches a month, DefaultTenantShare when unset.
+func (cfg Settings) tenantShare() int {
+	if cfg.TenantShare <= 0 {
+		return DefaultTenantShare
 	}
-	share := cfg.TenantShare
-	if share <= 0 {
-		share = DefaultTenantShare
+	return cfg.TenantShare
+}
+
+// quotaTTL keeps a month's counters a little past the month's end.
+const quotaTTL = 40 * 24 * time.Hour
+
+// poolKey and tenantKey are the Redis counters of a provider's month: the platform pool and one
+// tenant's share. Quota (quota.go) reads the same keys.
+func poolKey(ns, provider, month string) string {
+	return fmt.Sprintf("%s:adintel:%s:month:%s", ns, provider, month)
+}
+
+func tenantKey(ns, provider, tenantID, month string) string {
+	return fmt.Sprintf("%s:adintel:%s:tenant:%s:%s", ns, provider, tenantID, month)
+}
+
+// counter is one monthly limit a reservation must fit under, and the error for going over it.
+type counter struct {
+	key   string
+	limit int
+	over  error
+}
+
+// reserveCounters takes n units from every counter in order, counted in Redis before any outbound
+// call. Going over one gives back what was taken and returns that counter's error. release gives
+// all the units back, for a call that failed or was not made.
+func reserveCounters(ctx context.Context, rdb *redis.Client, n int, counters ...counter) (func(), error) {
+	units := int64(n)
+	taken := make([]string, 0, len(counters))
+	undo := func(c context.Context) {
+		for _, k := range taken {
+			rdb.DecrBy(c, k, units)
+		}
 	}
-	return reserveQuota(ctx, s.Redis, s.NS, "serpapi", tenantID, s.now(), 1, limit, share)
+	for _, c := range counters {
+		used, err := rdb.IncrBy(ctx, c.key, units).Result()
+		if err != nil {
+			undo(ctx)
+			return nil, err
+		}
+		taken = append(taken, c.key)
+		rdb.Expire(ctx, c.key, quotaTTL)
+		if used > int64(c.limit) {
+			undo(ctx)
+			return nil, c.over
+		}
+	}
+	return func() { undo(context.WithoutCancel(ctx)) }, nil
 }
 
 // reserveQuota takes n units from a provider's monthly platform pool and the tenant's monthly
-// share, counted in Redis before any outbound call. Over the pool is ErrQuota (nobody can search);
-// over the share is ErrTenantShare (only this tenant stops). release gives the units back, for a
-// call that failed or was not made.
+// share. Over the pool is ErrQuota (nobody can search); over the share is ErrTenantShare (only
+// this tenant stops).
 func reserveQuota(ctx context.Context, rdb *redis.Client, ns, provider, tenantID string, now time.Time, n, limit, share int) (func(), error) {
 	month := now.UTC().Format("2006-01")
-	pool := fmt.Sprintf("%s:adintel:%s:month:%s", ns, provider, month)
-	mine := fmt.Sprintf("%s:adintel:%s:tenant:%s:%s", ns, provider, tenantID, month)
-	ttl := 40 * 24 * time.Hour
-	units := int64(n)
-	used, err := rdb.IncrBy(ctx, pool, units).Result()
-	if err != nil {
-		return nil, err
-	}
-	rdb.Expire(ctx, pool, ttl)
-	if used > int64(limit) {
-		rdb.DecrBy(ctx, pool, units)
-		return nil, ErrQuota
-	}
-	own, err := rdb.IncrBy(ctx, mine, units).Result()
-	if err != nil {
-		rdb.DecrBy(ctx, pool, units)
-		return nil, err
-	}
-	rdb.Expire(ctx, mine, ttl)
-	if own > int64(share) {
-		rdb.DecrBy(ctx, pool, units)
-		rdb.DecrBy(ctx, mine, units)
-		return nil, ErrTenantShare
-	}
-	return func() {
-		bg := context.WithoutCancel(ctx)
-		rdb.DecrBy(bg, pool, units)
-		rdb.DecrBy(bg, mine, units)
-	}, nil
+	return reserveCounters(ctx, rdb, n,
+		counter{key: poolKey(ns, provider, month), limit: limit, over: ErrQuota},
+		counter{key: tenantKey(ns, provider, tenantID, month), limit: share, over: ErrTenantShare})
 }
 
 // fetch reads the first page only: one search, up to 40 ads, is enough to find the winners.
