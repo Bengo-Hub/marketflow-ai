@@ -175,7 +175,7 @@ func TestPosterDefaultRouteSendsTheDocumentedShape(t *testing.T) {
 	if !strings.HasSuffix(res.SceneKey, "-scene.jpg") || res.SceneURL == "" {
 		t.Fatalf("scene copy = %q %q", res.SceneKey, res.SceneURL)
 	}
-	in := f.inputs["fal-ai/bytedance/seedream/v5/lite/edit"]
+	in := f.inputs["bytedance/seedream/v5/lite/edit"]
 	if in == nil {
 		t.Fatalf("with product photos the edit endpoint must be used: %v", f.inputs)
 	}
@@ -186,8 +186,8 @@ func TestPosterDefaultRouteSendsTheDocumentedShape(t *testing.T) {
 	if w, h := size["width"].(float64), size["height"].(float64); w*h < 2560*1440 || w*h > 4096*4096 {
 		t.Fatalf("seedream needs 2560x1440 to 4096x4096 pixels, sent %vx%v", w, h)
 	}
-	if f.auth["fal-ai/bytedance/seedream/v5/lite/edit"] != "Key fal-id:secret" {
-		t.Fatalf("fal auth header = %q", f.auth["fal-ai/bytedance/seedream/v5/lite/edit"])
+	if f.auth["bytedance/seedream/v5/lite/edit"] != "Key fal-id:secret" {
+		t.Fatalf("fal auth header = %q", f.auth["bytedance/seedream/v5/lite/edit"])
 	}
 }
 

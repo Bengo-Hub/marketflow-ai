@@ -10,14 +10,14 @@ import (
 // config like the music model (AudioConfigFromEnv) so a provider renaming a model is a config
 // change, not a release. Route keys and prices stay in PosterRoutes and StillRoutes.
 type ImageEndpoints struct {
-	SeedreamText       string // fal, text to image
-	SeedreamEdit       string // fal, with the offering's photos
-	NanoBanana2        string
-	NanoBanana2Edit    string
-	NanoBananaPro      string
-	NanoBananaProEdit  string
-	RecraftText        string // Higgsfield
-	SoulStill          string // Higgsfield, storyboard stills
+	SeedreamText      string // fal, text to image
+	SeedreamEdit      string // fal, with the offering's photos
+	NanoBanana2       string
+	NanoBanana2Edit   string
+	NanoBananaPro     string
+	NanoBananaProEdit string
+	RecraftText       string // Higgsfield
+	SoulStill         string // Higgsfield, storyboard stills
 }
 
 // DefaultImageEndpoints are the ids the providers list. Seedream v5 Lite is
@@ -73,7 +73,10 @@ func ImageEndpointsFromEnv(get func(string) string) (ImageEndpoints, error) {
 // orDefault fills empty fields from the defaults, so a partly filled config never sends an empty id.
 func (e ImageEndpoints) orDefault() ImageEndpoints {
 	d := DefaultImageEndpoints()
-	for _, f := range []struct{ dst *string; def string }{
+	for _, f := range []struct {
+		dst *string
+		def string
+	}{
 		{&e.SeedreamText, d.SeedreamText}, {&e.SeedreamEdit, d.SeedreamEdit},
 		{&e.NanoBanana2, d.NanoBanana2}, {&e.NanoBanana2Edit, d.NanoBanana2Edit},
 		{&e.NanoBananaPro, d.NanoBananaPro}, {&e.NanoBananaProEdit, d.NanoBananaProEdit},

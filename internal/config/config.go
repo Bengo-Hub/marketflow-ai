@@ -105,10 +105,12 @@ type AIConfig struct {
 
 	// Anthropic. Which classes use Claude is set by the routing policy
 	// (ai_routing/policy); this model is only the provider's default.
-	ClaudeAPIKey  string `env:"CLAUDE_API_KEY"`
-	ClaudeModel   string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-5-5"`
-	ClaudeBaseURL string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
-	ClaudeVersion string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
+	ClaudeAPIKey string `env:"CLAUDE_API_KEY"`
+	ClaudeModel  string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-5-5"`
+	// ClaudePlusModel is the premium_plus model of the default routing; empty keeps its default.
+	ClaudePlusModel string `env:"CLAUDE_PLUS_MODEL"`
+	ClaudeBaseURL   string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
+	ClaudeVersion   string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
 
 	// MarketFlow API for KB/provider config
 	MarketFlowAPIURL string `env:"MARKETFLOW_API_URL" envDefault:"http://marketflow-api.marketflow.svc.cluster.local:4000"`

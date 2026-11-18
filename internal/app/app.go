@@ -104,7 +104,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	modelRouter := llm.NewRouter(llm.Config{
 		Providers: newLLMProviders(resolver, &cfg.AI, logger),
 		Policy:    routingPolicySource(resolver),
-		Defaults:  llm.DefaultPolicy(llm.Defaults{OllamaModel: cfg.AI.OllamaFallbackModel}),
+		// The configured Claude models (MF_AI_CLAUDE_MODEL, MF_AI_CLAUDE_PLUS_MODEL) win over the
+		// code defaults; they were not passed before, so the env value was ignored.
+		Defaults: llm.DefaultPolicy(llm.Defaults{OllamaModel: cfg.AI.OllamaFallbackModel,
+			ClaudeModel: cfg.AI.ClaudeModel, ClaudePlus: cfg.AI.ClaudePlusModel}),
 		Logger:    logger,
 	})
 	nanoLLM := modelRouter.Client(llm.Nano)
@@ -472,7 +475,12 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		logger.Warn("object storage not configured (OBJECT_STORAGE_* or MEDIA_ROOT); posters disabled")
 	default:
 		media.SetBases(os.Getenv("MF_MEDIA_FAL_QUEUE_URL"), os.Getenv("MF_MEDIA_HIGGSFIELD_API_URL"))
-		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger)
+		// Provider endpoint ids from MF_MEDIA_ENDPOINT_* over the defaults (image_endpoints.go).
+		imageEndpoints, eerr := media.ImageEndpointsFromEnv(os.Getenv)
+		if eerr != nil {
+			logger.Warn("media endpoint settings invalid; using defaults for those", zap.Error(eerr))
+		}
+		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger).WithEndpoints(imageEndpoints)
 		osHandler.SetPosters(posters)
 		// Motion posters and template video ads: background jobs in Redis; ffmpeg
 		// draws the exact words and assembles the ads.
@@ -497,7 +505,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger)).
 			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger)).
 			WithClips(clips, store).WithLogger(logger).WithAudio(audioCfg)
-		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger)
+		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger).WithEndpoints(imageEndpoints)
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.
 		osHandler.SetVideo(media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
