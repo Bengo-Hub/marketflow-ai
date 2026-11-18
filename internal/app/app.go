@@ -554,9 +554,11 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// Public chat endpoint — no auth required. The embeddable widget on
 	// /p/{slug} and external sites uses this. Rate-limited per-IP (15/min)
-	// and per-tenant (100/min) to prevent flooding.
+	// and per-tenant (100/min) to prevent flooding. The tenant limits key on the tenant the
+	// header resolves to (the same resolver the chat handler bills with), so spelling one
+	// tenant several ways does not multiply its limits.
 	r.Route("/api/v1/public", func(r chi.Router) {
-		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), 15, 100, cfg.App.PublicChatDailyLimit))
+		r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai"), sessionService.ResolveTenantID, 15, 100, cfg.App.PublicChatDailyLimit))
 		r.Post("/chat", chatHandler.Chat)
 		// The widget's in-chat forms, forwarded to the service that owns each record.
 		r.Post("/integration-requests", publicForms.IntegrationRequest)
@@ -590,14 +592,14 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// CRM AI calls a model with the tenant's CRM data: limited like the OS routes so one
 		// account cannot loop it (audit 2026-11-16).
 		r.Group(func(r chi.Router) {
-			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-crm"), 20, 60, 0))
+			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-crm"), sessionService.ResolveTenantID, 20, 60, 0))
 			r.Post("/ai/pipeline-summary", crmAIHandler.PipelineSummary)
 			r.Post("/ai/score-lead", crmAIHandler.ScoreLead)
 		})
 
 		// Marketing OS. Tenant comes from the token; a mismatched X-Tenant-ID is refused.
 		r.Route("/os", func(r chi.Router) {
-			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), 30, 120, 0))
+			r.Use(mw.PublicChatLimits(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai-os"), sessionService.ResolveTenantID, 30, 120, 0))
 			r.Post("/ask", osHandler.Ask)
 			r.Post("/optimize", osHandler.Optimize)
 			// "Generate with AI" for one profile or brand-context field (free model tier).

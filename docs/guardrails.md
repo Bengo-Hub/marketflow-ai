@@ -1,6 +1,6 @@
 # AI guardrails
 
-Last updated 2026-11-17 (Sprint 26).
+Last updated 2026-11-18 (Sprint 26).
 
 MarketFlow's assistant (Vera), the Marketing team, custom agents and WhatsApp lead replies all run on language models. A model is probabilistic: the same rule written into a prompt can be talked around by a clever message. So every rule that matters is enforced in code, around the model, at three points: what goes in, what the model tries to do, and what comes out. The prompt still carries the rules, but only as guidance.
 
@@ -113,4 +113,4 @@ Format specifics stay in each format's own place: the playbooks (`library/data/p
 
 - Regex screens catch known phrasings, not all of them. The structural controls carry the guarantee: fences, taint, drafts, typed arguments, acting user and figure checks. A hosted guard model (Llama Guard 4, Prompt Guard 2) is not used yet; I will revisit it with measured miss rates.
 - Streaming replies show tokens as they arrive. The figure check replaces the bubble at the end when a reply fails, so a visitor may briefly see the draft.
-- The public widget's per-tenant limits key on the header the caller sends; a slug and a UUID for the same business count separately. The per-IP limit still holds.
+- The public widget's per-tenant limits (per minute and per day) key on the tenant the X-Tenant-ID header resolves to, in its canonical UUID form, through the same lookup the chat handler bills with. The slug and every spelling of the UUID (hyphenated, 32 hex digits, braced, `urn:uuid:`) share one bucket, so spelling a business several ways no longer multiplies its limits or lets someone empty the slug bucket the real widget uses. A header that does not resolve counts against a single "unresolved" bucket for the caller's network instead of getting its own. The per-IP limit groups an IPv6 caller by its /64; an IPv4 caller is still keyed on the exact address. The tenant still comes from a header the caller chooses, so the per-IP limit remains what makes it costly to spend another business's allowance.
