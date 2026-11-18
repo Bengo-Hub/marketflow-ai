@@ -50,6 +50,9 @@ type Settings struct {
 	NoPlanLaunchFee int     `json:"no_plan_launch_fee"` // credits per paid launch for clients without a plan
 	MaxShortlist    int     `json:"max_shortlist"`
 	MaxVariants     int     `json:"max_variants"`
+	// MarginFloor is the lowest acceptable margin on AI credits (0.30 = 30%). The platform
+	// cost report in marketflow-api flags any tenant or month whose margin falls below it.
+	MarginFloor float64 `json:"margin_floor"`
 	// MinDailyTestKES is the minimum daily spend per live ad for a platform to
 	// learn, by platform. It bounds how many ads a budget can test.
 	MinDailyTestKES map[string]float64 `json:"min_daily_test_kes"`
@@ -100,6 +103,7 @@ func Defaults() Registry {
 			FXRate: 129, FXBuffer: 0.05, RetryOverhead: 0.15, CreditCostBasis: 5,
 			FixedSurcharge: 0, ReserveCredits: 5, NoPlanLaunchFee: 10,
 			MaxShortlist: 5, MaxVariants: 20,
+			MarginFloor: 0.30,
 			MinDailyTestKES: map[string]float64{
 				"facebook": 300, "instagram": 300, "whatsapp": 300,
 				"tiktok": 2600, // TikTok's ad group minimum is about USD 20 a day

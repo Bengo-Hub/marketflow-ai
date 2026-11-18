@@ -49,6 +49,27 @@ func TestMergeOverrides(t *testing.T) {
 	}
 }
 
+func TestMarginFloorDefaultAndOverride(t *testing.T) {
+	if got := Defaults().Settings.MarginFloor; got != 0.30 {
+		t.Fatalf("default margin floor = %v, want 0.30", got)
+	}
+	r, err := Merge(Defaults(), `{"settings":{"margin_floor":0.4}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Settings.MarginFloor != 0.4 || r.Settings.FXRate != 129 {
+		t.Fatalf("margin floor not merged over the defaults: %+v", r.Settings)
+	}
+	// An override that leaves the floor out keeps the default.
+	r, err = Merge(Defaults(), `{"settings":{"fx_rate":140}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Settings.MarginFloor != 0.30 {
+		t.Fatalf("margin floor lost on an unrelated override: %v", r.Settings.MarginFloor)
+	}
+}
+
 func TestPlanSwahiliExample(t *testing.T) {
 	// "budget 3k this week" on Facebook with 100 credits, posters.
 	p, err := Defaults().Plan(PlanInput{AdBudgetKES: 3000, Days: 7, Platforms: []string{"facebook"}, CreditsAvailable: 100, HasPlan: true})
