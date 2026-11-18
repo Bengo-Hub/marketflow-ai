@@ -552,6 +552,13 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	r.Get("/v1/docs/*", httpapi.SwaggerUI)
 	r.Get("/api/v1/openapi.json", httpapi.OpenAPIJSON)
 
+	// The Vera widget's settings for a tenant (white label). Read on every page that embeds the
+	// widget, so it sits outside the public chat group: a page view must never count against the
+	// tenant's chat limits. Its own per-address limit is generous; browsers also cache it 5 minutes.
+	r.With(ratelimit.NewLimiter(redisClient, logger, "marketflow-ai").MiddlewareWith(ratelimit.IPKey,
+		ratelimit.Options{Name: "widget-config-ip", Limit: 60, Window: time.Minute})).
+		Get("/api/v1/public/widget-config", publicForms.WidgetConfig)
+
 	// Public chat endpoint — no auth required. The embeddable widget on
 	// /p/{slug} and external sites uses this. Rate-limited per-IP (15/min)
 	// and per-tenant (100/min) to prevent flooding.
