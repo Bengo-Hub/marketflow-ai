@@ -83,6 +83,8 @@ type Posters struct {
 	fetch  *http.Client
 	logger *zap.Logger
 	budget time.Duration
+	// endpoints are the provider endpoint ids (image_endpoints.go).
+	endpoints ImageEndpoints
 }
 
 // NewPosters builds the poster pipeline.
@@ -91,7 +93,8 @@ func NewPosters(keys KeySource, store Store, logger *zap.Logger) *Posters {
 		logger = zap.NewNop()
 	}
 	return &Posters{router: NewRouter(PosterRoutes), keys: keys, store: store, queue: newQueueClient(),
-		fetch: fetchClient(20 * time.Second), logger: logger.Named("media.posters"), budget: 120 * time.Second}
+		fetch: fetchClient(20 * time.Second), logger: logger.Named("media.posters"), budget: 120 * time.Second,
+		endpoints: DefaultImageEndpoints()}
 }
 
 // ErrNoRoute means no poster route could run (no keys, or every route failed).
@@ -250,25 +253,25 @@ func (p *Posters) scene(ctx context.Context, rt Route, req PosterRequest) (strin
 	case "fal/seedream-v5-lite":
 		// Seedream needs 2560x1440 to 4096x4096 pixels in total; the compositor scales down.
 		input = map[string]any{"prompt": prompt, "image_size": seedreamSize(req.Format), "num_images": 1}
-		endpoint := "fal-ai/bytedance/seedream/v5/lite/text-to-image"
+		endpoint := p.endpoints.SeedreamText
 		if len(req.PhotoURLs) > 0 {
-			endpoint = "fal-ai/bytedance/seedream/v5/lite/edit"
+			endpoint = p.endpoints.SeedreamEdit
 			input["image_urls"] = firstN(req.PhotoURLs, 10)
 		}
 		job = falJob(key, endpoint)
 	case "fal/nano-banana-2":
 		input = map[string]any{"prompt": prompt, "aspect_ratio": aspectFor(req.Format), "resolution": "2K", "output_format": "jpeg", "num_images": 1}
-		endpoint := "fal-ai/nano-banana-2"
+		endpoint := p.endpoints.NanoBanana2
 		if len(req.PhotoURLs) > 0 {
-			endpoint = "fal-ai/nano-banana-2/edit"
+			endpoint = p.endpoints.NanoBanana2Edit
 			input["image_urls"] = firstN(req.PhotoURLs, 10)
 		}
 		job = falJob(key, endpoint)
 	case "fal/nano-banana-pro":
 		input = map[string]any{"prompt": prompt, "aspect_ratio": aspectFor(req.Format), "resolution": "2K", "output_format": "jpeg", "num_images": 1}
-		endpoint := "fal-ai/nano-banana-pro"
+		endpoint := p.endpoints.NanoBananaPro
 		if len(req.PhotoURLs) > 0 {
-			endpoint = "fal-ai/nano-banana-pro/edit"
+			endpoint = p.endpoints.NanoBananaProEdit
 			input["image_urls"] = firstN(req.PhotoURLs, 10)
 		}
 		job = falJob(key, endpoint)
@@ -278,7 +281,7 @@ func (p *Posters) scene(ctx context.Context, rt Route, req PosterRequest) (strin
 		if colors := paletteRGB(req.Palette); len(colors) > 0 {
 			input["colors"] = colors
 		}
-		job = higgsfieldJob(key, "recraft/v4.1/text-to-image")
+		job = higgsfieldJob(key, p.endpoints.RecraftText)
 	default:
 		return "", fmt.Errorf("media: no builder for route %s", rt.Key)
 	}

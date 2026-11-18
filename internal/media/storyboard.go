@@ -99,6 +99,8 @@ type Storyboards struct {
 	posts  *Posters
 	queue  *queueClient
 	logger *zap.Logger
+	// endpoints are the provider endpoint ids (image_endpoints.go).
+	endpoints ImageEndpoints
 }
 
 // NewStoryboards builds the storyboard pipeline; stills are stored like posters.
@@ -107,7 +109,7 @@ func NewStoryboards(keys KeySource, store Store, posters *Posters, logger *zap.L
 		logger = zap.NewNop()
 	}
 	return &Storyboards{router: NewRouter(StillRoutes), keys: keys, store: store, posts: posters, queue: newQueueClient(),
-		logger: logger.Named("media.storyboards")}
+		logger: logger.Named("media.storyboards"), endpoints: DefaultImageEndpoints()}
 }
 
 // Ready reports whether storyboards can be made here.
@@ -277,9 +279,9 @@ func (s *Storyboards) generate(ctx context.Context, rt Route, format, prompt str
 		if format == "1080x1080" {
 			ar = "1:1"
 		}
-		job, input = higgsfieldJob(key, "higgsfield-ai/soul/v2/standard"), map[string]any{"prompt": prompt, "aspect_ratio": ar}
+		job, input = higgsfieldJob(key, s.endpoints.SoulStill), map[string]any{"prompt": prompt, "aspect_ratio": ar}
 	case "fal/seedream-v5-lite":
-		job = falJob(key, "fal-ai/bytedance/seedream/v5/lite/text-to-image")
+		job = falJob(key, s.endpoints.SeedreamText)
 		input = map[string]any{"prompt": prompt, "image_size": seedreamSize(format), "num_images": 1}
 	default:
 		return "", fmt.Errorf("media: no builder for route %s", rt.Key)
