@@ -107,8 +107,9 @@ type AIConfig struct {
 	// (ai_routing/policy); this model is only the provider's default.
 	ClaudeAPIKey string `env:"CLAUDE_API_KEY"`
 	ClaudeModel  string `env:"CLAUDE_MODEL" envDefault:"claude-haiku-5-5"`
-	// ClaudePlusModel is the premium_plus model of the default routing; empty keeps its default.
-	ClaudePlusModel string `env:"CLAUDE_PLUS_MODEL"`
+	// ClaudePlusModel is Anthropic's premium (premium_plus class) model when Platform >
+	// Providers has no plus_model; ClaudeModel is the same fallback for main_model.
+	ClaudePlusModel string `env:"CLAUDE_PLUS_MODEL" envDefault:"claude-sonnet-5-5"`
 	ClaudeBaseURL   string `env:"CLAUDE_BASE_URL" envDefault:"https://api.anthropic.com/v1"`
 	ClaudeVersion   string `env:"CLAUDE_VERSION" envDefault:"2023-06-01"`
 
@@ -123,12 +124,9 @@ type AIConfig struct {
 	TavilyBaseURL  string `env:"TAVILY_URL" envDefault:"https://api.tavily.com"`
 	TavilyDailyCap int    `env:"TAVILY_DAILY_CAP" envDefault:"20"`
 
-	// Google Custom Search (preferred web_search provider when configured;
-	// falls back to Tavily on 429 / quota exhausted).
-	GoogleAPIKey         string `env:"GOOGLE_API_KEY"`
-	GoogleCSEID          string `env:"GOOGLE_CSE_ID"`
-	GoogleSearchDailyCap int    `env:"GOOGLE_SEARCH_DAILY_CAP" envDefault:"80"`
-	WebSearchProvider    string `env:"WEB_SEARCH_PROVIDER" envDefault:"google"` // google | tavily
+	// WebSearchProvider is the web_search default when the platform has not set one in
+	// Platform > Providers: tavily or vertex_search.
+	WebSearchProvider string `env:"WEB_SEARCH_PROVIDER" envDefault:"tavily"`
 
 	// Platform API key for service-to-service calls back to marketflow-api
 	// (used by the book_meeting agent tool).

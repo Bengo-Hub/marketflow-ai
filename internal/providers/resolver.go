@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,12 +129,11 @@ func (r *Resolver) resolveGroqSettings(ctx context.Context) (*AISettings, error)
 	}, nil
 }
 
-// SearchSettings holds platform-level web-search provider config (Tavily /
-// Google Custom Search). Values are resolved DB-first then env-var fallback.
+// SearchSettings holds the platform-level Tavily config. Values are resolved DB-first then
+// env-var fallback.
 type SearchSettings struct {
-	Provider string // "google" | "tavily"
+	Provider string // "tavily"
 	APIKey   string
-	CSEID    string // Google Custom Search Engine ID; empty for Tavily
 	BaseURL  string
 	DailyCap int
 }
@@ -167,34 +167,50 @@ func (r *Resolver) ResolveTavilySettings(ctx context.Context) *SearchSettings {
 	}
 }
 
-// ResolveGoogleCSESettings returns the Google Custom Search config with
-// DB-first, env fallback, 5-min Redis cache. Reads provider_type=ai_search,
-// provider_name=custom_search (matches the UI catalog).
-func (r *Resolver) ResolveGoogleCSESettings(ctx context.Context) *SearchSettings {
-	cacheKey := r.namespace + ":provider:platform:ai_search:custom_search"
-	if cached, err := r.redis.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
-		var s SearchSettings
-		if json.Unmarshal([]byte(cached), &s) == nil {
-			return &s
-		}
+// VertexSearchSettings is Google Vertex AI Search (Discovery Engine), the replacement for the
+// Custom Search JSON API that Google closes on 2027-01-01. Saved as ai_search/vertex_search.
+type VertexSearchSettings struct {
+	ProjectID     string
+	Location      string // global, us or eu
+	EngineID      string
+	ServingConfig string
+	// ServiceAccountJSON (OAuth, the search method) or APIKey (searchLite, public website
+	// data stores only). The service account wins when both are set.
+	ServiceAccountJSON string
+	APIKey             string
+	DailyCap           int
+}
+
+// Configured reports whether a search can be sent.
+func (s VertexSearchSettings) Configured() bool {
+	return s.ProjectID != "" && s.EngineID != "" && (s.ServiceAccountJSON != "" || s.APIKey != "")
+}
+
+// ResolveVertexSearchSettings reads ai_search/vertex_search (cached five minutes by ResolveRaw).
+func (r *Resolver) ResolveVertexSearchSettings(ctx context.Context) VertexSearchSettings {
+	m, err := r.ResolveRaw(ctx, "ai_search", "vertex_search")
+	if err != nil {
+		return VertexSearchSettings{}
 	}
-	if settings, err := r.fetchRawSettings(ctx, "ai_search", "custom_search"); err == nil && settings["api_key"] != "" {
-		s := &SearchSettings{
-			Provider: "google",
-			APIKey:   settings["api_key"],
-			CSEID:    settings["cse_id"],
-			DailyCap: parseIntOr(settings["daily_cap"], r.envConfig.GoogleSearchDailyCap),
-		}
-		data, _ := json.Marshal(s)
-		_ = r.redis.Set(ctx, cacheKey, string(data), 5*time.Minute).Err()
-		return s
+	return VertexSearchSettings{
+		ProjectID:          strings.TrimSpace(m["project_id"]),
+		Location:           firstNonEmpty(strings.TrimSpace(m["location"]), "global"),
+		EngineID:           strings.TrimSpace(m["engine_id"]),
+		ServingConfig:      firstNonEmpty(strings.TrimSpace(m["serving_config"]), "default_search"),
+		ServiceAccountJSON: strings.TrimSpace(m["service_account_json"]),
+		APIKey:             strings.TrimSpace(m["api_key"]),
+		DailyCap:           parseIntOr(m["daily_cap"], 100),
 	}
-	return &SearchSettings{
-		Provider: "google",
-		APIKey:   r.envConfig.GoogleAPIKey,
-		CSEID:    r.envConfig.GoogleCSEID,
-		DailyCap: r.envConfig.GoogleSearchDailyCap,
+}
+
+// ProviderDefault returns the platform's default provider for a provider group (Platform >
+// Providers, "Set as default"; provider_defaults/platform, one key per group), or fallback.
+func (r *Resolver) ProviderDefault(ctx context.Context, group, fallback string) string {
+	m, err := r.ResolveRaw(ctx, "provider_defaults", "platform")
+	if err != nil {
+		return fallback
 	}
+	return firstNonEmpty(strings.TrimSpace(m[group]), fallback)
 }
 
 // fetchRawSettings returns the decrypted settings map for an arbitrary

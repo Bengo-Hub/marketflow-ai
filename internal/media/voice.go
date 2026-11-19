@@ -130,9 +130,28 @@ type Voices struct {
 	// overrides change deliveries' settings (MF_VOICE_DELIVERY_SETTINGS).
 	overrides map[string]DeliveryOverride
 	logger    *zap.Logger
+	// models returns the ElevenLabs standard and premium voice models saved in Platform >
+	// Providers (voice_model, voice_premium_model, preselected by Sync models); an empty value
+	// keeps eleven_v4_turbo or eleven_v4.
+	models func(ctx context.Context) (standard, premium string)
 
 	mu    sync.Mutex
 	plans map[string]planEntry // ElevenLabs plan per key
+}
+
+// WithModels sets where the ElevenLabs voice models come from.
+func (v *Voices) WithModels(fn func(ctx context.Context) (standard, premium string)) *Voices {
+	v.models = fn
+	return v
+}
+
+func firstNonEmptyModel(vals ...string) string {
+	for _, s := range vals {
+		if s = strings.TrimSpace(s); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 type planEntry struct {
@@ -387,9 +406,14 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 	key := v.keys(ctx, rt.Provider)
 	switch rt.Key {
 	case "elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-v4":
-		model := "eleven_v4_turbo"
+		standard, premium := "eleven_v4_turbo", "eleven_v4"
+		if v.models != nil {
+			s, p := v.models(ctx)
+			standard, premium = firstNonEmptyModel(s, standard), firstNonEmptyModel(p, premium)
+		}
+		model := standard
 		if rt.Key == "elevenlabs/eleven-v4" {
-			model = "eleven_v4"
+			model = premium
 		}
 		voice, ok := pickVoice(collection, v.choice(req), req.Language, model)
 		if !ok {

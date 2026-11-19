@@ -104,10 +104,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	modelRouter := llm.NewRouter(llm.Config{
 		Providers: newLLMProviders(resolver, &cfg.AI, logger),
 		Policy:    routingPolicySource(resolver),
-		// The configured Claude models (MF_AI_CLAUDE_MODEL, MF_AI_CLAUDE_PLUS_MODEL) win over the
-		// code defaults; they were not passed before, so the env value was ignored.
-		Defaults: llm.DefaultPolicy(llm.Defaults{OllamaModel: cfg.AI.OllamaFallbackModel,
-			ClaudeModel: cfg.AI.ClaudeModel, ClaudePlus: cfg.AI.ClaudePlusModel}),
+		// The default routing names provider aliases; the models behind them come from
+		// Platform > Providers, then MF_AI_* env (newLLMProviders).
+		Defaults: llm.DefaultPolicy(llm.Defaults{}),
 		Logger:    logger,
 	})
 	nanoLLM := modelRouter.Client(llm.Nano)
@@ -138,13 +137,16 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			agenttools.NewGetFAQ(db, logger),
 			agenttools.NewGetComplianceRules(),
 		}
-		// Build web_search: resolve credentials DB-first (ProviderSetting
-		// rows written from /platform/providers), env-var fallback. Prefer
-		// Google Custom Search when both are configured; Tavily is used as
-		// automatic fallback on 429/quota from Google.
+		// Build web_search: credentials DB-first (ProviderSetting rows written from
+		// /platform/providers), env fallback. The web_search group's default (Platform >
+		// Providers, "Set as default") picks Tavily or Google Vertex AI Search; Tavily is
+		// the default and always the fallback, so tenants keep a working search when
+		// Vertex is not configured. Google's Custom Search JSON API is gone (it shuts down
+		// on 2027-01-01).
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		tavilyCfg := resolver.ResolveTavilySettings(resolveCtx)
-		googleCfg := resolver.ResolveGoogleCSESettings(resolveCtx)
+		vertexCfg := resolver.ResolveVertexSearchSettings(resolveCtx)
+		searchDefault := resolver.ProviderDefault(resolveCtx, "web_search", cfg.AI.WebSearchProvider)
 		resolveCancel()
 
 		var tavily *agenttools.TavilySearcher
@@ -159,28 +161,23 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 			})
 		}
 		switch {
-		case cfg.AI.WebSearchProvider == "google" && googleCfg.APIKey != "" && googleCfg.CSEID != "":
+		case (searchDefault == "vertex_search" || tavily == nil) && vertexCfg.Configured():
 			var fallback agenttools.Searcher
 			if tavily != nil {
 				fallback = tavily
 			}
-			tools = append(tools, agenttools.NewGoogleSearcher(agenttools.GoogleSearchConfig{
-				APIKey:    googleCfg.APIKey,
-				CSEID:     googleCfg.CSEID,
-				DailyCap:  googleCfg.DailyCap,
-				Redis:     redisClient,
-				Namespace: cfg.Redis.Namespace,
-				Logger:    logger,
-				Fallback:  fallback,
+			tools = append(tools, agenttools.NewVertexSearcher(agenttools.VertexConfig{
+				ProjectID: vertexCfg.ProjectID, Location: vertexCfg.Location, EngineID: vertexCfg.EngineID,
+				ServingConfig: vertexCfg.ServingConfig, ServiceAccountJSON: vertexCfg.ServiceAccountJSON,
+				APIKey: vertexCfg.APIKey, DailyCap: vertexCfg.DailyCap,
+				Redis: redisClient, Namespace: cfg.Redis.Namespace, Logger: logger, Fallback: fallback,
 			}))
-			logger.Info("web_search: Google Custom Search (DB-resolved)",
-				zap.Bool("has_tavily_fallback", tavily != nil),
-				zap.Int("daily_cap", googleCfg.DailyCap))
+			logger.Info("web_search: Google Vertex AI Search", zap.Bool("has_tavily_fallback", tavily != nil))
 		case tavily != nil:
 			tools = append(tools, tavily)
 			logger.Info("web_search: Tavily", zap.Int("daily_cap", tavilyCfg.DailyCap))
 		default:
-			logger.Warn("neither Google Custom Search nor Tavily configured; web_search tool disabled — configure at /platform/providers")
+			logger.Warn("neither Tavily nor Vertex AI Search configured; web_search tool disabled, configure at /platform/providers")
 		}
 		// query_service_data: queries live data from any registered Codevertex
 		// microservice (ordering, inventory, treasury, codevertex-website, etc.)
@@ -309,12 +306,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 				}),
 				meetingPrep,
 			)
-			// Image search uses the same Google CSE key as web_search.
-			if googleCfg.APIKey != "" && googleCfg.CSEID != "" {
-				// It shares web_search's per-tenant daily Google cap.
-				tools = append(tools, agenttools.NewImageSearch(googleCfg.APIKey, googleCfg.CSEID, logger).
-					WithQuota(redisClient, cfg.Redis.Namespace, googleCfg.DailyCap))
-			}
+			// search_images ran on Google's Custom Search JSON API, which shuts down on
+			// 2027-01-01, so it went with that API; product photos come from the catalogue.
 		} else {
 			logger.Warn("MF_AI_MARKETFLOW_API_KEY not set; service tools disabled (book_meeting, get_fbo_profile, check_integrations, generate_links)")
 		}
@@ -493,7 +486,18 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		// owner's collection (codevertex-voices unless set) and default list preferred.
 		voices := media.NewVoices(mediaKeySource(resolver), store, logger).
 			WithCollection(os.Getenv("MF_ELEVENLABS_VOICE_COLLECTION")).
-			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES")))
+			WithDefaults(splitList(os.Getenv("MF_ELEVENLABS_DEFAULT_VOICES"))).
+			// The voice models follow Platform > Providers (ElevenLabs, Sync models).
+			WithModels(func(ctx context.Context) (string, string) {
+				if resolver == nil {
+					return "", ""
+				}
+				m, err := resolver.ResolveRaw(ctx, "media", "elevenlabs")
+				if err != nil {
+					return "", ""
+				}
+				return m["voice_model"], m["voice_premium_model"]
+			})
 		// Presenter ads: the presenter routes, the clip routes for product and b-roll
 		// scenes, and the scene cache's files in the same store.
 		// Audio by plan (owner, 2026-11-12): voice clean up, sound cues, backing track and

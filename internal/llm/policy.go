@@ -10,6 +10,8 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -48,6 +50,7 @@ const (
 	ModelMain     = ""          // the provider's main (responder) model
 	ModelFallback = "@fallback" // the provider's fallback model
 	ModelRouter   = "@router"   // the provider's small router model
+	ModelPremium  = "@premium"  // the provider's premium model (Anthropic's Sonnet)
 )
 
 // Target is one model a class may use, in fallback order.
@@ -82,39 +85,86 @@ type DecideSettings struct {
 type Policy struct {
 	Classes map[Class][]Target `json:"classes"`
 	Decide  DecideSettings     `json:"decide"`
+	// Prices are USD per million tokens by model family (a case-insensitive regular expression
+	// on the model id), for targets that carry no price of their own. A target follows the
+	// model its provider is set to, so its cost estimate follows that model too. Stored entries
+	// merge over the defaults; the provider's "*" entry prices a model no family matches.
+	Prices map[string]map[string]Price `json:"prices,omitempty"`
 }
 
-// Defaults carries the env-configured model names the default policy uses.
-type Defaults struct {
-	OllamaModel string
-	OpenAIModel string
-	ClaudeModel string // premium model; empty uses claude-haiku-5-5
-	ClaudePlus  string // premium_plus model; empty uses claude-sonnet-5-5
+// Price is a model's list price in USD per million tokens.
+type Price struct {
+	In  float64 `json:"input_usd_per_m"`
+	Out float64 `json:"output_usd_per_m"`
 }
+
+// DefaultPrices is the documented fallback price list (Groq's gpt-oss checked 2026-10-24, the
+// rest 2026-10-22). An unlisted model takes its provider's "*" price, set at the dearest known
+// model so a new model is never estimated as cheaper than it is.
+func DefaultPrices() map[string]map[string]Price {
+	return map[string]map[string]Price{
+		"groq": {
+			`gpt-oss-120b`: {0.15, 0.60},
+			`gpt-oss-20b`:  {0.075, 0.30},
+			"*":            {0.15, 0.60},
+		},
+		"openai": {
+			`^gpt-4o-mini`: {0.15, 0.60},
+			"*":            {2.50, 10.00},
+		},
+		"anthropic": {
+			`haiku`:  {0.10, 0.50},
+			`sonnet`: {2.00, 10.00},
+			"*":      {2.00, 10.00},
+		},
+	}
+}
+
+// PriceFor prices a resolved model: a provider family match first, then the provider's "*".
+// The local model (ollama) and an unknown provider cost nothing.
+func (p Policy) PriceFor(provider, model string) Price {
+	table := p.Prices[provider]
+	keys := make([]string, 0, len(table))
+	for k := range table {
+		if k != "*" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) }) // most specific first
+	for _, k := range keys {
+		if re, err := regexp.Compile("(?i)" + k); err == nil && re.MatchString(model) {
+			return table[k]
+		}
+	}
+	return table["*"]
+}
+
+// Defaults is kept for callers that build the default policy. Model names no longer come from
+// here: every default target names an alias resolved against the provider's configured models
+// (Platform > Providers, then the env fallback), so syncing or changing a provider's model
+// moves the routing with it.
+type Defaults struct{}
 
 func f(v float64) *float64 { return &v }
 
-// DefaultPolicy is the routing used when the platform has not saved one. Prices are
-// list prices (Groq's gpt-oss checked 2026-10-24, the rest 2026-10-22) and only feed
-// the cost estimate. Groq's free tier and the local model cost nothing, so the light
-// class tries them before any paid provider.
-func DefaultPolicy(d Defaults) Policy {
-	ollama := firstNonEmpty(d.OllamaModel, "llama3.1:8b")
-	openai := firstNonEmpty(d.OpenAIModel, "gpt-4o-mini")
-	haiku := firstNonEmpty(d.ClaudeModel, "claude-haiku-5-5")
-	sonnet := firstNonEmpty(d.ClaudePlus, "claude-sonnet-5-5")
-
+// DefaultPolicy is the routing used when the platform has not saved one. Every target is an
+// alias of its provider's configured models: Groq's responder, fallback and router; OpenAI's
+// main model; Anthropic's main (Haiku) and premium (Sonnet) models; the local Ollama model.
+// Prices come from Prices by the resolved model and only feed the cost estimate. Groq's free
+// tier and the local model cost nothing, so the light class tries them before any paid
+// provider. A stored policy that names a model outright still wins for its class.
+func DefaultPolicy(_ Defaults) Policy {
 	// Timeouts are per attempt and sit inside the router's class budget (nano 20s,
 	// standard 45s, premium 70s, premium_plus 90s), so the worst chain still ends
 	// in time to answer. The local model is last: it is free but slow under load.
-	groqMain := Target{Provider: "groq", Model: ModelMain, TimeoutSeconds: 20, InputUSDPerM: 0.15, OutputUSDPerM: 0.60}
-	groqSmall := Target{Provider: "groq", Model: ModelFallback, TimeoutSeconds: 15, InputUSDPerM: 0.075, OutputUSDPerM: 0.30}
-	groqRouter := Target{Provider: "groq", Model: ModelRouter, TimeoutSeconds: 8, InputUSDPerM: 0.075, OutputUSDPerM: 0.30}
-	local := Target{Provider: "ollama", Model: ollama, TimeoutSeconds: 25}
-	gpt := Target{Provider: "openai", Model: openai, TimeoutSeconds: 15, InputUSDPerM: 0.15, OutputUSDPerM: 0.60}
-	claudeLow := Target{Provider: "anthropic", Model: haiku, Effort: "low", TimeoutSeconds: 25, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
-	claudeMed := Target{Provider: "anthropic", Model: haiku, Effort: "medium", TimeoutSeconds: 45, InputUSDPerM: 0.10, OutputUSDPerM: 0.50}
-	claudePlus := Target{Provider: "anthropic", Model: sonnet, Effort: "medium", TimeoutSeconds: 60, InputUSDPerM: 2.00, OutputUSDPerM: 10.00}
+	groqMain := Target{Provider: "groq", Model: ModelMain, TimeoutSeconds: 20}
+	groqSmall := Target{Provider: "groq", Model: ModelFallback, TimeoutSeconds: 15}
+	groqRouter := Target{Provider: "groq", Model: ModelRouter, TimeoutSeconds: 8}
+	local := Target{Provider: "ollama", Model: ModelMain, TimeoutSeconds: 25}
+	gpt := Target{Provider: "openai", Model: ModelMain, TimeoutSeconds: 15}
+	claudeLow := Target{Provider: "anthropic", Model: ModelMain, Effort: "low", TimeoutSeconds: 25}
+	claudeMed := Target{Provider: "anthropic", Model: ModelMain, Effort: "medium", TimeoutSeconds: 45}
+	claudePlus := Target{Provider: "anthropic", Model: ModelPremium, Effort: "medium", TimeoutSeconds: 60}
 
 	// Light class: Groq's small model, then its main one (both on the free tier),
 	// then the local model, and only then the paid providers.
@@ -139,6 +189,7 @@ func DefaultPolicy(d Defaults) Policy {
 			},
 			MonthlyUSDCeiling: 20,
 		},
+		Prices: DefaultPrices(),
 	}
 }
 
@@ -153,7 +204,7 @@ func ParsePolicy(raw string, base Policy) (Policy, error) {
 	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
 		return base, fmt.Errorf("decode routing policy: %w", err)
 	}
-	out := Policy{Classes: make(map[Class][]Target, len(base.Classes)), Decide: base.Decide}
+	out := Policy{Classes: make(map[Class][]Target, len(base.Classes)), Decide: base.Decide, Prices: mergePrices(base.Prices, stored.Prices)}
 	for c, ts := range base.Classes {
 		out.Classes[c] = ts
 	}
@@ -188,6 +239,30 @@ func ParsePolicy(raw string, base Policy) (Policy, error) {
 		out.Decide.MonthlyUSDCeiling = stored.Decide.MonthlyUSDCeiling
 	}
 	return out, nil
+}
+
+func mergePrices(base, stored map[string]map[string]Price) map[string]map[string]Price {
+	if len(base) == 0 && len(stored) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]Price, len(base)+len(stored))
+	for prov, t := range base {
+		out[prov] = make(map[string]Price, len(t))
+		for k, v := range t {
+			out[prov][k] = v
+		}
+	}
+	for prov, t := range stored {
+		if out[prov] == nil {
+			out[prov] = map[string]Price{}
+		}
+		for k, v := range t {
+			if _, err := regexp.Compile("(?i)" + k); k == "*" || err == nil {
+				out[prov][k] = v
+			}
+		}
+	}
+	return out
 }
 
 // Threshold returns the confidence a decision needs, defaulting to 0.7.

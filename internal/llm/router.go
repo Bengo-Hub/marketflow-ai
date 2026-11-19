@@ -18,6 +18,7 @@ type Models struct {
 	Main     string
 	Fallback string
 	Router   string
+	Premium  string
 }
 
 // Provider is a resolved provider: a client plus its configured models.
@@ -149,14 +150,21 @@ func (r *Router) Policy(ctx context.Context) Policy {
 // usable lists the targets that can serve req, healthy ones first.
 func (r *Router) usable(ctx context.Context, class Class, req ai.ChatRequest) []resolvedTarget {
 	var out []resolvedTarget
-	for _, t := range r.order(r.Policy(ctx).Classes[class]) {
+	policy := r.Policy(ctx)
+	for _, t := range r.order(policy.Classes[class]) {
 		p, ok := r.resolve(ctx, t)
 		if !ok || (t.Provider == "anthropic" && len(req.Tools) > 0) {
 			// Tool loops stay on OpenAI-compatible providers: a Claude tool turn would
 			// need its thinking blocks replayed, which this message format drops.
 			continue
 		}
-		out = append(out, resolvedTarget{t: t, p: p, model: modelFor(t, p)})
+		model := modelFor(t, p)
+		if !paidTarget(t) && policy.Prices != nil {
+			// Unpriced targets take the price of the model they resolve to.
+			pr := policy.PriceFor(t.Provider, model)
+			t.InputUSDPerM, t.OutputUSDPerM = pr.In, pr.Out
+		}
+		out = append(out, resolvedTarget{t: t, p: p, model: model})
 	}
 	return out
 }
@@ -421,6 +429,8 @@ func modelFor(t Target, p Provider) string {
 		return firstNonEmpty(p.Models.Fallback, p.Models.Main)
 	case ModelRouter:
 		return firstNonEmpty(p.Models.Router, p.Models.Fallback, p.Models.Main)
+	case ModelPremium:
+		return firstNonEmpty(p.Models.Premium, p.Models.Main)
 	default:
 		return t.Model
 	}

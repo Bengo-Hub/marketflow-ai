@@ -67,18 +67,24 @@ func (s *llmProviders) load(parent context.Context) map[string]llm.Provider {
 			},
 		}
 	}
+	// Every provider's models come from Platform > Providers first (what Sync models
+	// preselects), then the env fallback, so the default routing follows them.
 	if s.cfg.OllamaURL != "" {
-		// Cluster-internal and keyless; the policy names the model.
+		// Cluster-internal and keyless.
+		local, _ := s.resolver.ResolveRaw(ctx, "ai_embed", "ollama")
 		set["ollama"] = llm.Provider{
 			Client: ai.NewClient(s.cfg.OllamaURL+"/v1", "", s.logger),
-			Models: llm.Models{Main: s.cfg.OllamaFallbackModel},
+			Models: llm.Models{Main: firstNonEmpty(local["fallback_model"], s.cfg.OllamaFallbackModel)},
 		}
 	}
 	if c, model, err := s.resolver.ResolveOpenAIClient(ctx); err == nil {
-		set["openai"] = llm.Provider{Client: c, Models: llm.Models{Main: model}}
+		raw, _ := s.resolver.ResolveRaw(ctx, "ai_llm", "openai")
+		set["openai"] = llm.Provider{Client: c, Models: llm.Models{Main: model, Premium: raw["premium_model"]}}
 	}
 	if c, model, err := s.resolver.ResolveAnthropicClientFromDB(ctx); err == nil {
-		set["anthropic"] = llm.Provider{Client: c, Models: llm.Models{Main: model}}
+		raw, _ := s.resolver.ResolveRaw(ctx, "ai_llm", "anthropic")
+		set["anthropic"] = llm.Provider{Client: c, Models: llm.Models{Main: model,
+			Premium: firstNonEmpty(raw["plus_model"], s.cfg.ClaudePlusModel)}}
 	}
 	names := make([]string, 0, len(set))
 	for n := range set {
