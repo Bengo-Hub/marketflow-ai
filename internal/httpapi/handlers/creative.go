@@ -28,7 +28,7 @@ type posterRequest struct {
 	PhotoURLs []string `json:"photo_urls"` // the owner's product photos
 	Format    string   `json:"format"`     // 1080x1080 | 1080x1350 | 1080x1920
 	Tier      string   `json:"tier"`       // standard | premium
-	Palette   [][3]int `json:"palette"`
+	Palette   posterPalette `json:"palette"` // hex strings from marketflow-api, or RGB triples
 	Accent    string   `json:"accent"` // brand colour, #rrggbb
 	LogoURL   string   `json:"logo_url"`
 	Headline  string   `json:"headline"`
@@ -118,7 +118,7 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := h.posters.Make(ctx, media.PosterRequest{
 		TenantID: tenantID, VersionID: req.VersionID, Prompt: req.Prompt, PhotoURLs: req.PhotoURLs,
-		Format: req.Format, Tier: req.Tier, Palette: req.Palette, LogoURL: req.LogoURL,
+		Format: req.Format, Tier: req.Tier, Palette: [][3]int(req.Palette), LogoURL: req.LogoURL,
 		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
 	})
 	if err != nil {
