@@ -21,8 +21,14 @@ const (
 	ActionApprove = "approve"
 	ActionRender  = "render"
 	// ActionPublish approves the finished ad and posts it to the business's connected accounts
-	// (organic only; paid ads are never started from WhatsApp).
+	// (organic only; a boost is its own step below).
 	ActionPublish = "publish"
+	// ActionBoost (the Boost it tap under a posted ad) asks marketflow-api for the quote of the
+	// default boost; nothing is spent. ActionBoostLaunch (the Confirm boost tap under that quote)
+	// launches it through the portal's own boost checks, PAUSED until Meta's review and the
+	// funding (owner, 2026-11-19).
+	ActionBoost       = "boost"
+	ActionBoostLaunch = "boost_launch"
 )
 
 // Approval is one pending WhatsApp approval. A user has at most one: a new code replaces the
@@ -43,6 +49,10 @@ type Approval struct {
 	Tier string `json:"tier,omitempty"`
 	// Option names the cheaper option a code approves, for the messages ("" for the plan).
 	Option string `json:"option,omitempty"`
+	// BoostBudget (whole units of the ad account's currency) and BoostDays are the boost a
+	// Confirm boost code launches: exactly what the quote showed.
+	BoostBudget int64 `json:"boost_budget,omitempty"`
+	BoostDays   int   `json:"boost_days,omitempty"`
 	// OTPDone marks an approval whose one-time code was already confirmed (or not needed), so a
 	// top-up that resumes it does not ask again.
 	OTPDone  bool      `json:"otp_done,omitempty"`

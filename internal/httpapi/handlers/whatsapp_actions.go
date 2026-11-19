@@ -73,6 +73,10 @@ func (h *OSHandler) runApproval(ctx context.Context, r *http.Request, tenantID u
 		h.whatsAppRender(ctx, tenantID, req, a, out)
 	case osrun.ActionPublish:
 		h.whatsAppPublish(ctx, tenantID, req, a, out)
+	case osrun.ActionBoost:
+		h.whatsAppBoostQuote(ctx, tenantID, req, a, out)
+	case osrun.ActionBoostLaunch:
+		h.whatsAppBoostLaunch(ctx, tenantID, req, a, "", "", out)
 	default:
 		out.Reply = "That code is not for anything I can do. Send your request again."
 	}
@@ -150,7 +154,7 @@ type publishResult struct {
 // whatsAppPublish approves the finished ad and posts it to the business's connected accounts
 // through marketflow-api, which applies the Studio's own checks: the approving roles, active
 // accounts, each platform's switch, the preflight, and the compliance and restricted-category
-// holds. Paid ads are never started here.
+// holds. A paid boost is never started here; the reply only offers the Boost it step.
 func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, out *WhatsAppAskResponse) {
 	studio := link(req.PortalURL, req.TenantSlug, "/studio")
 	calendar := link(req.PortalURL, req.TenantSlug, "/publishing")
@@ -184,11 +188,20 @@ func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req
 	for _, p := range res.Posted {
 		names = append(names, p.DisplayName+" ("+p.Platform+")")
 	}
-	fmt.Fprintf(&b, "Approved and sent for posting to %s. I'll tell you here when each post is out. Your posting calendar: %s", strings.Join(names, ", "), calendar)
+	fmt.Fprintf(&b, "Approved and sent for posting to %s. I'll tell you here when each post is out.", strings.Join(names, ", "))
 	for _, s := range res.Skipped {
 		fmt.Fprintf(&b, "\nNot posted to %s: %s.", s.DisplayName, trimRunes(s.Reason, 160))
 	}
-	out.Reply = b.String()
+	posted := b.String()
+	out.Reply = posted + " Your posting calendar: " + calendar
+	// The paid boost is offered as its own step: the tap only fetches a quote (whatsapp_boost.go).
+	if code, ok := h.boostOffer(ctx, a); ok {
+		out.Reply += fmt.Sprintf("\n\nTo see what a paid boost of this ad costs, reply YES %s. Nothing is spent until you confirm the quote.", code)
+		out.Interactive = &waInteractive{
+			Body:    posted + "\n\n" + approveLine(btnBoost, code, "see what a paid boost costs (nothing is spent until you confirm)", 0),
+			Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, a.RunID, code), Title: btnBoost}},
+		}
+	}
 }
 
 // publishFromWhatsApp asks marketflow-api to approve the version and post it organically to every
@@ -325,7 +338,9 @@ func (h *OSHandler) chooseCheaper(ctx context.Context, tenantID uuid.UUID, req w
 // ── Buy credits ──────────────────────────────────────────────────────────────
 
 // buyTitle is the button: "Buy 60 credits" (Meta allows 20 characters, so the price is in the text).
-func buyTitle(units int) string { return trimRunes(fmt.Sprintf("%s%d credits", btnBuyPrefix, units), 20) }
+func buyTitle(units int) string {
+	return trimRunes(fmt.Sprintf("%s%d credits", btnBuyPrefix, units), 20)
+}
 
 // kes writes a price for a message: KES 1,750.
 func kes(v float64) string {

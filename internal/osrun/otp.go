@@ -36,7 +36,12 @@ type PendingOTP struct {
 // ActionHash identifies exactly what an approval does: the action, the tenant, the user, the
 // run, the version, the tier and the credits. A one-time code confirms this hash and nothing else.
 func ActionHash(a Approval) string {
-	s := strings.Join([]string{a.Action, a.TenantID, a.UserID, a.RunID, a.VersionID, a.Tier, strconv.Itoa(a.Credits)}, "|")
+	parts := []string{a.Action, a.TenantID, a.UserID, a.RunID, a.VersionID, a.Tier, strconv.Itoa(a.Credits)}
+	if a.BoostBudget != 0 || a.BoostDays != 0 {
+		// Only boosts carry these, so the hash of every other approval stays as it was.
+		parts = append(parts, strconv.FormatInt(a.BoostBudget, 10), strconv.Itoa(a.BoostDays))
+	}
+	s := strings.Join(parts, "|")
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }

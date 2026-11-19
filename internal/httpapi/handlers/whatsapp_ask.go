@@ -121,6 +121,11 @@ func (h *OSHandler) WhatsAppAsk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	// A 6-digit code answering a boost above the tenant's confirmation limit (whatsapp_boost.go).
+	if out, handled := h.boostOTPReplyMsg(ctx, tenantID, req); handled {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	if h.codes != nil && req.UserID != "" && isBuyReply(req.Text) {
 		if _, pending := h.codes.PendingBuy(ctx, tenantID.String(), req.UserID); pending {
 			out := WhatsAppAskResponse{Pass: true, Verdict: tapVerdict, Route: "buy"}
