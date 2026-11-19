@@ -57,12 +57,14 @@ var Deliveries = map[string]Delivery{
 		UseCases:  []string{"advertisement", "social_media", "conversational"},
 		Traits:    []string{"confident", "warm", "upbeat", "energetic", "professional", "casual"}},
 	DeliveryUGC: {Key: DeliveryUGC, Name: "UGC, casual and friendly",
-		Settings:  VoiceSettings{Stability: 0.3, SimilarityBoost: 0.75, Style: 0.45, Speed: 1.05, SpeakerBoost: true},
-		Direction: "[Casual, friendly, conversational tone, like talking to a friend]",
+		// 2026-11-19 audit: stability 0.3 with style 0.45 and speaker boost (the most expressive
+		// setting) gave pitch swings that sounded synthetic. A real creator talks steadily.
+		Settings:  VoiceSettings{Stability: 0.5, SimilarityBoost: 0.75, Style: 0.15, Speed: 1.0, SpeakerBoost: false},
+		Direction: "[casual, relaxed]",
 		UseCases:  []string{"social_media", "conversational"},
 		Traits:    []string{"casual", "warm", "relatable", "natural", "joyful", "friendly"}},
 	DeliveryKids: {Key: DeliveryKids, Name: "Kids and parents, cheerful",
-		Settings:  VoiceSettings{Stability: 0.45, SimilarityBoost: 0.75, Style: 0.3, Speed: 1.0, SpeakerBoost: true},
+		Settings:  VoiceSettings{Stability: 0.5, SimilarityBoost: 0.75, Style: 0.2, Speed: 1.0, SpeakerBoost: false},
 		Direction: "[Warm, cheerful and encouraging tone]",
 		UseCases:  []string{"informative_educational", "conversational", "narrative_story"},
 		Traits:    []string{"warm", "cheerful", "joyful", "friendly", "calm"}},

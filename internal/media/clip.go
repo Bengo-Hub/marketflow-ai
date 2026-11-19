@@ -289,7 +289,9 @@ func clipPrompt(p string) string {
 	if p == "" {
 		p = "Slow, smooth camera push-in; subtle natural motion in the scene"
 	}
-	return p + ". No text, no letters, no logos added. Keep the product unchanged."
+	// Image-to-video models invent subtitles and signage even when told "no text" (2026-11-19
+	// audit: garbled captions in Hailuo clips), so the ban names each kind of writing.
+	return p + ". No text, no letters, no subtitles, no captions, no signs, no screen writing, no logos added. Keep the product unchanged."
 }
 
 // save downloads the provider's clip to path (bounded).
