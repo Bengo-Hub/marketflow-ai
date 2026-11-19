@@ -163,12 +163,11 @@ The user is asking about a specific Codevertex service or platform. Follow this 
 	case ai.IntentDataQuery:
 		b.WriteString(`
 The user wants live data from their account. Follow this chain:
-1. FIRST call query_service_data with the service and resource that matches the question:
-   - "orders" → service=ordering, resource=orders
-   - "plans" → service=subscriptions, resource=plans
-   - "courses" / "enrollments" → service=codevertex, resource=courses or enrollments
-   - "stock" / "inventory" → service=inventory, resource=products
-   - promotions, deals and the like → try the service; an unknown resource returns the valid list.
+1. FIRST call query_service_data with the service that matches the question:
+   - courses or enrollments: service=codevertex, resource=courses or enrollments
+   - orders, promotions, deals, catalogue: service=ordering, resource=list, then one resource from that list
+   - stock or inventory: service=inventory, resource=list, then one resource from that list
+   - plans: service=subscriptions, resource=list, then one resource from that list
 2. Summarise the results in natural language — do NOT dump raw JSON.
 3. Invoices, payments, balances and billing are not available here: point the user to the books (treasury) portal instead.
 4. If the service returns an error, explain what went wrong and suggest the user check the relevant portal.

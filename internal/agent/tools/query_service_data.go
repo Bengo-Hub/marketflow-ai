@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,34 +32,13 @@ var serviceRegistry = map[string]string{
 	"codevertex": "http://codevertex-website.codevertex.svc.cluster.local:80",
 }
 
-// resourcePaths maps (service, resource) pairs to fixed internal read paths. Decision 61: no
-// mutations, and no reads of money (invoices, transactions, balances, subscriptions billing), auth,
-// users, payroll, HR, audit or logs. Further routes come from endpoint discovery once the platform
-// owner approves them (see discovered).
+// resourcePaths maps (service, resource) pairs to fixed read paths. Decision 61: no mutations,
+// and no reads of money (invoices, transactions, balances, subscriptions billing), auth, users,
+// payroll, HR, audit or logs. The other services' routes come from endpoint discovery once the
+// platform owner approves them (see discovered); the /api/v1/internal/* paths once listed here
+// for ordering, inventory, pos, logistics, subscriptions and marketflow are served by none of
+// those services, so every call to them failed.
 var resourcePaths = map[string]map[string]string{
-	"ordering": {
-		"orders":   "/api/v1/internal/orders",
-		"products": "/api/v1/internal/products",
-	},
-	"inventory": {
-		"products": "/api/v1/internal/products",
-		"stock":    "/api/v1/internal/stock",
-	},
-	"subscriptions": {
-		"plans": "/api/v1/internal/plans",
-	},
-	"pos": {
-		"sessions": "/api/v1/internal/sessions",
-		"sales":    "/api/v1/internal/sales",
-	},
-	"logistics": {
-		"shipments": "/api/v1/internal/shipments",
-		"routes":    "/api/v1/internal/routes",
-	},
-	"marketflow": {
-		"leads":     "/api/v1/internal/leads",
-		"campaigns": "/api/v1/internal/campaigns",
-	},
 	// codevertex-website: exposes read-safe admin and public endpoints.
 	// enrollments returns paginated enrollment records for a tenant/course.
 	// courses returns the public course catalog.
@@ -89,8 +69,11 @@ func totalOnly(v any) any {
 // Codevertex microservice using the shared INTERNAL_SERVICE_KEY.
 // Results are returned as JSON for the LLM to summarize into natural language.
 //
-// Tenant scoping is enforced: tenantID is always injected as a query parameter
-// so cross-tenant data leakage is impossible even if the agent tries.
+// Tenant scoping: the tenant comes from the run, never from the model. Fixed resources get it as
+// tenant_id and X-Tenant-ID; discovered routes also carry it in their path, filled in by
+// marketflow-api, which offers only routes with a tenant path param (endpoints.Offerable). Model
+// filters cannot name a tenant (safeFilterKey) and path values cannot add segments (fillParams).
+// Personal details are dropped from every response (redactPII).
 type QueryServiceData struct {
 	serviceKey string
 	apiURL     string // marketflow-api, for the approved discovered routes
@@ -217,7 +200,7 @@ func fillParams(raw string, names []string, values map[string]string) (string, e
 func (*QueryServiceData) Name() string { return "query_service_data" }
 
 func (*QueryServiceData) Description() string {
-	return "Reads live marketing data from a Codevertex service (ordering, inventory, pos, logistics, subscriptions plans, marketflow, codevertex courses, plus any routes the platform approved). Use for orders, products, stock, promotions, deals, delivery zones, courses and similar. Always give 'service' and 'resource'; an unknown resource returns the valid list, and a resource that needs path values says which to pass in 'params'. Read only, scoped to this business. Money, payments, users, staff and logs are never available."
+	return "Reads live marketing data for this business from a Codevertex service (ordering, inventory, pos, logistics, subscriptions, notifications, codevertex courses): the routes the platform approved, such as promotions, deals, top sellers, catalogue, stock history and delivery analytics. Call with resource 'list' first to see what this service offers, then with one of those resources; a resource that needs path values says which to pass in 'params'. Read only, scoped to this business, with people's contact details removed. Money, payments, users, staff and logs are never available."
 }
 
 func (*QueryServiceData) Schema() map[string]any {
@@ -235,7 +218,7 @@ func (*QueryServiceData) Schema() map[string]any {
 			},
 			"resource": map[string]any{
 				"type":        "string",
-				"description": "Resource type to fetch (e.g. 'orders', 'invoices', 'products', 'subscriptions')",
+				"description": "Resource to fetch, or 'list' for the resources this service offers (e.g. 'promotions_deals', 'catalog_items_by_category')",
 			},
 			"filters": map[string]any{
 				"type":                 "object",
@@ -282,6 +265,19 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 	baseURL, ok := serviceRegistry[args.Service]
 	if !ok {
 		return "", fmt.Errorf("unknown service %q; valid: %s", args.Service, strings.Join(keys(serviceRegistry), ", "))
+	}
+
+	// "list" names what this business can read from the service.
+	if args.Resource == "list" {
+		valid := keys(resourcePaths[args.Service])
+		for _, d := range t.discovered(ctx, tenantID) {
+			if d.Service == args.Service {
+				valid = append(valid, d.Resource)
+			}
+		}
+		sort.Strings(valid)
+		out, _ := json.Marshal(map[string]any{"service": args.Service, "resources": valid})
+		return string(out), nil
 	}
 
 	// A fixed resource first, then the routes the platform owner approved through discovery.
@@ -357,7 +353,8 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 	// The LLM only needs a summary, not raw dumps of thousands of records.
 	var result any
 	if err := json.Unmarshal(body, &result); err != nil {
-		return string(body[:min(len(body), 2000)]), nil
+		// A file or page cannot be checked for personal details, so it is not passed on.
+		return "", fmt.Errorf("%s/%s did not return JSON data", args.Service, args.Resource)
 	}
 
 	if countsOnly[args.Service+"/"+args.Resource] {
@@ -369,12 +366,21 @@ func (t *QueryServiceData) Invoke(ctx context.Context, tenantID uuid.UUID, argsJ
 		result = arr[:args.Limit]
 	}
 
-	out, _ := json.Marshal(map[string]any{
+	// People's details never reach the model: contact fields, customer and staff records and
+	// secrets are dropped from every response, fixed or discovered.
+	dropped := 0
+	result = redactPII(result, &dropped)
+
+	payload := map[string]any{
 		"service":  args.Service,
 		"resource": args.Resource,
 		"count":    countOf(result),
 		"data":     result,
-	})
+	}
+	if dropped > 0 {
+		payload["withheld_fields"] = dropped
+	}
+	out, _ := json.Marshal(payload)
 
 	if len(out) > 8000 {
 		out = out[:8000]

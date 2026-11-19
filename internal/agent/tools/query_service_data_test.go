@@ -76,6 +76,10 @@ func TestDiscoveredRoutes(t *testing.T) {
 	if _, err := q.Invoke(ctx, testTenant, `{"service":"ordering","resource":"elsewhere"}`); err == nil {
 		t.Fatal("a discovered URL outside the known services must be refused")
 	}
+	list, err := q.Invoke(ctx, testTenant, `{"service":"ordering","resource":"list"}`)
+	if err != nil || !strings.Contains(list, `"catalog_items_by_itemid"`) || !strings.Contains(list, `"promotions_deals"`) {
+		t.Fatalf("list = %s, %v", list, err)
+	}
 	if n := toolCalls.Load(); n != 1 {
 		t.Fatalf("the tool list should be cached per tenant, fetched %d times", n)
 	}
@@ -107,6 +111,50 @@ func TestEnrollmentsAreCountsOnly(t *testing.T) {
 	}
 }
 
+// Service data reaches the model without people's details: contact fields, customer and staff
+// records and secrets are dropped at any depth, business figures stay, and a non-JSON body is
+// refused rather than passed on unchecked.
+func TestPersonalDetailsAreWithheld(t *testing.T) {
+	body := `[{"order_no":"A-17","total":1200,"items":[{"name":"Latte","qty":2}],
+		"customer":{"name":"Jane Doe","phone":"+254700000000"},"customerEmail":"jane@example.com",
+		"delivery_address":"12 Moi Ave","servedBy":"Peter","new_customers":3,"api_token":"t0k"}]`
+	svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/html" {
+			_, _ = w.Write([]byte("<p>jane@example.com</p>"))
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	defer svc.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"tools": []map[string]any{
+			{"service": "ordering", "resource": "orders_summary", "url": svc.URL + "/orders"},
+			{"service": "ordering", "resource": "page", "url": svc.URL + "/html"},
+		}})
+	}))
+	defer api.Close()
+	q := NewQueryServiceData(QueryServiceDataConfig{ServiceKey: "k", Logger: zap.NewNop(), APIBaseURL: api.URL, APIKey: "k"})
+	q.allowedBases = []string{svc.URL}
+
+	out, err := q.Invoke(context.Background(), testTenant, `{"service":"ordering","resource":"orders_summary"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"Jane", "+2547", "jane@", "Moi Ave", "Peter", "t0k"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q leaked: %s", leak, out)
+		}
+	}
+	for _, keep := range []string{`"order_no":"A-17"`, `"total":1200`, "Latte", `"new_customers":3`, `"withheld_fields":5`} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("%s missing: %s", keep, out)
+		}
+	}
+	if _, err := q.Invoke(context.Background(), testTenant, `{"service":"ordering","resource":"page"}`); err == nil {
+		t.Fatal("a non-JSON body must be refused")
+	}
+}
+
 // A huge response is never read whole.
 func TestResponseIsCapped(t *testing.T) {
 	big := strings.Repeat("x", 4<<20)
@@ -120,11 +168,9 @@ func TestResponseIsCapped(t *testing.T) {
 	defer api.Close()
 	q := NewQueryServiceData(QueryServiceDataConfig{ServiceKey: "k", Logger: zap.NewNop(), APIBaseURL: api.URL, APIKey: "k"})
 	q.allowedBases = []string{svc.URL}
+	// The read stops at 1 MB, so the cut JSON does not parse and nothing is passed on.
 	out, err := q.Invoke(context.Background(), testTenant, `{"service":"ordering","resource":"big"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) > 9000 {
+	if err == nil && len(out) > 9000 {
 		t.Fatalf("output %d bytes", len(out))
 	}
 }
