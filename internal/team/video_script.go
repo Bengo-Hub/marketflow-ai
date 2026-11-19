@@ -25,9 +25,11 @@ import (
 
 // VideoScriptRequest asks the Content Creator for one video ad script.
 type VideoScriptRequest struct {
-	TenantID  uuid.UUID
-	Offering  string // the offering's name; the facts go in Facts
-	Facts     string // price, description, promotion code and end, all true
+	TenantID uuid.UUID
+	Offering string // the offering's name; the facts go in Facts
+	Facts    string // price, description, promotion code and end, all true
+	// Format is the ad's format ("1920x1080" and so on); "" is written as a vertical ad.
+	Format    string
 	Objective string
 	Audience  string
 	Language  string // en (default) or sw
@@ -219,6 +221,8 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 		return out, fmt.Errorf("team: unreadable script: %w", err)
 	}
 	fitTemplate(&v, in.Photos, in.Footage, in.Presenter)
+	// Offers and calls to action the brief does not back are taken out and reported for review.
+	out.Findings = append(out.Findings, GuardOffers(&v, in.Offering+"\n"+in.Facts)...)
 	if _, ok := r.lib.AdTemplate(v.Approach); !ok {
 		v.Approach = tpl.Key
 	}
@@ -265,6 +269,19 @@ func (r *Runtime) polishScript(v *VideoScript, playbook, approach, presenter str
 	AssignSpeakers(v, r.twoVoice[playbook] && (!known || tpl.TwoVoice), presenter)
 }
 
+// shapeOf names an ad format's shape for the writer: landscape, square, 4:5 or vertical.
+func shapeOf(format string) string {
+	switch format {
+	case "1920x1080":
+		return "landscape (16:9)"
+	case "1080x1080":
+		return "square"
+	case "1080x1350":
+		return "4:5 feed"
+	}
+	return "vertical"
+}
+
 // scriptTask tells the writer what this ad can show.
 func scriptTask(in VideoScriptRequest) string {
 	lang := "English"
@@ -272,7 +289,7 @@ func scriptTask(in VideoScriptRequest) string {
 		lang = "Swahili"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Write a %d-second vertical video ad script in %s for: %s.\n", in.Seconds, lang, in.Offering)
+	fmt.Fprintf(&b, "Write a %d-second %s video ad script in %s for: %s.\n", in.Seconds, shapeOf(in.Format), lang, in.Offering)
 	if f := strings.TrimSpace(in.Facts); f != "" {
 		fmt.Fprintf(&b, "Facts you may use (use no other prices or claims):\n%s\n", trimTo(f, 1500))
 	}
@@ -282,7 +299,8 @@ func scriptTask(in VideoScriptRequest) string {
 	if in.Audience != "" {
 		fmt.Fprintf(&b, "Audience: %s.\n", in.Audience)
 	}
-	b.WriteString("Shots available, and only these: product_clip and b_roll show one of the owner's product photos; ")
+	b.WriteString("Shots available, and only these: product_clip shows one of the offering's own photos; " +
+		"b_roll shows the setting its visual line describes (a picture is made from that line, so describe a real scene with no writing in it); ")
 	if in.Footage > 0 {
 		fmt.Fprintf(&b, "owner_footage shows one of the owner's %d video clips (asset 1 to %d); ", in.Footage, in.Footage)
 	}

@@ -56,7 +56,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	}
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind, Tier: req.Tier,
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
-		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, Footage: req.FootageURLs,
+		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Footage: req.FootageURLs,
 		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
@@ -302,6 +302,7 @@ type storyboardRequest struct {
 	Kind        string              `json:"kind"`
 	Scenes      []media.ScriptScene `json:"scenes"`
 	PhotoURLs   []string            `json:"photo_urls"`
+	PhotoInfo   []media.PhotoInfo   `json:"photo_info"`
 	Actor       *media.Actor        `json:"actor"`        // the brief's actor, kept when set
 	ActorPrompt string              `json:"actor_prompt"` // who the presenter is, for a new actor
 	Charge      bool                `json:"charge"`
@@ -328,7 +329,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := media.Formats[req.Format]; !ok {
-		writeError(w, http.StatusBadRequest, "format must be 1080x1080, 1080x1350 or 1080x1920")
+		writeError(w, http.StatusBadRequest, "format must be "+media.FormatsText)
 		return
 	}
 	if len(req.Scenes) == 0 || len(req.Scenes) > media.MaxAdScenes || utf8.RuneCountInString(req.ActorPrompt) > 300 {
@@ -339,7 +340,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		req.Actor = nil
 	}
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
-		Scenes: req.Scenes, Photos: req.PhotoURLs, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery}
+		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery}
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only

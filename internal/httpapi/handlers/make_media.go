@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/osrun"
 	"github.com/bengobox/marketflow-ai/internal/team"
 )
@@ -163,6 +164,10 @@ func (h *OSHandler) makeMedia(ctx context.Context, tenantID uuid.UUID, run *osru
 		h.saveMade(ctx, run)
 	}
 	osrun.FitScript(script, kind)
+	// An offer the request and its offering do not name is taken out before Studio sees the script.
+	if found := team.GuardOffers(script, run.Entities.Offering+"\n"+run.Text); len(found) > 0 {
+		h.logger.Info("invented offers removed from a turn's script", zap.String("run_id", run.RunID), zap.Int("offers", len(found)))
+	}
 	ad := map[string]any{"seconds": seconds, "kind": kind, "script": script}
 	if run.Playbook == "ugc-video" {
 		// A UGC script keeps its creator-style delivery, so its two voices (if any) are read
@@ -447,6 +452,52 @@ type studioQuote struct {
 	Balance       int  `json:"balance"`
 	Enough        bool `json:"enough"`
 	Shortfall     int  `json:"shortfall"`
+	// PlanFingerprint names the generation plan this quote shows (marketflow-api); approving it
+	// is what lets the render start.
+	PlanFingerprint string       `json:"plan_fingerprint"`
+	Plan            media.AdPlan `json:"plan"`
+}
+
+// planSummary is the generation plan in one line for WhatsApp: how each scene is made and from
+// which first frame, so the requester approves what the providers will be sent.
+func planSummary(p media.AdPlan) string {
+	counts := map[string]int{}
+	var order []string
+	add := func(k string) {
+		if counts[k] == 0 {
+			order = append(order, k)
+		}
+		counts[k]++
+	}
+	for _, s := range p.Scenes {
+		from := "a new picture made for the scene"
+		switch {
+		case s.Frame == media.FramePhoto && s.Origin == media.OriginLibrary:
+			from = "a matching brand picture"
+		case s.Frame == media.FramePhoto:
+			from = "your product photo"
+		}
+		switch {
+		case s.Cached:
+			add("kept from the last version")
+		case s.Work == media.WorkPresenter:
+			add("presenter talking to camera")
+		case s.Work == media.WorkFootage:
+			add("your own video")
+		case s.Work == media.WorkClip:
+			add("animated from " + from)
+		default:
+			add(from)
+		}
+	}
+	parts := make([]string, 0, len(order))
+	for _, k := range order {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[k], k))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Scenes: " + strings.Join(parts, "; ") + "."
 }
 
 func (c *studioClient) quote(ctx context.Context, tenantID uuid.UUID, versionID string) (studioQuote, error) {
@@ -455,9 +506,15 @@ func (c *studioClient) quote(ctx context.Context, tenantID uuid.UUID, versionID 
 	return q, err
 }
 
-// approveAndRender approves the storyboard and queues the paid render.
-func (c *studioClient) approveAndRender(ctx context.Context, tenantID uuid.UUID, versionID string) error {
-	if err := c.post(ctx, tenantID, "/api/v1/creative/versions/"+versionID+"/storyboard/approve", nil, nil); err != nil {
+// approveAndRender approves the storyboard and the generation plan the requester was shown (the
+// plan of a fresh quote, named by its fingerprint), then queues the paid render. A plan that
+// changed since is refused by Studio with a conflict, and nothing is rendered.
+func (c *studioClient) approveAndRender(ctx context.Context, tenantID uuid.UUID, versionID, fingerprint string) error {
+	var body any
+	if fingerprint != "" {
+		body = map[string]string{"plan_fingerprint": fingerprint}
+	}
+	if err := c.post(ctx, tenantID, "/api/v1/creative/versions/"+versionID+"/storyboard/approve", body, nil); err != nil {
 		return err
 	}
 	return c.post(ctx, tenantID, "/api/v1/creative/versions/"+versionID+"/render", nil, nil)

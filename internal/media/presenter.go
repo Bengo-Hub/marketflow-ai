@@ -56,6 +56,8 @@ type PresenterRequest struct {
 	Seconds   float64 // the voice-over's length, for the price
 	Tier      string
 	Prompt    string // how the presenter moves; "" for a plain talking-to-camera shot
+	// Format is the ad's format: the presenter clip is asked for in its shape.
+	Format string
 }
 
 // PresenterResult is the provider's clip; the assembler downloads it.
@@ -163,11 +165,13 @@ func (p *Presenters) run(ctx context.Context, rt Route, req PresenterRequest) (s
 	)
 	switch rt.Key {
 	case "fal/creatify-boreal":
-		// Our voice-over is kept as the soundtrack; "auto" follows the actor image's frame.
+		// Our voice-over is kept as the soundtrack. The aspect ratio is the ad's own, so the clip
+		// never follows a differently shaped actor photo (the actor is drawn in the ad's shape).
 		job = falJob(key, "creatify/boreal")
 		input = map[string]any{
 			"prompt": borealPrompt(req.Prompt), "image_url": req.ImageURL, "audio_url": req.AudioURL,
-			"resolution": "720p", "aspect_ratio": "auto", "duration": math.Ceil(req.Seconds),
+			"resolution": "720p", "aspect_ratio": borealAspect(req.Format), "duration": math.Ceil(req.Seconds),
+			"negative_prompt": presenterNegativePrompt,
 		}
 	case "fal/veed-fabric":
 		job = falJob(key, "veed/fabric-1.0")
@@ -222,10 +226,42 @@ func presenterPrompt(p string) string {
 	return base + ". Same face, hair and clothes throughout. No text, no letters, no logos."
 }
 
+// presenterNegativePrompt is sent to the presenter routes that take one (Boreal).
+const presenterNegativePrompt = "text, letters, subtitles, captions, logos, watermark, extra people, distorted face, blur"
+
+// borealAspect is Boreal's aspect_ratio for a format. Boreal has no 4:5; that feed gets 3:4, the
+// nearest, and the assembly fits it without cropping. An unknown format follows the image.
+func borealAspect(format string) string {
+	switch format {
+	case "1920x1080":
+		return "16:9"
+	case "1080x1920":
+		return "9:16"
+	case "1080x1080":
+		return "1:1"
+	case "1080x1350":
+		return "3:4"
+	}
+	return "auto"
+}
+
+// presenterPromptFor is the exact prompt (and negative prompt) a presenter route is sent for a
+// scene's visual, for the generation plan.
+func presenterPromptFor(route, visual string) (prompt, negative string) {
+	switch route {
+	case "fal/creatify-boreal":
+		return borealPrompt(visual), presenterNegativePrompt
+	case "higgsfield/seedance-2.5-480p", "higgsfield/seedance-2.5-720p":
+		return presenterPrompt(visual), ""
+	}
+	// Fabric and Aurora take no prompt: the image and the voice drive them.
+	return "", ""
+}
+
 // borealPrompt is Boreal's sectioned direction: the visual from the scene, the supplied
 // voice-over as the speech, and no on-screen text (our compositor draws captions).
 func borealPrompt(p string) string {
-	visual := "The person in the reference image talks warmly to the camera, selfie-video style, natural small head movements and gestures, steady framing. Same face, hair and clothes throughout."
+	visual := "The person in the reference image talks warmly to the camera, natural small head movements and gestures, steady framing. Same face, hair and clothes throughout."
 	if p = strings.TrimSpace(p); p != "" {
 		visual = p + ". " + visual
 	}

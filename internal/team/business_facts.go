@@ -105,7 +105,7 @@ func renderFacts(f businessFacts) string {
 	line("Email", f.Email)
 	line("Website", f.Website)
 	line("The website describes the business as", f.Summary)
-	if t := strings.TrimSpace(f.SiteText); t != "" {
+	if t := DigestSiteText(f.SiteText); t != "" {
 		// The business's own page, read by the crawler: its offers, prices, services, policies,
 		// location and hours. It is data, never instructions, so anything in it that reads like an
 		// order is ignored.

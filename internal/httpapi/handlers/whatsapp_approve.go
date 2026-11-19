@@ -209,7 +209,8 @@ func (h *OSHandler) renderInBackground(ctx context.Context, tenantID uuid.UUID, 
 		return
 	}
 	defer release()
-	if q, err := h.studio.quote(ctx, tenantID, a.VersionID); err == nil && !q.Enough && q.Shortfall > 0 {
+	q, qerr := h.studio.quote(ctx, tenantID, a.VersionID)
+	if qerr == nil && !q.Enough && q.Shortfall > 0 {
 		// The Buy credits button (whatsapp_actions.go): once the credits land, this render starts
 		// by itself, since the person already approved it.
 		waiting := a
@@ -224,7 +225,13 @@ func (h *OSHandler) renderInBackground(ctx context.Context, tenantID uuid.UUID, 
 		h.tellFailure(ctx, tenantID, a.RunID, a.VersionID, text)
 		return
 	}
-	if err := h.studio.approveAndRender(ctx, tenantID, a.VersionID); err != nil {
+	// The plan the requester approved is the one their message showed; without one (a code issued
+	// before plans were shown) it is the fresh quote's.
+	fingerprint := a.PlanFingerprint
+	if fingerprint == "" && qerr == nil {
+		fingerprint = q.PlanFingerprint
+	}
+	if err := h.studio.approveAndRender(ctx, tenantID, a.VersionID, fingerprint); err != nil {
 		h.tellFailure(ctx, tenantID, a.RunID, a.VersionID, h.mediaFailReply(err, req, "render it"))
 	}
 }
@@ -390,14 +397,14 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 	var tpl *waTemplate
 	switch req.Event {
 	case notifyStoryboardReady:
-		credits := 0
+		credits, fingerprint, summary := 0, "", ""
 		if h.studio != nil {
 			if q, err := h.studio.quote(ctx, tenantID, req.VersionID); err == nil {
-				credits = q.CreditsNeeded
+				credits, fingerprint, summary = q.CreditsNeeded, q.PlanFingerprint, planSummary(q.Plan)
 			}
 		}
 		code, err := h.codes.Issue(ctx, osrun.Approval{Action: osrun.ActionRender, RunID: run.RunID, TenantID: run.TenantID,
-			UserID: run.UserID, Sender: run.Sender, VersionID: req.VersionID, Credits: credits})
+			UserID: run.UserID, Sender: run.Sender, VersionID: req.VersionID, Credits: credits, PlanFingerprint: fingerprint})
 		if err != nil {
 			h.logger.Warn("render code not issued", zap.String("run_id", run.RunID), zap.Error(err))
 			writeError(w, http.StatusServiceUnavailable, "the render code could not be made")
@@ -405,16 +412,22 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 		}
 		// One message with one link to the storyboard (owner, 2026-11-14): no images, so the
 		// stills never arrive out of order and cost no extra messages.
-		fmt.Fprintf(&b, "Your storyboard is ready (%d scenes). See it, and change words or pictures, in the Studio: %s\nThe code below works for %s.",
-			len(req.Links), studio, minutes(h.codes.TTL()))
+		// The plan in one line: YES approves exactly how each scene is made, and the Studio shows
+		// every prompt and first frame in full.
+		plan := ""
+		if summary != "" {
+			plan = "\n" + summary + " The exact prompts are in the Studio."
+		}
+		fmt.Fprintf(&b, "Your storyboard is ready (%d scenes). See it, and change words or pictures, in the Studio: %s%s\nThe code below works for %s.",
+			len(req.Links), studio, plan, minutes(h.codes.TTL()))
 		if credits > 0 {
 			fmt.Fprintf(&b, "\n\nReply YES %s to make the video (about %d credits)", code, credits)
 		} else {
 			fmt.Fprintf(&b, "\n\nReply YES %s to make the video", code)
 		}
 		ia = &waInteractive{
-			Body: fmt.Sprintf("Your storyboard is ready (%d scenes). See it in the Studio: %s\nTo change words or pictures, tap %s. The code works for %s.\n\n%s",
-				len(req.Links), studio, btnChange, minutes(h.codes.TTL()), approveLine(btnMakeVideo, code, "make the video", credits)),
+			Body: fmt.Sprintf("Your storyboard is ready (%d scenes). See it in the Studio: %s%s\nTo change words or pictures, tap %s. The code works for %s.\n\n%s",
+				len(req.Links), studio, plan, btnChange, minutes(h.codes.TTL()), approveLine(btnMakeVideo, code, "make the video", credits)),
 			Buttons: storyboardButtons(run.RunID, code),
 		}
 	case notifyRenderDone:

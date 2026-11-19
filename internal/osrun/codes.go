@@ -45,6 +45,9 @@ type Approval struct {
 	VersionID string `json:"version_id,omitempty"`
 	// Credits is the price the message quoted.
 	Credits int `json:"credits,omitempty"`
+	// PlanFingerprint is the generation plan a render code approves (the plan the message showed);
+	// Studio refuses the render when the plan changed since.
+	PlanFingerprint string `json:"plan_fingerprint,omitempty"`
 	// Tier is the media tier an approval of a cheaper option makes instead of the run's own.
 	Tier string `json:"tier,omitempty"`
 	// Option names the cheaper option a code approves, for the messages ("" for the plan).

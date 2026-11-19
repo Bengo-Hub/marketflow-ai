@@ -47,6 +47,9 @@ type Route struct {
 	// score: the providers doc names them fallbacks (often a cheaper, weaker or
 	// cross-provider option that would otherwise win on price).
 	Fallback bool
+	// NegativePrompt marks a route whose provider schema takes a negative_prompt; scenes that
+	// show screens or signs prefer it, because a negative prompt keeps invented writing out.
+	NegativePrompt bool
 }
 
 // weights from docs/integrations/video-generation-providers.md: quality, cost,

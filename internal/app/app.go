@@ -508,7 +508,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		}
 		ads := media.NewAds(voices, media.NewAssembler(store, posters, logger)).
 			WithPresenters(media.NewPresenters(mediaKeySource(resolver), logger)).
-			WithClips(clips, store).WithLogger(logger).WithAudio(audioCfg)
+			WithClips(clips, store).WithFrames(store, posters).WithLogger(logger).WithAudio(audioCfg)
 		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger).WithEndpoints(imageEndpoints)
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.

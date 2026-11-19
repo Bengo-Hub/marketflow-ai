@@ -124,6 +124,9 @@ type AdRequest struct {
 	Language  string // en or sw
 	Scenes    []ScriptScene
 	Photos    []string // the owner's product photos, http(s)
+	// PhotoInfo describes Photos by index (the offering's own, or brand-library pictures with
+	// their caption, tags and logo flag); frames.go picks each scene's start frame from it.
+	PhotoInfo []PhotoInfo
 	Footage   []string // the owner's clips, http(s)
 	EndCard   Overlay
 	LogoURL   string
@@ -194,6 +197,14 @@ type Ads struct {
 	sounds     *Sounds
 	audio      AudioConfig
 	logger     *zap.Logger
+	// frames fits start frames to the ad's shape before animation (WithFrames).
+	frames *frameFitter
+}
+
+// WithFrames stores start frames fitted to the ad's format; without it a frame is animated as it is.
+func (a *Ads) WithFrames(store Store, posters *Posters) *Ads {
+	a.frames = &frameFitter{store: store, posts: posters}
+	return a
 }
 
 // NewAds builds the ad pipeline with the default audio settings; sound cues and music use the
@@ -269,7 +280,7 @@ func (a *Ads) PresenterReady() bool {
 // Validate refuses a script this ad cannot render, before anything is paid.
 func (a *Ads) Validate(req AdRequest) error {
 	if _, ok := Formats[req.Format]; !ok {
-		return &UserError{Msg: "format must be 1080x1080, 1080x1350 or 1080x1920"}
+		return &UserError{Msg: "format must be " + FormatsText}
 	}
 	if _, ok := Deliveries[req.Delivery]; req.Delivery != "" && !ok {
 		return &UserError{Msg: "delivery must be ad, ugc, kids, story or info"}
@@ -305,22 +316,16 @@ func (a *Ads) Validate(req AdRequest) error {
 		}
 	}
 	chars := 0
+	frames := newFrameChooser(req.Photos, req.Footage, req.PhotoInfo)
 	for i, s := range req.Scenes {
 		words := utf8.RuneCountInString(strings.TrimSpace(s.Voiceover))
 		switch s.Shot {
-		case ShotProduct, ShotEndCard:
-			if len(req.Photos) == 0 {
-				return &UserError{Msg: fmt.Sprintf("scene %d shows the product: add at least one product photo", i+1)}
-			}
+		case ShotProduct, ShotEndCard, ShotBRoll:
 			if s.Asset > len(req.Photos) {
 				return &UserError{Msg: fmt.Sprintf("scene %d uses photo %d, but there are %d", i+1, s.Asset, len(req.Photos))}
 			}
-		case ShotBRoll:
-			if len(req.Photos) == 0 && req.Stills[s.ID] == "" {
-				return &UserError{Msg: fmt.Sprintf("scene %d needs a photo or an approved storyboard still", i+1)}
-			}
-			if s.Asset > len(req.Photos) {
-				return &UserError{Msg: fmt.Sprintf("scene %d uses photo %d, but there are %d", i+1, s.Asset, len(req.Photos))}
+			if f := frames.choose(s); f.Source == FrameGenerated && req.Stills[s.ID] == "" {
+				return &UserError{Msg: fmt.Sprintf("scene %d needs a storyboard still: make the storyboard first", i+1)}
 			}
 		case ShotFootage:
 			if len(req.Footage) == 0 {
@@ -384,6 +389,20 @@ type ScenePlan struct {
 	CostUSD   float64 `json:"cost_usd"`
 	Estimated bool    `json:"estimated"`         // the price came from the provider's own estimate
 	SFXUSD    float64 `json:"sfx_usd,omitempty"` // the scene's sound cue still to make
+	// The generation plan the owner approves before the render (owner, 2026-11-19): where the
+	// scene's first frame comes from (Frame: actor, photo, generated or footage; FrameURL the
+	// photo or storyboard still; Photo and Origin which photo), the exact prompt and negative
+	// prompt the route is sent, and the prompt a generated still was drawn from.
+	Frame          string `json:"frame"`
+	FrameURL       string `json:"frame_url,omitempty"`
+	Photo          int    `json:"photo,omitempty"`
+	Origin         string `json:"origin,omitempty"`
+	Prompt         string `json:"prompt,omitempty"`
+	NegativePrompt string `json:"negative_prompt,omitempty"`
+	StillPrompt    string `json:"still_prompt,omitempty"`
+	// AvoidText marks a scene showing screens or signs: its clip goes to a route that takes a
+	// negative prompt when the registry has one.
+	AvoidText bool `json:"avoid_text,omitempty"`
 	source    string
 }
 
@@ -419,23 +438,28 @@ const voiceUSDPer1000 = 0.10
 func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 	plan := AdPlan{Kind: kindOf(req.Kind), Audio: audioLevelOf(req.Audio)}
 	two, turns := a.twoVoice(req), speakerTurns(req.Scenes)
-	photo, clip := 0, 0
+	frames := newFrameChooser(req.Photos, req.Footage, req.PhotoInfo)
 	adSeconds := endCardTail
 	for i, s := range req.Scenes {
 		chars := utf8.RuneCountInString(strings.TrimSpace(stripTags(s.Voiceover)))
 		sp := ScenePlan{SceneID: s.ID, Shot: s.Shot, Chars: chars, Seconds: estimateSeconds(chars, s.DurationS)}
-		switch {
-		case s.Shot == ShotPresenter:
+		f := frames.choose(s)
+		sp.Frame, sp.Photo, sp.Origin = f.Source, f.Photo, f.Origin
+		switch f.Source {
+		case FrameActor:
 			sp.Work, sp.source = WorkPresenter, req.ActorURL
-		case s.Shot == ShotFootage:
-			sp.Work, sp.source = WorkFootage, pick(req.Footage, s.Asset, &clip)
-		case s.Shot == ShotBRoll && req.Stills[s.ID] != "":
+		case FrameFootage:
+			sp.Work, sp.source = WorkFootage, f.URL
+		case FrameGenerated:
 			sp.Work, sp.source = WorkStill, req.Stills[s.ID]
+			sp.StillPrompt = StillPrompt(req.Format, req.Delivery, sceneVisual(s))
 		default:
-			sp.Work, sp.source = WorkStill, pick(req.Photos, s.Asset, &photo)
+			sp.Work, sp.source = WorkStill, f.URL
 		}
+		sp.FrameURL = sp.source
 		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) {
 			sp.Work = WorkClip
+			sp.AvoidText = showsWriting(s.Visual)
 		}
 		speaker := ""
 		if two {
@@ -456,13 +480,25 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 				}
 				sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
 			case WorkClip:
-				usd, route, est := a.clips.Quote(ctx, tierOf(req), clipSeconds(sp.Seconds))
+				usd, route, est := a.clips.QuoteFor(ctx, tierOf(req), clipSeconds(sp.Seconds), sp.AvoidText)
 				if route == "" {
 					return plan, fmt.Errorf("%w: no clip route is available", ErrNoRoute)
 				}
 				sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
 			}
 			plan.CostUSD += sp.CostUSD
+		}
+		// A cached scene is not sent again, so it shows no prompt.
+		if !sp.Cached {
+			switch sp.Work {
+			case WorkPresenter:
+				sp.Prompt, sp.NegativePrompt = presenterPromptFor(sp.Route, s.Visual)
+			case WorkClip:
+				sp.Prompt = clipPrompt(s.Visual)
+				if rt, ok := clipRoute(sp.Route); ok && rt.NegativePrompt {
+					sp.NegativePrompt = clipNegativePrompt
+				}
+			}
 		}
 		// A cue is made for a new scene, or for a reused one whose cue is missing.
 		if cue := sceneSFX(req, s); cue != "" && (!sp.Cached || !a.cachedCue(ctx, req.Cache[sp.Hash], cue)) {
@@ -753,7 +789,9 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		extra += snd.music.CostUSD
 	}
 	mix := AudioMix{VoiceFilter: a.audio.VoiceFilter, SFXGain: a.audio.SFXGain, VoiceMatchLUFS: a.audio.VoiceMatchLUFS}
-	if level == AudioScore && musicURL != "" {
+	if musicURL != "" {
+		// Any music, generated or the owner's track, is ducked under the voice (2026-11-19 audit:
+		// a flat bed under the speech read as an echo).
 		d := a.audio.Ducking()
 		mix.Duck = &d
 	}
@@ -767,15 +805,16 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 	for i, s := range req.Scenes {
 		o := outs[i]
 		sp := plan.Scenes[i]
-		sc := AdScene{Seconds: o.seconds, AudioURL: o.cache.AudioURL, Speaker: o.cache.Speaker}
+		// Every scene is fitted, never cropped (owner, 2026-11-19): clips made from frames
+		// already in the ad's shape fill it exactly, and anything else keeps all its content.
+		sc := AdScene{Seconds: o.seconds, AudioURL: o.cache.AudioURL, Speaker: o.cache.Speaker, Fit: true}
 		switch {
 		case o.cache.VideoURL != "":
 			sc.VideoURL = o.cache.VideoURL
 		case sp.Work == WorkFootage:
-			// Fit, not cover: the owner's footage is never cropped.
-			sc.VideoURL, sc.Fit = sp.source, true
+			sc.VideoURL = sp.source
 		default:
-			sc.ImageURL, sc.Fit = sp.source, true
+			sc.ImageURL = sp.source
 		}
 		scenes[i] = sc
 		for _, w := range o.cache.Words {
@@ -1001,7 +1040,7 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 			return fmt.Errorf("media: presenter scene %s has no voice", sp.SceneID)
 		}
 		p, err := a.presenters.Make(ctx, PresenterRequest{TenantID: req.TenantID, VersionID: req.VersionID, ImageURL: req.ActorURL,
-			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: tierOf(req), Prompt: s.Visual})
+			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: tierOf(req), Prompt: s.Visual, Format: req.Format})
 		if err != nil {
 			return fmt.Errorf("media: presenter scene %s: %w", sp.SceneID, err)
 		}
@@ -1011,8 +1050,13 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 		route, cost = p.Route, p.CostUSD
 	case WorkClip:
 		secs := clipSeconds(out.seconds)
-		_, rt, _, err := a.clips.Animate(ctx, ClipRequest{TenantID: req.TenantID, VersionID: req.VersionID, SceneURL: sp.source,
-			Prompt: s.Visual, Seconds: secs, Tier: tierOf(req)}, path)
+		// The start frame is fitted to the ad's shape first, so every clip comes out that shape.
+		frame, err := a.frames.fit(ctx, req.TenantID, req.VersionID, sceneName(sp)+"-frame", sp.source, req.Format)
+		if err != nil {
+			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
+		}
+		_, rt, _, err := a.clips.Animate(ctx, ClipRequest{TenantID: req.TenantID, VersionID: req.VersionID, SceneURL: frame,
+			Prompt: s.Visual, Seconds: secs, Tier: tierOf(req), Format: req.Format, AvoidText: sp.AvoidText}, path)
 		if err != nil {
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}

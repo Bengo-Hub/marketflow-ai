@@ -230,6 +230,8 @@ func aspectFor(format string) string {
 		return "4:5"
 	case "1080x1920":
 		return "9:16"
+	case "1920x1080":
+		return "16:9"
 	default:
 		return "1:1"
 	}
@@ -301,6 +303,8 @@ func seedreamSize(format string) map[string]int {
 		return map[string]int{"width": 2160, "height": 2700}
 	case "1080x1920":
 		return map[string]int{"width": 2160, "height": 3840}
+	case "1920x1080":
+		return map[string]int{"width": 3840, "height": 2160}
 	default:
 		return map[string]int{"width": 2048, "height": 2048}
 	}

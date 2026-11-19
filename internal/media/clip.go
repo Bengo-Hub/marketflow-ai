@@ -42,7 +42,7 @@ var ClipRoutes = []Route{
 	// USD 0.56 for 5 s at 720p (/estimate).
 	{Key: "higgsfield/kling-v3-turbo", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.56, BaseSeconds: 5, Quality: 4, PAYG: true, Timeout: 5 * time.Minute},
 	{Key: "fal/grok-imagine-video", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.05, PerSecond: true, Quality: 3, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
-	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, PerSecond: true, Quality: 4, PAYG: true, Timeout: 6 * time.Minute, Fallback: true},
+	{Key: "fal/kling-v3-pro", Provider: "fal", Capability: CapImageToVideo, PriceUSD: 0.14, PerSecond: true, Quality: 4, PAYG: true, Timeout: 6 * time.Minute, Fallback: true, NegativePrompt: true},
 	// Token metered: 1280x720 x 24 fps / 1024 tokens a second at USD 0.014 per 1,000, about USD 0.30/s.
 	{Key: "higgsfield/seedance-2.0", Provider: "higgsfield", Capability: CapImageToVideo, PriceUSD: 0.3024, PerSecond: true, Quality: 5, PAYG: true, Timeout: 8 * time.Minute, MinTier: TierPremium},
 }
@@ -70,6 +70,9 @@ type ClipRequest struct {
 	Tier      string
 	Overlay   Overlay
 	LogoURL   string
+	// AvoidText puts routes that take a negative prompt first: the scene shows screens or signs,
+	// which image-to-video models fill with invented writing.
+	AvoidText bool
 }
 
 // VideoStore keeps finished clips (httpware/objectstore's video-drafts type).
@@ -170,7 +173,7 @@ func (c *Clips) Animate(ctx context.Context, req ClipRequest, path string) (stri
 		req.Tier = TierStandard
 	}
 	secs := float64(req.Seconds)
-	routes := c.router.OrderFor(CapImageToVideo, req.Tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
+	routes := c.order(ctx, req.Tier, secs, req.AvoidText)
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -252,7 +255,8 @@ func clipInput(rt Route, req ClipRequest) (string, map[string]any, error) {
 	case "fal/grok-imagine-video":
 		return "xai/grok-imagine-video/image-to-video", map[string]any{"image_url": req.SceneURL, "prompt": prompt, "duration": req.Seconds, "resolution": "720p"}, nil
 	case "fal/kling-v3-pro":
-		return "fal-ai/kling-video/v3/pro/image-to-video", map[string]any{"start_image_url": req.SceneURL, "prompt": prompt, "duration": strconv.Itoa(req.Seconds), "generate_audio": false}, nil
+		return "fal-ai/kling-video/v3/pro/image-to-video", map[string]any{"start_image_url": req.SceneURL, "prompt": prompt, "duration": strconv.Itoa(req.Seconds),
+			"generate_audio": false, "negative_prompt": clipNegativePrompt}, nil
 	}
 	return "", nil, fmt.Errorf("media: no builder for route %s", rt.Key)
 }
@@ -264,11 +268,16 @@ const quoteImage = "https://example.com/scene.png"
 // Quote is the provider cost of a clip on the route a render would use first: Higgsfield's
 // /estimate when it answers in time, the route's price otherwise. It never stalls a quote.
 func (c *Clips) Quote(ctx context.Context, tier string, seconds int) (usd float64, route string, estimated bool) {
+	return c.QuoteFor(ctx, tier, seconds, false)
+}
+
+// QuoteFor is Quote for a scene that may need a negative prompt (ClipRequest.AvoidText).
+func (c *Clips) QuoteFor(ctx context.Context, tier string, seconds int, avoidText bool) (usd float64, route string, estimated bool) {
 	if tier == "" {
 		tier = TierStandard
 	}
 	secs := float64(seconds)
-	routes := c.router.OrderFor(CapImageToVideo, tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
+	routes := c.order(ctx, tier, secs, avoidText)
 	if len(routes) == 0 {
 		return 0, "", false
 	}
@@ -282,6 +291,58 @@ func (c *Clips) Quote(ctx context.Context, tier string, seconds int) (usd float6
 	}
 	usd, estimated = c.estimate.USD(ctx, c.keys(ctx, rt.Provider), endpoint, input, rt.Cost(secs))
 	return usd, rt.Key, estimated
+}
+
+// order is the routes to try for a clip, best first. With avoidText the routes that take a
+// negative prompt come first (still in score order among themselves), whatever their price.
+func (c *Clips) order(ctx context.Context, tier string, secs float64, avoidText bool) []Route {
+	routes := c.router.OrderFor(CapImageToVideo, tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
+	if !avoidText {
+		return routes
+	}
+	out := make([]Route, 0, len(routes))
+	for _, rt := range routes {
+		if rt.NegativePrompt {
+			out = append(out, rt)
+		}
+	}
+	for _, rt := range routes {
+		if !rt.NegativePrompt {
+			out = append(out, rt)
+		}
+	}
+	return out
+}
+
+// clipRoute is the registry's clip route with this key.
+func clipRoute(key string) (Route, bool) {
+	for _, rt := range ClipRoutes {
+		if rt.Key == key {
+			return rt, true
+		}
+	}
+	return Route{}, false
+}
+
+// clipNegativePrompt is sent to every clip route that takes one.
+const clipNegativePrompt = "text, letters, words, subtitles, captions, signs, signage, writing on screens, logos, watermark, blur, distortion, low quality"
+
+// writingWords are things in a scene that carry writing: screens, signs and printed matter.
+var writingWords = []string{"screen", "monitor", "laptop", "computer", "tablet", "phone", "smartphone", "dashboard",
+	"display", "sign", "signage", "signboard", "billboard", "banner", "poster", "menu", "receipt", "invoice", "label",
+	"whiteboard", "blackboard", "chalkboard", "book", "newspaper", "storefront", "shopfront", "till", "pos", "keyboard", "code"}
+
+// showsWriting reports whether a scene's visual names something that carries writing.
+func showsWriting(visual string) bool {
+	words := " " + strings.Join(strings.FieldsFunc(strings.ToLower(visual), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	}), " ") + " "
+	for _, w := range writingWords {
+		if strings.Contains(words, " "+w+" ") || strings.Contains(words, " "+w+"s ") {
+			return true
+		}
+	}
+	return false
 }
 
 // clipPrompt keeps the motion gentle and the frame free of text: our words go on top.

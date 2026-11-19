@@ -18,8 +18,10 @@ import (
 // render uses exactly these frames:
 //   - a presenter scene shows the ad's one actor still, which is also the reference the
 //     presenter route lip-syncs, so every presenter scene has the same face;
-//   - a product scene shows the owner's own photo (the product is never generated);
-//   - a b-roll scene gets a generated still, which the clip route then animates;
+//   - a product scene shows the offering's own photo (the product is never generated);
+//   - any other scene shows a brand-library picture whose caption or tags match it, or a
+//     still generated from its visual in the ad's shape, which the clip route then animates
+//     (frames.go has the rule; a logo is never a frame);
 //   - owner footage shows no still (the footage is the scene).
 
 // CapStill is a storyboard frame or the actor still.
@@ -51,8 +53,12 @@ type StoryboardRequest struct {
 	Kind      string // AdTemplate, AdPresenter or AdPresenterPremium
 	Scenes    []ScriptScene
 	Photos    []string
-	// Actor is the brief's existing actor: kept, never re-drawn, so every version of the
-	// brief has the same presenter. Empty makes one from ActorPrompt.
+	// PhotoInfo describes Photos by index: the offering's own photos, or brand-library pictures
+	// with their caption, tags and logo flag (frames.go).
+	PhotoInfo []PhotoInfo
+	// Actor is the brief's existing actor: kept, so every version of the brief has the same
+	// presenter, until the owner asks for a new one (marketflow-api then sends none). Empty makes
+	// one from ActorPrompt.
 	Actor       *Actor
 	ActorPrompt string
 	// Delivery is the ad's voice delivery; DeliveryUGC draws generated stills and the actor as
@@ -82,6 +88,12 @@ type Still struct {
 	Source  string  `json:"source"`
 	Route   string  `json:"route,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Photo and Origin say which photo a photo frame is (1-based) and whether it is the
+	// offering's own or a matched brand-library picture.
+	Photo  int    `json:"photo,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	// Prompt is the exact prompt a generated still was drawn from.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // StoryboardResult is the approved-to-be storyboard.
@@ -118,21 +130,16 @@ func (s *Storyboards) Ready() bool { return s != nil && s.store != nil && s.post
 // Plan lists what each scene's still will be, without generating anything. Generated
 // counts the stills that cost money, for the quote.
 func (s *Storyboards) Plan(req StoryboardRequest) (stills []Still, generated int) {
-	photo := 0
+	frames := newFrameChooser(req.Photos, nil, req.PhotoInfo)
 	for _, sc := range req.Scenes {
 		st := Still{SceneID: sc.ID}
-		switch {
-		case sc.Shot == ShotPresenter:
-			st.Source = StillActor
-		case sc.Shot == ShotFootage:
-			st.Source = StillFootage
-		case sc.Shot == ShotBRoll && isPresenterKind(req.Kind):
-			st.Source = StillGenerated
-			generated++
-		case len(req.Photos) > 0:
-			st.Source, st.URL = StillPhoto, pick(req.Photos, sc.Asset, &photo)
-		default:
-			st.Source = StillGenerated
+		f := frames.choose(sc)
+		st.Source = f.Source
+		switch f.Source {
+		case FramePhoto:
+			st.URL, st.Photo, st.Origin = f.URL, f.Photo, f.Origin
+		case FrameGenerated:
+			st.Prompt = StillPrompt(req.Format, req.Delivery, sceneVisual(sc))
 			generated++
 		}
 		stills = append(stills, st)
@@ -149,7 +156,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 		return nil, fmt.Errorf("media: storyboards need object storage")
 	}
 	if _, ok := Formats[req.Format]; !ok {
-		return nil, &UserError{Msg: "format must be 1080x1080, 1080x1350 or 1080x1920"}
+		return nil, &UserError{Msg: "format must be " + FormatsText}
 	}
 	if len(req.Scenes) == 0 || len(req.Scenes) > MaxAdScenes {
 		return nil, &UserError{Msg: fmt.Sprintf("a storyboard has 1 to %d scenes", MaxAdScenes)}
@@ -167,8 +174,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			}
 			// The actor's gender follows the presenter's speaker, so the lip-synced voice fits.
 			desc = actorWithGender(desc, presenterSpeaker(req.Scenes))
-			prompt := "Vertical selfie-style photo of " + desc + ", upper body, looking straight at the camera with a relaxed smile, mouth closed, soft natural daylight, plain uncluttered background. Real photo, no text, no letters, no logos."
-			url, key, route, cost, err := s.still(ctx, req, "actor", prompt)
+			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPrompt(req.Format, desc))
 			if err != nil {
 				return nil, fmt.Errorf("media: actor still: %w", err)
 			}
@@ -196,14 +202,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 		default:
 			continue
 		}
-		visual := strings.TrimSpace(req.Scenes[i].Visual)
-		if visual == "" {
-			visual = strings.TrimSpace(req.Scenes[i].Caption)
-		}
-		prompt := scenePrompt(visual)
-		if req.Delivery == DeliveryUGC {
-			prompt = ugcStillPrompt(visual)
-		}
+		prompt := st.Prompt
 		wg.Add(1)
 		go func(st *Still, prompt string) {
 			defer wg.Done()
@@ -275,11 +274,7 @@ func (s *Storyboards) generate(ctx context.Context, rt Route, format, prompt str
 	)
 	switch rt.Key {
 	case "higgsfield/soul-v2":
-		ar := "9:16"
-		if format == "1080x1080" {
-			ar = "1:1"
-		}
-		job, input = higgsfieldJob(key, s.endpoints.SoulStill), map[string]any{"prompt": prompt, "aspect_ratio": ar}
+		job, input = higgsfieldJob(key, s.endpoints.SoulStill), map[string]any{"prompt": prompt, "aspect_ratio": soulAspect(format)}
 	case "fal/seedream-v5-lite":
 		job = falJob(key, s.endpoints.SeedreamText)
 		input = map[string]any{"prompt": prompt, "image_size": seedreamSize(format), "num_images": 1}
@@ -363,9 +358,29 @@ func actorWithGender(desc, speaker string) string {
 
 // ugcStillPrompt is a generated storyboard still for a UGC ad: a candid phone photo of a real,
 // everyday setting rather than a polished advertising shot, so the ad feels like creator content.
-func ugcStillPrompt(visual string) string {
-	return strings.TrimSpace(visual) + ". Candid vertical phone-camera photo, natural window or daylight, a real everyday East African setting, " +
-		"slightly imperfect framing, no studio lighting. No text, no letters, no words, no logos, no watermark. Keep the lower third calm for captions."
+func ugcStillPrompt(format, visual string) string {
+	return strings.TrimSpace(visual) + ". Candid " + orientation(format) + " phone-camera photo, natural window or daylight, a real everyday East African setting, " +
+		"slightly imperfect framing, no studio lighting. No text, no letters, no words, no logos, no watermark, no screens showing writing. Keep the lower third calm for captions."
+}
+
+// sceneVisual is what a scene shows: its visual line, else its caption.
+func sceneVisual(sc ScriptScene) string {
+	if v := strings.TrimSpace(sc.Visual); v != "" {
+		return v
+	}
+	return strings.TrimSpace(sc.Caption)
+}
+
+// soulAspect is Soul v2's aspect_ratio for a format. The 4:5 feed has no Soul ratio; it gets the
+// vertical frame, as before, and the start frame is fitted to 4:5 before animation.
+func soulAspect(format string) string {
+	switch format {
+	case "1080x1080":
+		return "1:1"
+	case "1920x1080":
+		return "16:9"
+	}
+	return "9:16"
 }
 
 // seedFor is a stable seed for an actor, recorded with the brief.

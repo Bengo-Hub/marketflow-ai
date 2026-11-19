@@ -215,9 +215,10 @@ func TestStoryboardPlan(t *testing.T) {
 	if _, generated := s.Plan(req); generated != 1 {
 		t.Fatalf("a kept actor is not drawn again: %d", generated)
 	}
+	// Since 2026-11-19 a template ad's b-roll is a generated still too, never a photo in turn.
 	req.Kind = AdTemplate
-	if _, generated := s.Plan(req); generated != 0 {
-		t.Fatalf("a template storyboard of photos costs nothing: %d", generated)
+	if _, generated := s.Plan(req); generated != 1 {
+		t.Fatalf("a template storyboard draws only its b-roll still: %d", generated)
 	}
 }
 

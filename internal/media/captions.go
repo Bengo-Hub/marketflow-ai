@@ -74,9 +74,10 @@ func CaptionLines(words []WordTiming) []CaptionLine {
 	return lines
 }
 
-// Caption placement, as fractions of the frame. Every caption sits inside the 9:16 safe
-// band (a 720x1200 window centred in 1080x1920: two thirds of the width, the middle
-// 62.5% of the height), clear of the feed's own buttons and the end card's band.
+// Caption placement, as fractions of the frame. Every caption sits inside the safe band:
+// two thirds of the width and the middle 62.5% of the height (a 720x1200 window in
+// 1080x1920, 1280x675 in 1920x1080), clear of the feed's own buttons and the end card's
+// band. Type is sized from the short side, so landscape captions match portrait ones.
 const (
 	safeBandWidth   = 2.0 / 3
 	safeBandTop     = 0.1875
@@ -131,7 +132,7 @@ func composeText(format, text string, y float64, fromTop bool, divisor float64) 
 	}
 	maxW := int(float64(W) * safeBandWidth)
 	// The floor keeps small text readable on narrow formats and above the loop's lower bound.
-	fontSize := math.Max(float64(W)/divisor, 22)
+	fontSize := math.Max(float64(layoutUnit(W, H))/divisor, 22)
 	var lines []string
 	var fc font.Face
 	for ; fontSize >= 20; fontSize *= 0.92 {

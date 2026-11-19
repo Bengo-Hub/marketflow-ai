@@ -52,8 +52,8 @@ func TestAudioConfigFromEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	if def.VoiceFilter != "highpass=f=80,afftdn=nr=10:nf=-40,deesser=i=0.4,equalizer=f=3500:t=q:w=1.2:g=-2" ||
-		def.SFXGain != 0.35 || def.MusicGain != 0.35 || def.Duck.Threshold != 0.02 || def.Duck.Ratio != 8 ||
-		def.Duck.AttackMS != 20 || def.Duck.ReleaseMS != 350 || def.Duck.FadeIn != 0.5 || def.Duck.FadeOut != 1.5 ||
+		def.SFXGain != 0.35 || def.MusicGain != 0.25 || def.Duck.Threshold != 0.015 || def.Duck.Ratio != 12 ||
+		def.Duck.AttackMS != 20 || def.Duck.ReleaseMS != 450 || def.Duck.FadeIn != 0.5 || def.Duck.FadeOut != 1.5 ||
 		def.SFXSeconds < 1 || def.SFXSeconds > 3 || def.MusicModel == "" || def.LevelFor(map[string]bool{"ai_video_presenter": true}) != AudioSFX {
 		t.Fatalf("defaults = %+v", def)
 	}
@@ -107,8 +107,8 @@ func TestMixGraph(t *testing.T) {
 	score := strings.Join(mixGraph(mixInputs{voice: true, music: true, sfx: []float64{0, 1.5}, total: 20,
 		mix: AudioMix{SFXGain: cfg.SFXGain, Duck: &duck}}), ";")
 	for _, want := range []string{
-		"asplit=2[vo][key]", "volume=0.35", "afade=t=in:st=0:d=0.500", "afade=t=out:st=18.500:d=1.500",
-		"[mu][key]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=350",
+		"asplit=2[vo][key]", "volume=0.25", "afade=t=in:st=0:d=0.500", "afade=t=out:st=18.500:d=1.500",
+		"[mu][key]sidechaincompress=threshold=0.015:ratio=12:attack=20:release=450",
 		"[2:a]", "[3:a]", "adelay=1500:all=1", "amix=inputs=4",
 	} {
 		if !strings.Contains(score, want) {

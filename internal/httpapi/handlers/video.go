@@ -66,7 +66,7 @@ func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := media.Formats[req.Format]; !ok {
-		writeError(w, http.StatusBadRequest, "format must be 1080x1080, 1080x1350 or 1080x1920")
+		writeError(w, http.StatusBadRequest, "format must be "+media.FormatsText)
 		return
 	}
 	if req.Seconds == 0 {
@@ -107,7 +107,9 @@ func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
 
 // scriptRequest asks for a template video ad script.
 type scriptRequest struct {
-	TenantID  string `json:"tenant_id"`
+	TenantID string `json:"tenant_id"`
+	// Format is the ad's format; the writer is told its shape (landscape, square or vertical).
+	Format    string `json:"format"`
 	VersionID string `json:"version_id"` // names the charge: script:<version_id>
 	Offering  string `json:"offering"`
 	Facts     string `json:"facts"`
@@ -189,7 +191,7 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	res, err := h.runtime.WriteVideoScript(r.Context(), team.VideoScriptRequest{TenantID: tenantID, Offering: req.Offering,
-		Facts: req.Facts, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
+		Facts: req.Facts, Format: req.Format, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
 		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage,
 		Presenter:   req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium,
 		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames,
@@ -223,8 +225,10 @@ type adRequest struct {
 	Scenes      []media.ScriptScene `json:"scenes"`
 	PhotoURLs   []string            `json:"photo_urls"`
 	FootageURLs []string            `json:"footage_urls"`
-	Accent      string              `json:"accent"`
-	LogoURL     string              `json:"logo_url"`
+	// PhotoInfo describes photo_urls by index (offering photo or brand-library picture).
+	PhotoInfo []media.PhotoInfo `json:"photo_info"`
+	Accent    string            `json:"accent"`
+	LogoURL   string            `json:"logo_url"`
 	// MusicURL is the owner's licensed music bed (marketflow-api checks the confirmation).
 	MusicURL string `json:"music_url"`
 	// Mood is the ad's feel for generated music at the score level, e.g. the script's

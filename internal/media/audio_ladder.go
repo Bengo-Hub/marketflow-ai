@@ -106,10 +106,11 @@ func DefaultAudioConfig() AudioConfig {
 		VoiceFilter: defaultVoiceFilter,
 		SFXGain:     0.35,
 		SFXSeconds:  2,
-		MusicGain:   0.35,
-		Duck:        Ducking{Threshold: 0.02, Ratio: 8, AttackMS: 20, ReleaseMS: 350, FadeIn: 0.5, FadeOut: 1.5},
-		MusicStyle:  defaultMusicStyle,
-		MusicModel:  defaultMusicModel,
+		// 2026-11-19 audit: a lower bed and a firmer duck, so the music never sits on the speech.
+		MusicGain:  0.25,
+		Duck:       Ducking{Threshold: 0.015, Ratio: 12, AttackMS: 20, ReleaseMS: 450, FadeIn: 0.5, FadeOut: 1.5},
+		MusicStyle: defaultMusicStyle,
+		MusicModel: defaultMusicModel,
 		// Two voices for UGC only (owner, 2026-11-14).
 		TwoVoiceDeliveries: map[string]bool{DeliveryUGC: true},
 		VoiceMatchLUFS:     defaultVoiceMatchLUFS,

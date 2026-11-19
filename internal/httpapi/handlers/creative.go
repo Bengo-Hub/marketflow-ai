@@ -69,7 +69,7 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := media.Formats[req.Format]; !ok {
-		writeError(w, http.StatusBadRequest, "format must be 1080x1080, 1080x1350 or 1080x1920")
+		writeError(w, http.StatusBadRequest, "format must be "+media.FormatsText)
 		return
 	}
 	if req.SceneURL != "" {
