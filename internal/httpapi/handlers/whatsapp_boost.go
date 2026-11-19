@@ -208,7 +208,7 @@ func (h *OSHandler) whatsAppBoostLaunch(ctx context.Context, tenantID uuid.UUID,
 	if res.ID != "" {
 		boosts = link(req.PortalURL, req.TenantSlug, "/campaigns/"+res.ID)
 	}
-	reply := "Boost created. It is paused until Meta approves the ad, usually within a day; I'll tell you here when it goes live. Follow it here: " + boosts
+	reply := "Boost created. It is paused until Meta approves the ad, usually within a day, then it goes live by itself. Follow it here: " + boosts
 	if res.Quote.Shortfall > 0 && res.Quote.AccountID != "" {
 		reply += fmt.Sprintf("\nAdd %s to the ad account on Meta so it can run (M-Pesa or card): %s",
 			money(res.Quote.Shortfall, res.Quote.Currency), metaBilling(res.Quote.AccountID))
