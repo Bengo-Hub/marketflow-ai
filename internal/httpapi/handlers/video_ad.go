@@ -60,6 +60,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
+	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
 		return req, areq, tenantID, false
@@ -82,6 +83,30 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		return req, areq, tenantID, false
 	}
 	return req, areq, tenantID, true
+}
+
+// premiumDefault reports whether the tenant gets premium routes by default (the routing policy's
+// rule for the platform owner's exempt tenant) and the budget an all-premium video ad may cost.
+// When the tenant cannot be read the request's own tier holds.
+func (h *OSHandler) premiumDefault(ctx context.Context, tenantID uuid.UUID) (bool, float64) {
+	p := media.Policy(ctx)
+	if !p.PremiumForExempt || h.source == nil {
+		return false, 0
+	}
+	tc, err := h.source.Load(ctx, tenantID)
+	if err != nil || !tc.Exempt {
+		return false, 0
+	}
+	return true, p.PremiumBudgetUSD
+}
+
+// premiumTier is the tier a poster, motion poster or storyboard is made on: premium for the
+// platform owner's tenant under the routing policy, else the asked one.
+func (h *OSHandler) premiumTier(ctx context.Context, tenantID uuid.UUID, asked string) string {
+	if on, _ := h.premiumDefault(ctx, tenantID); on {
+		return media.TierPremium
+	}
+	return asked
 }
 
 // audioLevel is the soundtrack level the tenant's plan features grant. When the plan cannot
@@ -340,7 +365,8 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		req.Actor = nil
 	}
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
-		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery}
+		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
+		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard)}
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only

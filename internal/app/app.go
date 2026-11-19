@@ -473,6 +473,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		if eerr != nil {
 			logger.Warn("media endpoint settings invalid; using defaults for those", zap.Error(eerr))
 		}
+		// The routing policy: the bake-off defaults per scenario and premium for the platform owner.
+		media.SetPolicySource(mediaPolicySource(resolver))
 		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger).WithEndpoints(imageEndpoints)
 		osHandler.SetPosters(posters)
 		// Motion posters and template video ads: background jobs in Redis; ffmpeg

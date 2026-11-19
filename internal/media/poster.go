@@ -126,7 +126,7 @@ func (p *Posters) Make(ctx context.Context, req PosterRequest) (*PosterResult, e
 		}
 	}
 
-	routes := p.router.Order(CapPosterImage, req.Tier, func(rt Route) bool { return usable(ctx, p.keys, rt, rt.Cost(0)) })
+	routes := p.router.OrderPreferred(CapPosterImage, req.Tier, 0, func(rt Route) bool { return usable(ctx, p.keys, rt, rt.Cost(0)) }, prefer(ctx, ScenarioPoster, req.Tier))
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {

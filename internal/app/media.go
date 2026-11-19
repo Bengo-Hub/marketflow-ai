@@ -133,3 +133,29 @@ func publicBaseURL() string {
 	}
 	return ""
 }
+
+// mediaPolicySource reads the routing policy from platform settings (ProviderSetting platform /
+// media / routing: prefer, premium_for_exempt, premium_budget_usd), reused for a minute. A failed
+// lookup keeps the last good policy, and with none the code defaults (the bake-off evidence) hold.
+func mediaPolicySource(resolver *providers.Resolver) media.PolicySource {
+	var (
+		mu   sync.Mutex
+		last = media.DefaultRoutePolicy()
+		at   time.Time
+	)
+	return func(ctx context.Context) media.RoutePolicy {
+		mu.Lock()
+		defer mu.Unlock()
+		if resolver == nil || time.Since(at) < time.Minute {
+			return last
+		}
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		settings, err := resolver.ResolveRaw(rctx, "media", "routing")
+		cancel()
+		at = time.Now()
+		if err == nil {
+			last = media.PolicyFromSettings(settings)
+		}
+		return last
+	}
+}

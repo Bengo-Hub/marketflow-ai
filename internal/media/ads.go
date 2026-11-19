@@ -153,6 +153,11 @@ type AdRequest struct {
 	// off (owner 2026-11-14). The zero value keeps the note. The script's honesty rules stay: it
 	// never claims an AI presenter is a real customer or a real person.
 	NoAILabel bool
+	// AutoPremium starts every paid scene on premium routes (the platform owner's tenant under the
+	// routing policy); a scene falls back to standard when no premium route can take it or the
+	// all-premium quote is over PremiumBudgetUSD (0: no limit).
+	AutoPremium      bool
+	PremiumBudgetUSD float64
 }
 
 // MusicCache is one version's generated music, kept for its revisions.
@@ -403,7 +408,11 @@ type ScenePlan struct {
 	// AvoidText marks a scene showing screens or signs: its clip goes to a route that takes a
 	// negative prompt when the registry has one.
 	AvoidText bool `json:"avoid_text,omitempty"`
-	source    string
+	// Tier is the scene's own route tier when it differs by scene (the platform owner's premium
+	// default, with per-scene fallback); "" is the request's tier.
+	Tier    string `json:"tier,omitempty"`
+	source  string
+	speaker string
 }
 
 // AdPlan prices an ad scene by scene before anything is paid.
@@ -465,40 +474,24 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		if two {
 			speaker = turns[i]
 		}
-		sp.Hash = sceneHashFor(req, s, sp, a.deliveryPrint(req.Delivery), speaker)
-		if c, ok := req.Cache[sp.Hash]; ok && a.cacheUsable(ctx, req, c, sp) {
-			sp.Cached = true
+		paid := sp.Work == WorkPresenter || sp.Work == WorkClip
+		if req.AutoPremium && paid {
+			sp.Tier = TierPremium // the platform owner's tenant starts every paid scene on premium
+		}
+		if err := a.priceScene(ctx, req, s, &sp, speaker); err != nil && sp.Tier == TierPremium && req.AutoPremium {
+			// No premium route can take the scene (offline, unpaid or low): it falls back to standard.
+			sp.Tier = TierStandard
+			if err := a.priceScene(ctx, req, s, &sp, speaker); err != nil {
+				return plan, err
+			}
+		} else if err != nil {
+			return plan, err
+		}
+		if sp.Cached {
 			plan.Cached++
-		}
-		if !sp.Cached {
+		} else {
 			plan.VoiceChars += chars
-			switch sp.Work {
-			case WorkPresenter:
-				usd, route, est := a.presenters.Quote(ctx, tierOf(req), sp.Seconds)
-				if route == "" {
-					return plan, fmt.Errorf("%w: no presenter route is available", ErrNoRoute)
-				}
-				sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
-			case WorkClip:
-				usd, route, est := a.clips.QuoteFor(ctx, tierOf(req), clipSeconds(sp.Seconds), sp.AvoidText)
-				if route == "" {
-					return plan, fmt.Errorf("%w: no clip route is available", ErrNoRoute)
-				}
-				sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
-			}
 			plan.CostUSD += sp.CostUSD
-		}
-		// A cached scene is not sent again, so it shows no prompt.
-		if !sp.Cached {
-			switch sp.Work {
-			case WorkPresenter:
-				sp.Prompt, sp.NegativePrompt = presenterPromptFor(sp.Route, s.Visual)
-			case WorkClip:
-				sp.Prompt = clipPrompt(s.Visual)
-				if rt, ok := clipRoute(sp.Route); ok && rt.NegativePrompt {
-					sp.NegativePrompt = clipNegativePrompt
-				}
-			}
 		}
 		// A cue is made for a new scene, or for a reused one whose cue is missing.
 		if cue := sceneSFX(req, s); cue != "" && (!sp.Cached || !a.cachedCue(ctx, req.Cache[sp.Hash], cue)) {
@@ -507,6 +500,9 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		}
 		adSeconds += sp.Seconds
 		plan.Scenes = append(plan.Scenes, sp)
+	}
+	if req.AutoPremium && req.PremiumBudgetUSD > 0 {
+		a.fitPremiumBudget(ctx, req, &plan)
 	}
 	if plan.Audio == AudioScore {
 		if c := a.cachedMusic(ctx, req, musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle), adSeconds); c != nil {
@@ -518,6 +514,81 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 	plan.VoiceUSD = float64(plan.VoiceChars) * voiceUSDPer1000 / 1000
 	plan.CostUSD += plan.VoiceUSD + plan.SFXUSD + plan.MusicUSD
 	return plan, nil
+}
+
+// priceScene hashes a scene at its tier, checks the cache and, for a scene still to make, quotes
+// it on the route a render would use first and fills in the exact prompts that route is sent.
+func (a *Ads) priceScene(ctx context.Context, req AdRequest, s ScriptScene, sp *ScenePlan, speaker string) error {
+	sp.speaker = speaker
+	sp.Hash = sceneHashFor(req, s, *sp, a.deliveryPrint(req.Delivery), speaker)
+	sp.Cached, sp.Route, sp.CostUSD, sp.Estimated, sp.Prompt, sp.NegativePrompt = false, "", 0, false, "", ""
+	if c, ok := req.Cache[sp.Hash]; ok && a.cacheUsable(ctx, req, c, *sp) {
+		sp.Cached = true // a cached scene is not sent again, so it shows no prompt
+		return nil
+	}
+	tier := sceneTier(req, *sp)
+	switch sp.Work {
+	case WorkPresenter:
+		usd, route, est := a.presenters.Quote(ctx, tier, sp.Seconds)
+		if route == "" {
+			return fmt.Errorf("%w: no presenter route is available", ErrNoRoute)
+		}
+		sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
+		sp.Prompt, sp.NegativePrompt = presenterPromptFor(sp.Route, s.Visual)
+	case WorkClip:
+		usd, route, est := a.clips.QuoteFor(ctx, tier, clipSeconds(sp.Seconds), sp.AvoidText)
+		if route == "" {
+			return fmt.Errorf("%w: no clip route is available", ErrNoRoute)
+		}
+		sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
+		sp.Prompt = clipPrompt(s.Visual)
+		if rt, ok := clipRoute(sp.Route); ok && rt.NegativePrompt {
+			sp.NegativePrompt = clipNegativePrompt
+		}
+	}
+	return nil
+}
+
+// fitPremiumBudget moves an all-premium ad's dearest premium scenes to standard, one at a time,
+// until its paid scenes, voice and cues fit the budget (or none is left to move).
+func (a *Ads) fitPremiumBudget(ctx context.Context, req AdRequest, plan *AdPlan) {
+	total := func() float64 {
+		return plan.CostUSD + float64(plan.VoiceChars)*voiceUSDPer1000/1000 + plan.SFXUSD
+	}
+	tried := map[int]bool{}
+	for total() > req.PremiumBudgetUSD {
+		pick := -1
+		for i, sp := range plan.Scenes {
+			if !sp.Cached && sp.Tier == TierPremium && !tried[i] && (pick < 0 || sp.CostUSD > plan.Scenes[pick].CostUSD) {
+				pick = i
+			}
+		}
+		if pick < 0 {
+			return
+		}
+		tried[pick] = true
+		sp := plan.Scenes[pick]
+		was := sp
+		sp.Tier = TierStandard
+		if err := a.priceScene(ctx, req, req.Scenes[pick], &sp, was.speaker); err != nil {
+			continue
+		}
+		plan.CostUSD += sp.CostUSD - was.CostUSD
+		if sp.Cached {
+			plan.Cached++
+			plan.VoiceChars -= sp.Chars
+		}
+		plan.Scenes[pick] = sp
+	}
+}
+
+// sceneTier is the route tier of one scene: its own (an exempt tenant's per-scene choice), else
+// the request's.
+func sceneTier(req AdRequest, sp ScenePlan) string {
+	if sp.Tier != "" {
+		return sp.Tier
+	}
+	return tierOf(req)
 }
 
 // sceneSFX is the scene's sound cue when the request's level renders cues, else "".
@@ -608,7 +679,7 @@ func sceneHash(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint string)
 // out of one-voice scenes, so their hashes stay as they were.
 func sceneHashFor(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint, speaker string) string {
 	parts := map[string]any{
-		"kind": kindOf(req.Kind), "tier": tierOf(req), "shot": s.Shot, "work": sp.Work, "source": stableSource(sp.source),
+		"kind": kindOf(req.Kind), "tier": sceneTier(req, sp), "shot": s.Shot, "work": sp.Work, "source": stableSource(sp.source),
 		"visual": strings.TrimSpace(s.Visual), "voiceover": strings.TrimSpace(s.Voiceover), "duration": s.DurationS,
 		"voice": req.Voice, "delivery": req.Delivery, "language": req.Language,
 		"gender": req.Prefs.Gender, "accent": req.Prefs.Accent, "seed": req.Seed,
@@ -1040,7 +1111,7 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 			return fmt.Errorf("media: presenter scene %s has no voice", sp.SceneID)
 		}
 		p, err := a.presenters.Make(ctx, PresenterRequest{TenantID: req.TenantID, VersionID: req.VersionID, ImageURL: req.ActorURL,
-			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: tierOf(req), Prompt: s.Visual, Format: req.Format})
+			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: sceneTier(req, sp), Prompt: s.Visual, Format: req.Format})
 		if err != nil {
 			return fmt.Errorf("media: presenter scene %s: %w", sp.SceneID, err)
 		}
@@ -1056,7 +1127,7 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}
 		_, rt, _, err := a.clips.Animate(ctx, ClipRequest{TenantID: req.TenantID, VersionID: req.VersionID, SceneURL: frame,
-			Prompt: s.Visual, Seconds: secs, Tier: tierOf(req), Format: req.Format, AvoidText: sp.AvoidText}, path)
+			Prompt: s.Visual, Seconds: secs, Tier: sceneTier(req, sp), Format: req.Format, AvoidText: sp.AvoidText, Scenario: ScenarioAdClip}, path)
 		if err != nil {
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}

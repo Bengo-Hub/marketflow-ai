@@ -89,6 +89,8 @@ func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "accent must be a #rrggbb colour")
 		return
 	}
+	// The platform owner's tenant gets the premium motion route by default (routing policy).
+	req.Tier = h.premiumTier(r.Context(), tenantID, req.Tier)
 	output := registry.MotionPoster
 	if req.Tier == media.TierPremium {
 		output = registry.MotionPosterPremium

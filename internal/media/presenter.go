@@ -98,7 +98,7 @@ func (p *Presenters) Make(ctx context.Context, req PresenterRequest) (*Presenter
 	if req.Tier == "" {
 		req.Tier = TierStandard
 	}
-	routes := p.router.OrderFor(CapPresenter, req.Tier, req.Seconds, func(rt Route) bool { return usable(ctx, p.keys, rt, presenterCost(rt, req.Seconds)) })
+	routes := p.router.OrderPreferred(CapPresenter, req.Tier, req.Seconds, func(rt Route) bool { return usable(ctx, p.keys, rt, presenterCost(rt, req.Seconds)) }, prefer(ctx, ScenarioPresenter, req.Tier))
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -129,7 +129,7 @@ func (p *Presenters) Quote(ctx context.Context, tier string, seconds float64) (u
 	if tier == "" {
 		tier = TierStandard
 	}
-	routes := p.router.OrderFor(CapPresenter, tier, seconds, func(rt Route) bool { return usable(ctx, p.keys, rt, presenterCost(rt, seconds)) })
+	routes := p.router.OrderPreferred(CapPresenter, tier, seconds, func(rt Route) bool { return usable(ctx, p.keys, rt, presenterCost(rt, seconds)) }, prefer(ctx, ScenarioPresenter, tier))
 	if len(routes) == 0 {
 		return 0, "", false
 	}

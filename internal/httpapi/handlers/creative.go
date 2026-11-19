@@ -80,6 +80,8 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required (max 2000 characters)")
 		return
 	}
+	// The platform owner's tenant gets the premium poster route by default (routing policy).
+	req.Tier = h.premiumTier(r.Context(), tenantID, req.Tier)
 	output := registry.Poster
 	if req.Tier == media.TierPremium {
 		output = registry.PosterPremium

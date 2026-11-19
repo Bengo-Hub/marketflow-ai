@@ -108,6 +108,18 @@ func (r *Router) Order(cap Capability, tier string, available func(Route) bool) 
 // OrderFor is Order for an output of the given length: routes that cannot make it
 // are left out and routes are compared on what that length costs on each.
 func (r *Router) OrderFor(cap Capability, tier string, seconds float64, available func(Route) bool) []Route {
+	return r.OrderPreferred(cap, tier, seconds, available, nil)
+}
+
+// OrderPreferred is OrderFor with the routing policy's preferred routes (policy.go) first, in their
+// order, among the healthy routes; a preferred route whose breaker is open still waits behind them.
+func (r *Router) OrderPreferred(cap Capability, tier string, seconds float64, available func(Route) bool, prefer []string) []Route {
+	rank := map[string]int{}
+	for i, k := range prefer {
+		if _, ok := rank[k]; !ok {
+			rank[k] = i
+		}
+	}
 	floor := tierFloor[tier]
 	var eligible []Route
 	cheapest := 0.0
@@ -135,6 +147,14 @@ func (r *Router) OrderFor(cap Capability, tier string, seconds float64, availabl
 		scores[rt.Key] = r.score(rt, rt.Cost(seconds), cheapest, w)
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
+		ri, iok := rank[eligible[i].Key]
+		rj, jok := rank[eligible[j].Key]
+		if iok != jok {
+			return iok
+		}
+		if iok && ri != rj {
+			return ri < rj
+		}
 		if eligible[i].Fallback != eligible[j].Fallback {
 			return !eligible[i].Fallback
 		}

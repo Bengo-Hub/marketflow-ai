@@ -64,6 +64,8 @@ type StoryboardRequest struct {
 	// Delivery is the ad's voice delivery; DeliveryUGC draws generated stills and the actor as
 	// candid phone photos rather than advertising photos.
 	Delivery string
+	// Tier is the still routes' tier: premium for the platform owner's tenant (policy.go), else standard.
+	Tier string
 }
 
 // Actor is an ad's one presenter: the still every presenter scene is lip-synced from.
@@ -228,7 +230,16 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 
 // still makes one image on the best route with fallbacks and stores it as a JPEG.
 func (s *Storyboards) still(ctx context.Context, req StoryboardRequest, name, prompt string) (url, key, route string, cost float64, err error) {
-	routes := s.router.Order(CapStill, TierStandard, func(rt Route) bool { return usable(ctx, s.keys, rt, rt.Cost(0)) })
+	ok := func(rt Route) bool { return usable(ctx, s.keys, rt, rt.Cost(0)) }
+	tier := req.Tier
+	if tier != TierPremium {
+		tier = TierStandard
+	}
+	routes := s.router.OrderPreferred(CapStill, tier, 0, ok, prefer(ctx, ScenarioStill, tier))
+	if len(routes) == 0 && tier == TierPremium {
+		// No premium still route can take it: the standard ones do.
+		routes = s.router.OrderPreferred(CapStill, TierStandard, 0, ok, prefer(ctx, ScenarioStill, TierStandard))
+	}
 	var lastErr error
 	for _, rt := range routes {
 		if ctx.Err() != nil {

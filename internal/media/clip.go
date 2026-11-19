@@ -73,6 +73,9 @@ type ClipRequest struct {
 	// AvoidText puts routes that take a negative prompt first: the scene shows screens or signs,
 	// which image-to-video models fill with invented writing.
 	AvoidText bool
+	// Scenario names the job for the routing policy: ScenarioAdClip for a video ad's scenes, else a
+	// motion poster.
+	Scenario string
 }
 
 // VideoStore keeps finished clips (httpware/objectstore's video-drafts type).
@@ -173,7 +176,7 @@ func (c *Clips) Animate(ctx context.Context, req ClipRequest, path string) (stri
 		req.Tier = TierStandard
 	}
 	secs := float64(req.Seconds)
-	routes := c.order(ctx, req.Tier, secs, req.AvoidText)
+	routes := c.order(ctx, req.scenario(), req.Tier, secs, req.AvoidText)
 	var lastErr error
 	for i, rt := range routes {
 		if ctx.Err() != nil {
@@ -277,7 +280,7 @@ func (c *Clips) QuoteFor(ctx context.Context, tier string, seconds int, avoidTex
 		tier = TierStandard
 	}
 	secs := float64(seconds)
-	routes := c.order(ctx, tier, secs, avoidText)
+	routes := c.order(ctx, ScenarioAdClip, tier, secs, avoidText)
 	if len(routes) == 0 {
 		return 0, "", false
 	}
@@ -295,8 +298,13 @@ func (c *Clips) QuoteFor(ctx context.Context, tier string, seconds int, avoidTex
 
 // order is the routes to try for a clip, best first. With avoidText the routes that take a
 // negative prompt come first (still in score order among themselves), whatever their price.
-func (c *Clips) order(ctx context.Context, tier string, secs float64, avoidText bool) []Route {
-	routes := c.router.OrderFor(CapImageToVideo, tier, secs, func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) })
+func (c *Clips) order(ctx context.Context, scenario, tier string, secs float64, avoidText bool) []Route {
+	ok := func(rt Route) bool { return usable(ctx, c.keys, rt, rt.Cost(secs)) }
+	routes := c.router.OrderPreferred(CapImageToVideo, tier, secs, ok, prefer(ctx, scenario, tier))
+	if len(routes) == 0 && tier == TierPremium {
+		// No premium clip route can take it (offline, unpaid or low): the standard ones do.
+		routes = c.router.OrderPreferred(CapImageToVideo, TierStandard, secs, ok, prefer(ctx, scenario, TierStandard))
+	}
 	if !avoidText {
 		return routes
 	}
@@ -468,4 +476,12 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// scenario is the request's routing scenario (a motion poster unless set).
+func (r ClipRequest) scenario() string {
+	if r.Scenario == "" {
+		return ScenarioMotion
+	}
+	return r.Scenario
 }

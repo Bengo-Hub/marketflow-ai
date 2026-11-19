@@ -131,8 +131,8 @@ func TestTextSceneGoesToANegativePromptRoute(t *testing.T) {
 		t.Fatal("showsWriting")
 	}
 	c := NewClips(keysFor("fal", "higgsfield"), nil, nil, nil)
-	plain := c.order(context.Background(), TierStandard, 6, false)
-	avoid := c.order(context.Background(), TierStandard, 6, true)
+	plain := c.order(context.Background(), ScenarioAdClip, TierStandard, 6, false)
+	avoid := c.order(context.Background(), ScenarioAdClip, TierStandard, 6, true)
 	if len(avoid) == 0 || !avoid[0].NegativePrompt {
 		t.Fatalf("a text scene starts on %v", avoid)
 	}
@@ -189,5 +189,53 @@ func TestMusicDuckedAtEveryLevel(t *testing.T) {
 	g := strings.Join(mixGraph(mixInputs{voice: true, music: true, total: 20, mix: AudioMix{Duck: &d}}), ";")
 	if !strings.Contains(g, "sidechaincompress") || !strings.Contains(g, "volume=0.25") {
 		t.Fatalf("music not ducked: %s", g)
+	}
+}
+
+func TestRoutingPolicyDefaultsAndOverrides(t *testing.T) {
+	def := DefaultRoutePolicy()
+	if def.Prefer["presenter/standard"][0] != "fal/creatify-boreal" || def.Prefer["ad_clip/standard"][0] != "fal/hailuo-2.3-fast" ||
+		def.Prefer["ad_clip/premium"][0] != "higgsfield/kling-v3-std" || !def.PremiumForExempt || def.PremiumBudgetUSD <= 0 {
+		t.Fatalf("defaults: %+v", def)
+	}
+	p := PolicyFromSettings(map[string]string{"prefer": `{"presenter/standard":["fal/veed-fabric"]}`,
+		"premium_for_exempt": "false", "premium_budget_usd": "3.5"})
+	if p.Prefer["presenter/standard"][0] != "fal/veed-fabric" || p.Prefer["ad_clip/standard"][0] != "fal/hailuo-2.3-fast" ||
+		p.PremiumForExempt || p.PremiumBudgetUSD != 3.5 {
+		t.Fatalf("overrides: %+v", p)
+	}
+	if bad := PolicyFromSettings(map[string]string{"prefer": "{not json", "premium_budget_usd": "x"}); bad.PremiumBudgetUSD != def.PremiumBudgetUSD {
+		t.Fatalf("bad settings: %+v", bad)
+	}
+	// A preference moves its route first, against the score.
+	r := NewRouter(PresenterRoutes)
+	got := r.OrderPreferred(CapPresenter, TierStandard, 8, nil, []string{"fal/veed-fabric"})
+	if got[0].Key != "fal/veed-fabric" {
+		t.Fatalf("preferred route not first: %v", got[0].Key)
+	}
+}
+
+func TestPremiumForThePlatformOwnerFallsBackByScene(t *testing.T) {
+	a := NewAds(nil, nil).WithPresenters(NewPresenters(keysFor("fal", "higgsfield"), nil)).
+		WithClips(NewClips(keysFor("fal", "higgsfield"), nil, nil, nil), newSceneFiles(t))
+	req := AdRequest{Format: "1920x1080", Kind: AdPresenter, ActorURL: "https://x/actor.jpg", Photos: []string{"https://x/offer.jpg"},
+		Scenes: []ScriptScene{{ID: "s1", Shot: ShotPresenter, Voiceover: "Hello there, shop owners of Nairobi"},
+			{ID: "s2", Shot: ShotProduct, Voiceover: "Duka POS counts every sale"}},
+		AutoPremium: true}
+	plan, err := a.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Scenes[0].Tier != TierPremium || plan.Scenes[0].Route != "higgsfield/seedance-2.5-720p" ||
+		plan.Scenes[1].Tier != TierPremium || plan.Scenes[1].Route != "higgsfield/kling-v3-std" {
+		t.Fatalf("all premium: %+v", plan.Scenes)
+	}
+	req.PremiumBudgetUSD = 0.05
+	cheap, err := a.Plan(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cheap.Scenes[0].Tier != TierStandard || cheap.Scenes[0].Route != "fal/creatify-boreal" || cheap.CostUSD >= plan.CostUSD {
+		t.Fatalf("over budget, scenes not moved to standard: %+v", cheap.Scenes)
 	}
 }
