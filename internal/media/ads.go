@@ -155,9 +155,12 @@ type AdRequest struct {
 	NoAILabel bool
 	// AutoPremium starts every paid scene on premium routes (the platform owner's tenant under the
 	// routing policy); a scene falls back to standard when no premium route can take it or the
-	// all-premium quote is over PremiumBudgetUSD (0: no limit).
+	// all-premium quote is over PremiumBudgetUSD (0: the per-video ceiling).
 	AutoPremium      bool
 	PremiumBudgetUSD float64
+	// MaxVideoUSD is the platform's per-video provider-cost ceiling (max_video_budget_usd); 0
+	// reads it from the routing policy in force.
+	MaxVideoUSD float64
 }
 
 // MusicCache is one version's generated music, kept for its revisions.
@@ -510,20 +513,22 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 			plan.MusicUSD, plan.MusicRoute = a.sounds.Quote(ctx, CapMusic, tierOf(req), adSeconds)
 		}
 	}
+	ceiling := req.MaxVideoUSD
+	if ceiling <= 0 {
+		ceiling = Policy(ctx).MaxVideoUSD
+	}
 	if req.AutoPremium {
-		budget := req.PremiumBudgetUSD
-		if budget <= 0 || budget > MaxVideoBudgetUSD {
-			budget = MaxVideoBudgetUSD
+		if req.PremiumBudgetUSD <= 0 || req.PremiumBudgetUSD > ceiling {
+			req.PremiumBudgetUSD = ceiling
 		}
-		req.PremiumBudgetUSD = budget
 		a.fitPremiumBudget(ctx, req, &plan)
 	}
 	plan.VoiceUSD = float64(plan.VoiceChars) * voiceUSDPer1000 / 1000
 	plan.CostUSD += plan.VoiceUSD + plan.SFXUSD + plan.MusicUSD
-	// Owner rule 2026-11-20: no video ad costs more than MaxVideoBudgetUSD at provider prices, on
-	// any tier or tenant. A plan still over it is refused with what to change, before any spend.
-	if plan.CostUSD > MaxVideoBudgetUSD+0.005 {
-		return plan, &UserError{Msg: fmt.Sprintf("this video would cost about USD %.2f to make, over the USD %.2f limit per video; make it shorter, use fewer scenes or a standard quality", plan.CostUSD, MaxVideoBudgetUSD)}
+	// No video ad costs more than the platform's max_video_budget_usd at provider prices, on any
+	// tier or tenant. A plan still over it is refused with what to change, before any spend.
+	if ceiling > 0 && plan.CostUSD > ceiling+0.005 {
+		return plan, &UserError{Msg: fmt.Sprintf("this video would cost about USD %.2f to make, over the USD %.2f limit per video; make it shorter, use fewer scenes or a standard quality", plan.CostUSD, ceiling)}
 	}
 	return plan, nil
 }

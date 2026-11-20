@@ -61,6 +61,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
 	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
+	areq.MaxVideoUSD = media.Policy(r.Context()).MaxVideoUSD
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
 		return req, areq, tenantID, false

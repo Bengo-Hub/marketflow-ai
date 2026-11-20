@@ -201,8 +201,11 @@ func TestRoutingPolicyDefaultsAndOverrides(t *testing.T) {
 	p := PolicyFromSettings(map[string]string{"prefer": `{"presenter/standard":["fal/veed-fabric"]}`,
 		"premium_for_exempt": "false", "premium_budget_usd": "3.5"})
 	if p.Prefer["presenter/standard"][0] != "fal/veed-fabric" || p.Prefer["ad_clip/standard"][0] != "fal/hailuo-2.3-fast" ||
-		p.PremiumForExempt || p.PremiumBudgetUSD != MaxVideoBudgetUSD {
-		t.Fatalf("overrides (3.5 is over the USD 2 ceiling, so it clamps): %+v", p)
+		p.PremiumForExempt || p.PremiumBudgetUSD != DefaultMaxVideoBudgetUSD {
+		t.Fatalf("overrides (3.5 is over the default USD 2 ceiling, so it clamps): %+v", p)
+	}
+	if raised := PolicyFromSettings(map[string]string{"max_video_budget_usd": "5", "premium_budget_usd": "3.5"}); raised.MaxVideoUSD != 5 || raised.PremiumBudgetUSD != 3.5 {
+		t.Fatalf("the ceiling is a setting, not code: %+v", raised)
 	}
 	if low := PolicyFromSettings(map[string]string{"premium_budget_usd": "1.25"}); low.PremiumBudgetUSD != 1.25 {
 		t.Fatalf("a budget under the ceiling is kept: %+v", low)
@@ -232,7 +235,7 @@ func TestPremiumForThePlatformOwnerFallsBackByScene(t *testing.T) {
 	// No budget set reads as the USD 2 ceiling (owner 2026-11-20): the Seedance presenter cannot
 	// fit, so it falls back to Boreal, while the premium Kling clip still fits.
 	if plan.Scenes[0].Tier != TierStandard || plan.Scenes[0].Route != "fal/creatify-boreal" ||
-		plan.Scenes[1].Tier != TierPremium || plan.Scenes[1].Route != "higgsfield/kling-v3-std" || plan.CostUSD > MaxVideoBudgetUSD {
+		plan.Scenes[1].Tier != TierPremium || plan.Scenes[1].Route != "higgsfield/kling-v3-std" || plan.CostUSD > DefaultMaxVideoBudgetUSD {
 		t.Fatalf("premium within the USD 2 ceiling: %.2f %+v", plan.CostUSD, plan.Scenes)
 	}
 	req.PremiumBudgetUSD = 0.05

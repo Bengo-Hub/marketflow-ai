@@ -36,13 +36,16 @@ type RoutePolicy struct {
 	// PremiumForExempt gives the exempt tenant premium routes by default.
 	PremiumForExempt bool `json:"premium_for_exempt"`
 	// PremiumBudgetUSD is the most an exempt tenant's video ad may cost at provider prices before
-	// its dearest scenes fall back to standard. Owner rule 2026-11-20: never above
-	// MaxVideoBudgetUSD, premium included; a setting above it, or 0, reads as the ceiling.
+	// its dearest scenes fall back to standard; never above MaxVideoUSD (0 reads as MaxVideoUSD).
 	PremiumBudgetUSD float64 `json:"premium_budget_usd"`
+	// MaxVideoUSD is the ceiling on one video ad's provider cost for every tenant and tier
+	// (setting "max_video_budget_usd"; owner 2026-11-20: configurable, USD 2 by default).
+	MaxVideoUSD float64 `json:"max_video_budget_usd"`
 }
 
-// MaxVideoBudgetUSD is the owner's hard ceiling on one video ad's provider cost (2026-11-20).
-const MaxVideoBudgetUSD = 2.0
+// DefaultMaxVideoBudgetUSD is only the fallback when the platform has not set
+// max_video_budget_usd (owner 2026-11-20); change the setting, not this.
+const DefaultMaxVideoBudgetUSD = 2.0
 
 // DefaultRoutePolicy is the bake-off evidence as code defaults:
 //   - presenter: Creatify Boreal (owner's pick after the 2026-11-11 paid test: good lip-sync and
@@ -67,7 +70,8 @@ func DefaultRoutePolicy() RoutePolicy {
 			ScenarioPoster + "/" + TierPremium:     {"fal/nano-banana-pro"},
 		},
 		PremiumForExempt: true,
-		PremiumBudgetUSD: MaxVideoBudgetUSD,
+		PremiumBudgetUSD: DefaultMaxVideoBudgetUSD,
+		MaxVideoUSD:      DefaultMaxVideoBudgetUSD,
 	}
 }
 
@@ -102,8 +106,11 @@ func PolicyFromSettings(s map[string]string) RoutePolicy {
 	if v, err := strconv.ParseFloat(strings.TrimSpace(s["premium_budget_usd"]), 64); err == nil && v > 0 {
 		p.PremiumBudgetUSD = v
 	}
-	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > MaxVideoBudgetUSD {
-		p.PremiumBudgetUSD = MaxVideoBudgetUSD
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s["max_video_budget_usd"]), 64); err == nil && v > 0 {
+		p.MaxVideoUSD = v
+	}
+	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > p.MaxVideoUSD {
+		p.PremiumBudgetUSD = p.MaxVideoUSD
 	}
 	return p
 }
