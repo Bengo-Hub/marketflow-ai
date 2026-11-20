@@ -23,6 +23,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/agent"
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/library"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
@@ -69,6 +70,15 @@ type TenantContext struct {
 	MarketSignals    *MarketSignals   `json:"market_signals,omitempty"`
 	// ChatTurnsDaily is the plan's free chat turns a day (0: the default allowance).
 	ChatTurnsDaily int `json:"chat_turns_daily,omitempty"`
+	// PaymentMethods and Glossary are the team's terms (marketflow-api service config
+	// marketing.payment_methods and marketing.glossary): guardrail.TermsBlock and FixTerms.
+	PaymentMethods []string         `json:"payment_methods,omitempty"`
+	Glossary       []guardrail.Term `json:"glossary,omitempty"`
+}
+
+// termsBlock is the tenant's glossary section for a prompt.
+func (tc TenantContext) termsBlock() string {
+	return guardrail.TermsBlock(tc.PaymentMethods, tc.Glossary)
 }
 
 // ContextSource loads the tenant context (marketflow-api owns the data).
@@ -413,7 +423,7 @@ func (r *Runtime) managerPlan(ctx context.Context, spec *promptopt.TaskSpec, tc 
 	defer cancel()
 	resp, _, err := r.router.Complete(pctx, llm.Premium, ai.ChatRequest{
 		Messages: []ai.Message{
-			{Role: "system", Content: managerSystem + "\n\nTEAM:\n" + roster.String()},
+			{Role: "system", Content: managerSystem + "\n\nTEAM:\n" + roster.String() + tc.termsBlock()},
 			{Role: "user", Content: spec.OptimisedBrief},
 		},
 		MaxTokens:      800,
@@ -506,7 +516,7 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 
 	// The business type's rules (Sprint 7 #34) shape every caption, script and post; the review
 	// then applies the same type's blocks (r.filter.CheckForTenant).
-	system := r.systemPrompt(st) + compliance.PromptRules(tc.BusinessType)
+	system := r.systemPrompt(st) + compliance.PromptRules(tc.BusinessType) + tc.termsBlock()
 	var user strings.Builder
 	if tc.MarketingContext != "" {
 		user.WriteString("BRAND CONTEXT (facts you may use):\n")
@@ -547,7 +557,8 @@ func (r *Runtime) runStep(ctx context.Context, tenantID uuid.UUID, st plannedSte
 			out.Error = err.Error()
 			return out
 		}
-		reply := resp.Choices[0].Message.Content
+		// The glossary's wrong spellings ("M-Pay") never reach the owner.
+		reply := guardrail.FixTerms(resp.Choices[0].Message.Content, tc.Glossary)
 		if !structured(st.playbook.OutputContract) {
 			out.Text = strings.TrimSpace(reply)
 			out.Error = ""

@@ -233,6 +233,10 @@ func (h *OSHandler) Ask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("text is required (max %d characters)", maxAskChars))
 		return
 	}
+	if slots := library.UnfilledSlots(req.Text); len(slots) > 0 {
+		writeError(w, http.StatusBadRequest, unfilledMessage(slots))
+		return
+	}
 	if blocked, reply := guardrail.ScreenInput(req.Text); blocked {
 		writeJSON(w, http.StatusOK, askResponse{Answer: reply, Result: &team.Result{Route: "blocked"}})
 		return
@@ -346,6 +350,10 @@ func (h *OSHandler) Optimize(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		writeError(w, http.StatusBadRequest, "text is required")
+		return
+	}
+	if slots := library.UnfilledSlots(req.Text); len(slots) > 0 {
+		writeError(w, http.StatusBadRequest, unfilledMessage(slots))
 		return
 	}
 	var tc promptopt.Context
@@ -749,4 +757,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// unfilledMessage asks for a template's missing fields by name.
+func unfilledMessage(slots []string) string {
+	names := make([]string, len(slots))
+	for i, s := range slots {
+		names[i] = strings.ReplaceAll(s, "_", " ")
+	}
+	return "fill in " + strings.Join(names, ", ") + " before sending"
 }

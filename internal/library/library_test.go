@@ -130,3 +130,13 @@ func TestSalesRepTools(t *testing.T) {
 	}
 	t.Fatal("no sales_rep member")
 }
+
+func TestUnfilledSlots(t *testing.T) {
+	got := UnfilledSlots("Ads for ${offering} on ${platforms}, budget ${budget}. More ${offering}.")
+	if strings.Join(got, ",") != "offering,platforms,budget" {
+		t.Fatalf("slots = %v", got)
+	}
+	if len(UnfilledSlots("Ads for the Python course on TikTok, budget KES 3,000")) != 0 {
+		t.Fatal("a filled brief has no slots")
+	}
+}

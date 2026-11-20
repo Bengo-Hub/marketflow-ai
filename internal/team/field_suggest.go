@@ -12,6 +12,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
 	"github.com/bengobox/marketflow-ai/internal/compliance"
+	"github.com/bengobox/marketflow-ai/internal/guardrail"
 	"github.com/bengobox/marketflow-ai/internal/llm"
 )
 
@@ -108,7 +109,7 @@ func (r *Runtime) SuggestField(ctx context.Context, in FieldSuggestRequest) (*Fi
 		shape = fmt.Sprintf(`Reply with JSON only: {"items":[""]}, at most %d items, each at most %d characters.`, spec.MaxItems, spec.MaxChars)
 	}
 	system := fieldSuggestSystem + "\nWrite in " + lang + ".\nField: " + spec.Label + ": " + spec.Ask + ".\n" + shape +
-		"\n" + compliance.PromptRules(tc.BusinessType)
+		"\n" + compliance.PromptRules(tc.BusinessType) + tc.termsBlock()
 
 	var facts strings.Builder
 	facts.WriteString("BUSINESS TYPE: " + firstNonEmptyStr(tc.BusinessType, "generic") + "\n")
@@ -148,7 +149,7 @@ func (r *Runtime) SuggestField(ctx context.Context, in FieldSuggestRequest) (*Fi
 		Text  string   `json:"text"`
 		Items []string `json:"items"`
 	}
-	if err := json.Unmarshal([]byte(extractJSON(resp.Choices[0].Message.Content)), &raw); err != nil {
+	if err := json.Unmarshal([]byte(extractJSON(guardrail.FixTerms(resp.Choices[0].Message.Content, tc.Glossary))), &raw); err != nil {
 		return nil, fmt.Errorf("field suggestion: %w", err)
 	}
 	out := &FieldSuggestion{Field: in.Field}

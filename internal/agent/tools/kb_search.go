@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/kbaudience"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -80,6 +81,7 @@ func (t *KBSearcher) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 		FROM knowledge_base_embeddings e
 		JOIN knowledge_base_entries kb ON kb.id = e.entry_id
 		WHERE (kb.scope = 'platform' OR kb.tenant_id = $2)
+		  AND ` + kbaudience.Clause("kb", "$2") + `
 		  AND ($3 = '' OR e.category = $3)
 		ORDER BY e.embedding <=> $1::vector
 		LIMIT $4`

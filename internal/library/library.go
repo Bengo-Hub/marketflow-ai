@@ -363,6 +363,18 @@ func Render(template string, vars map[string]string) string {
 	})
 }
 
+// UnfilledSlots lists the ${var} slots still in a text, each once. A brief with any is refused:
+// the team would read the slot literally and make up a value for it.
+func UnfilledSlots(text string) []string {
+	var out []string
+	for _, m := range varRe.FindAllStringSubmatch(text, -1) {
+		if !contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bengobox/marketflow-ai/internal/kbaudience"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -49,8 +50,8 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 	vectorStr := "[" + strings.Join(parts, ",") + "]"
 
 	// Include tenant-private KB rows AND platform-shared KB rows (scope='platform').
-	// Platform rows power the base FLP catalog / compliance corpus that every
-	// tenant's agent should be able to cite. Tenant rows remain isolated.
+	// The FLP platform sets (catalogue, FAQ, business, compliance) reach FLP tenants only.
+	// Tenant rows remain isolated.
 	// The entry's own text comes back only when it is short enough to be a direct
 	// answer (see kbanswer.go), so long documents never ride along.
 	query := `
@@ -59,7 +60,8 @@ func (p *Pipeline) searchPgVector(ctx context.Context, tenantID uuid.UUID, query
 		       1 - (e.embedding <=> $1::vector) AS similarity
 		FROM knowledge_base_embeddings e
 		JOIN knowledge_base_entries kb ON kb.id = e.entry_id
-		WHERE kb.scope = 'platform' OR kb.tenant_id = $2
+		WHERE (kb.scope = 'platform' OR kb.tenant_id = $2)
+		  AND ` + kbaudience.Clause("kb", "$2") + `
 		ORDER BY e.embedding <=> $1::vector
 		LIMIT $3`
 

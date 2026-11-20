@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"github.com/bengobox/marketflow-ai/internal/kbaudience"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -45,6 +46,7 @@ func (t *GetProduct) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON st
 		WHERE (scope = 'platform' OR tenant_id = $1)
 		  AND category = 'product'
 		  AND `+liveEntry+`
+		  AND `+kbaudience.Clause("", "$1")+`
 		  AND (metadata->>'product_code' ILIKE $2 OR title ILIKE $2)
 		ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
 		LIMIT 1`, tenantID, "%"+args.Code+"%")
@@ -102,6 +104,7 @@ func (t *GetFAQ) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON string
 		WHERE (scope = 'platform' OR tenant_id = $1)
 		  AND category = 'faq'
 		  AND `+liveEntry+`
+		  AND `+kbaudience.Clause("", "$1")+`
 		  AND title ILIKE $2
 		LIMIT 5`, tenantID, "%"+args.Keyword+"%")
 	if err != nil {
