@@ -68,10 +68,13 @@ const (
 
 // ScriptScene is one scene of an approved script.
 type ScriptScene struct {
-	ID        string  `json:"id"`
-	Shot      string  `json:"shot"`
-	Asset     int     `json:"asset,omitempty"` // 1-based photo or footage index; 0 picks in order
-	Visual    string  `json:"visual,omitempty"`
+	ID     string `json:"id"`
+	Shot   string `json:"shot"`
+	Asset  int    `json:"asset,omitempty"` // 1-based photo or footage index; 0 picks in order
+	Visual string `json:"visual,omitempty"`
+	// Setting is where the scene happens (the setting brief: place, neighbourhood, vibe, people,
+	// props); every prompt drawn from the scene carries it, so scenes stay true to the business's town.
+	Setting   string  `json:"setting,omitempty"`
 	Voiceover string  `json:"voiceover"`
 	Caption   string  `json:"caption"`
 	DurationS float64 `json:"duration_s"` // used only for a scene without voiceover
@@ -161,6 +164,9 @@ type AdRequest struct {
 	// MaxVideoUSD is the platform's per-video provider-cost ceiling (max_video_budget_usd); 0
 	// reads it from the routing policy in force.
 	MaxVideoUSD float64
+	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
+	Brand string
+	Place string
 }
 
 // MusicCache is one version's generated music, kept for its revisions.
@@ -551,14 +557,14 @@ func (a *Ads) priceScene(ctx context.Context, req AdRequest, s ScriptScene, sp *
 			return fmt.Errorf("%w: no presenter route is available", ErrNoRoute)
 		}
 		sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
-		sp.Prompt, sp.NegativePrompt = presenterPromptFor(sp.Route, s.Visual)
+		sp.Prompt, sp.NegativePrompt = presenterPromptFor(sp.Route, sceneText(s))
 	case WorkClip:
 		usd, route, est := a.clips.QuoteFor(ctx, tier, clipSeconds(sp.Seconds), sp.AvoidText)
 		if route == "" {
 			return fmt.Errorf("%w: no clip route is available", ErrNoRoute)
 		}
 		sp.Route, sp.CostUSD, sp.Estimated = route, usd, est
-		sp.Prompt = clipPrompt(s.Visual)
+		sp.Prompt = clipPrompt(sceneText(s))
 		if rt, ok := clipRoute(sp.Route); ok && rt.NegativePrompt {
 			sp.NegativePrompt = clipNegativePrompt
 		}
@@ -706,6 +712,10 @@ func sceneHashFor(req AdRequest, s ScriptScene, sp ScenePlan, deliveryPrint, spe
 	}
 	if speaker != "" {
 		parts["speaker"] = speaker
+	}
+	// A scene without a setting keeps the hash it had before settings existed.
+	if set := strings.TrimSpace(s.Setting); set != "" {
+		parts["setting"] = set
 	}
 	b, _ := json.Marshal(parts) // map keys are sorted, so the hash is stable
 	h := sha256.Sum256(b)
@@ -920,12 +930,29 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		t += o.seconds
 	}
 	card := req.EndCard
-	res, err := a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
-		Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &card, LogoURL: req.LogoURL,
-		MusicURL: musicURL, Mix: mix, AINote: adAINote(req)})
+	assemble := func() (*MediaResult, error) {
+		c := card
+		return a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
+			Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &c, LogoURL: req.LogoURL,
+			MusicURL: musicURL, Mix: mix, AINote: adAINote(req)})
+	}
+	res, err := assemble()
 	if err != nil {
 		return nil, err
 	}
+	// The self-review looks at a frame of every scene and at the end card. A badly laid out end
+	// card is laid out again for free; a clip with garbled writing or an unfitting scene is made
+	// once more while the ad stays under the per-video ceiling; then the ad is assembled again.
+	review := a.reviewAndRedo(ctx, req, plan, outs, scenes, &card, &cost, extra, dir, res)
+	if review != nil && len(review.Fixed) > 0 {
+		if again, err := assemble(); err == nil {
+			res = again
+		} else {
+			a.logger.Warn("reassembly after the review failed; the first cut stays", zap.Error(err))
+			review.Fixed = nil
+		}
+	}
+	res.Review = review
 	res.CostUSD += cost + extra
 	res.Voice = voice
 	res.Route = routeSummary(outs)
@@ -1128,7 +1155,7 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 			return fmt.Errorf("media: presenter scene %s has no voice", sp.SceneID)
 		}
 		p, err := a.presenters.Make(ctx, PresenterRequest{TenantID: req.TenantID, VersionID: req.VersionID, ImageURL: req.ActorURL,
-			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: sceneTier(req, sp), Prompt: s.Visual, Format: req.Format})
+			AudioURL: out.cache.AudioURL, Seconds: out.cache.AudioSeconds, Tier: sceneTier(req, sp), Prompt: sceneText(s), Format: req.Format})
 		if err != nil {
 			return fmt.Errorf("media: presenter scene %s: %w", sp.SceneID, err)
 		}
@@ -1144,7 +1171,7 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}
 		_, rt, _, err := a.clips.Animate(ctx, ClipRequest{TenantID: req.TenantID, VersionID: req.VersionID, SceneURL: frame,
-			Prompt: s.Visual, Seconds: secs, Tier: sceneTier(req, sp), Format: req.Format, AvoidText: sp.AvoidText, Scenario: ScenarioAdClip}, path)
+			Prompt: sceneText(s), Seconds: secs, Tier: sceneTier(req, sp), Format: req.Format, AvoidText: sp.AvoidText, Scenario: ScenarioAdClip}, path)
 		if err != nil {
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}

@@ -22,7 +22,7 @@ members:
     reports_to: manager
     description: Marketing plans, content calendars, offers, launches, brand context, events and partnerships.
     model_class: premium_plus
-    playbooks: [marketing-plan, content-strategy, offers, launch, brand-context, marketing-ideas, influencer-marketing, events]
+    playbooks: [marketing-plan, content-strategy, offers, launch, brand-context, marketing-ideas, influencer-marketing, events, setting-brief]
     tools: [kb_search, get_product, query_service_data]
     guardrails:
       - Base every recommendation on the brand context and catalog; mark assumptions.

@@ -41,6 +41,9 @@ type Scene struct {
 	// SFX is an optional short sound cue for the scene ("soft whoosh"), used only where it
 	// helps; plans with sound effects render it (media audio ladder).
 	SFX string `json:"sfx,omitempty"`
+	// Setting is where the scene happens, from the setting brief (place, neighbourhood, vibe,
+	// people, props): the still, the clip and the actor are drawn in it (setting_brief.go).
+	Setting string `json:"setting,omitempty"`
 	// Speaker is who reads the line in a two-voice UGC ad: "male" or "female", chosen by the
 	// writer per line (speakers.go). Empty everywhere is a one-voice ad.
 	Speaker string `json:"speaker,omitempty"`
@@ -151,11 +154,12 @@ type ReviewFindings struct {
 // contractShapes are the JSON shapes shown to the model.
 var contractShapes = map[string]string{
 	"ad_copy_batch":    `{"variants":[{"id":"v1","format":"","angle":"","hook":"","headline":"","primary_text":"","cta":"","hypothesis":"","source":""}]}`,
-	"video_script":     `{"format":"","approach":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","voiceover":"","caption":"","sfx":"","speaker":"male|female|"}],"cta":"","mood":"","actor":"","strategy":{"pattern":"","flip":"","fix":"","hypothesis":""}}`,
+	"video_script":     `{"format":"","approach":"","hooks":["","",""],"scenes":[{"id":"s1","duration_s":3,"shot":"presenter|product_clip|owner_footage|end_card|b_roll","asset":1,"visual":"","setting":"","voiceover":"","caption":"","sfx":"","speaker":"male|female|"}],"cta":"","mood":"","actor":"","strategy":{"pattern":"","flip":"","fix":"","hypothesis":""}}`,
 	"poster_brief":     `{"headline":"","subline":"","cta":"","layout":"","image_prompt":"","sizes":["1080x1080","1080x1350","1080x1920"]}`,
 	"social_posts":     `{"posts":[{"platform":"","hook":"","text":"","visual":""}]}`,
 	"content_calendar": `{"pillars":[""],"items":[{"day":"","platform":"","pillar":"","format":"","hook":"","cta":"","ad_candidate":false}]}`,
 	"brand_context":    `{"positioning":"","audience":[""],"offers":[""],"proof":[""],"voice":"","voice_examples":[""],"banned_claims":[""],"learnings":[]}`,
+	"setting_brief":    `{"home_base":{"place":"","neighbourhood":"","vibe":"","people":"","props":""},"look":"","settings":[{"key":"","place":"","neighbourhood":"","vibe":"","people":"","props":"","fits":"presenter|product|b_roll|end_card"}]}`,
 	"review_findings":  `{"findings":[{"quote":"","issue":"","severity":"high|review|low","fix":""}],"verdict":""}`,
 }
 
@@ -226,6 +230,11 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 				v.Scenes[i].SFX = cue
 			}
 			v.Scenes[i].Speaker = NormalizeSpeaker(s.Speaker)
+			if set := strings.TrimSpace(s.Setting); len(set) > maxSetting {
+				v.Scenes[i].Setting = ""
+			} else {
+				v.Scenes[i].Setting = set
+			}
 			total += s.DurationS
 		}
 		if total > 90 {
@@ -274,6 +283,15 @@ func parseContract(contract, reply string, n int) (json.RawMessage, error) {
 		var v BrandContext
 		if err := json.Unmarshal([]byte(body), &v); err != nil || v.Positioning == "" {
 			return nil, fmt.Errorf("brand_context: invalid")
+		}
+		return json.Marshal(v)
+	case "setting_brief":
+		var v SettingBrief
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			return nil, fmt.Errorf("setting_brief: %w", err)
+		}
+		if err := v.clean(); err != nil {
+			return nil, err
 		}
 		return json.Marshal(v)
 	case "review_findings":

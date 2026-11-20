@@ -58,6 +58,9 @@ type VideoScriptRequest struct {
 	// "female"). The script follows the actor (owner, 2026-11-14): every presenter line goes to
 	// that voice, so the voice always matches the face and no new actor is drawn.
 	PresenterSpeaker string
+	// Place is where the business is and how it looks (address, website pages, pictures), for the
+	// setting brief that places every scene (setting_brief.go).
+	Place PlaceFacts
 }
 
 // DeliveryUGC is the creator-style delivery (media.DeliveryUGC; kept as a string here so the
@@ -143,6 +146,8 @@ type VideoScriptResult struct {
 	Findings []Finding    `json:"findings,omitempty"`
 	CostUSD  float64      `json:"cost_usd"`
 	Calls    []llm.Call   `json:"calls,omitempty"`
+	// SettingBrief is where the scenes happen, as the Strategist wrote it (nil without place facts).
+	SettingBrief *SettingBrief `json:"setting_brief,omitempty"`
 }
 
 // ErrScriptBlocked is a script the review blocked; its findings say why.
@@ -198,7 +203,12 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 	task := scriptTask(in) + approachTask(r.lib, tpl, in.Reviews, twoVoice)
 	spec := &promptopt.TaskSpec{Playbook: pb.Key, Specialist: m.Key, OptimisedBrief: task, Original: task, Approach: tpl.Key,
 		Entities: promptopt.Entities{Offering: in.Offering, Objective: in.Objective, Audience: in.Audience, Language: in.Language}}
-	step := r.runStepSafe(ctx, in.TenantID, plannedStep{member: m, playbook: pb, task: task}, spec, tc, "", 0)
+	// The Strategist places the ad first; its brief reaches the writer as an earlier step.
+	brief := r.settingBrief(ctx, in, tc)
+	if brief != nil {
+		task += settingRule
+	}
+	step := r.runStepSafe(ctx, in.TenantID, plannedStep{member: m, playbook: pb, task: task}, spec, tc, brief.Text(), 0)
 	out := &VideoScriptResult{}
 	if note != "" {
 		out.Findings = append(out.Findings, Finding{Quote: in.Approach, Severity: "low", Issue: note,
@@ -229,6 +239,8 @@ func (r *Runtime) WriteVideoScript(ctx context.Context, in VideoScriptRequest) (
 	// fitTemplate may have turned presenter scenes into narration, so the speakers are made
 	// consistent again for the shots as they now are.
 	r.polishScript(&v, pb.Key, tpl.Key, NormalizeSpeaker(in.PresenterSpeaker))
+	applySettings(&v, brief)
+	out.SettingBrief = brief
 	out.Findings = append(out.Findings, QualityFindings(v, r.lib.Quality)...)
 	out.Script = &v
 	return out, nil
@@ -282,6 +294,18 @@ func shapeOf(format string) string {
 	return "vertical"
 }
 
+// settingRule tells the writer to place every scene from the setting brief (an earlier step).
+const settingRule = "\nPlace every scene in the SETTING BRIEF given above: set each scene's setting to the key of the setting it " +
+	"happens in (home_base or another key), and write its visual as one action in that place, with the people and props " +
+	"the brief names. The presenter, when there is one, is in the setting that fits a presenter, and the actor line " +
+	"describes a person who belongs there. Never move a scene to a studio, another town or another country.\n"
+
+// hookRule asks for hooks a buyer in this place would stop for (marketing laws: attention, relevance).
+const hookRule = " Each of the three hooks uses something specific and true from the facts, the setting brief or the brand " +
+	"context (the buyer's real moment, a real number, the place, the product doing its job), each for a different reason to " +
+	"watch; never a stock opener such as \"Are you tired of\", \"Introducing\" or \"Look no further\". Use only the offers, prices " +
+	"and terms in the facts: when a detail is missing (a price, a delivery time, a trial, a payment method), leave it out."
+
 // scriptTask tells the writer what this ad can show.
 func scriptTask(in VideoScriptRequest) string {
 	lang := "English"
@@ -322,6 +346,7 @@ func scriptTask(in VideoScriptRequest) string {
 	b.WriteString(actorNameRule(in.ActorNameStyle, in.ActorNames))
 	fmt.Fprintf(&b, "The voiceover of each scene is what the narrator says during it. Keep all the voiceover together under %d characters "+
 		"so the ad fits %d seconds, and keep each caption to a few words.", in.Seconds*14, in.Seconds)
+	b.WriteString(hookRule)
 	b.WriteString(" Set mood to a few words on how the background music should feel. Give a scene an sfx cue " +
 		"(at most 60 characters, a plain sound such as \"soft whoosh\") only where a sound lifts that moment; most scenes have none.")
 	return b.String()

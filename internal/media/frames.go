@@ -201,8 +201,16 @@ func StillPrompt(format, delivery, visual string) string {
 // ActorPrompt is the exact prompt the presenter's actor still is drawn from, in the ad's shape:
 // a landscape ad gets a seated, eye-level shot with room around the person (the presenter route
 // keeps the image's frame), a vertical ad the selfie framing it always had.
-func ActorPrompt(format, desc string) string {
-	tail := ", upper body, looking straight at the camera with a relaxed smile, mouth closed, soft natural daylight, plain uncluttered background. Real photo, no text, no letters, no logos."
+func ActorPrompt(format, desc string) string { return ActorPromptIn(format, desc, "") }
+
+// ActorPromptIn is ActorPrompt with the presenter placed in a setting from the setting brief: the
+// background is that real place, softly out of focus, instead of a plain wall.
+func ActorPromptIn(format, desc, setting string) string {
+	background := "plain uncluttered background"
+	if setting = strings.TrimSpace(setting); setting != "" {
+		background = "in " + setting + ", the background softly out of focus and free of any writing"
+	}
+	tail := ", upper body, looking straight at the camera with a relaxed smile, mouth closed, soft natural daylight, " + background + ". Real photo, no text, no letters, no logos."
 	switch orientation(format) {
 	case "landscape 16:9":
 		return "Landscape 16:9 eye-level video-call style photo of " + desc + ", centred in the frame with room on both sides" + tail

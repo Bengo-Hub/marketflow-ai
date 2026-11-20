@@ -22,19 +22,22 @@ func (h *OSHandler) SetPosters(p *media.Posters) { h.posters = p }
 
 // posterRequest is marketflow-api's creative module asking for one poster.
 type posterRequest struct {
-	TenantID  string   `json:"tenant_id"`
-	VersionID string   `json:"version_id"` // CreativeVersion id: the charge key and the file name
-	Prompt    string   `json:"prompt"`     // the visual line of the approved copy variant
-	PhotoURLs []string `json:"photo_urls"` // the owner's product photos
-	Format    string   `json:"format"`     // 1080x1080 | 1080x1350 | 1080x1920
-	Tier      string   `json:"tier"`       // standard | premium
-	Palette   posterPalette `json:"palette"` // hex strings from marketflow-api, or RGB triples
-	Accent    string   `json:"accent"` // brand colour, #rrggbb
-	LogoURL   string   `json:"logo_url"`
-	Headline  string   `json:"headline"`
-	Subline   string   `json:"subline"`
-	Price     string   `json:"price"`
-	CTA       string   `json:"cta"`
+	TenantID  string        `json:"tenant_id"`
+	VersionID string        `json:"version_id"` // CreativeVersion id: the charge key and the file name
+	Prompt    string        `json:"prompt"`     // the visual line of the approved copy variant
+	PhotoURLs []string      `json:"photo_urls"` // the owner's product photos
+	Format    string        `json:"format"`     // 1080x1080 | 1080x1350 | 1080x1920
+	Tier      string        `json:"tier"`       // standard | premium
+	Palette   posterPalette `json:"palette"`    // hex strings from marketflow-api, or RGB triples
+	Accent    string        `json:"accent"`     // brand colour, #rrggbb
+	LogoURL   string        `json:"logo_url"`
+	Headline  string        `json:"headline"`
+	Subline   string        `json:"subline"`
+	Price     string        `json:"price"`
+	CTA       string        `json:"cta"`
+	// Contacts are the real ways to reach the business, drawn with icons under the CTA.
+	Contacts []media.Contact `json:"contacts"`
+	reviewFacts
 	// Charge is false only when the caller already paid for this version.
 	Charge bool `json:"charge"`
 	// SceneURL asks for a text-only revision over this stored scene (the
@@ -120,8 +123,8 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := h.posters.Make(ctx, media.PosterRequest{
 		TenantID: tenantID, VersionID: req.VersionID, Prompt: req.Prompt, PhotoURLs: req.PhotoURLs,
-		Format: req.Format, Tier: req.Tier, Palette: [][3]int(req.Palette), LogoURL: req.LogoURL,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
+		Format: req.Format, Tier: req.Tier, Palette: [][3]int(req.Palette), LogoURL: req.LogoURL, Brand: req.Brand, Place: req.Place,
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
 	})
 	if err != nil {
 		h.refund(r, tenantID, chargeKey)
@@ -206,7 +209,7 @@ func (h *OSHandler) recompose(w http.ResponseWriter, r *http.Request, tenantID u
 	defer cancel()
 	res, err := h.posters.Recompose(ctx, media.PosterRequest{
 		TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, LogoURL: req.LogoURL,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
 	}, req.SceneURL)
 	if err != nil {
 		h.logger.Warn("recompose failed", zap.String("version_id", req.VersionID), zap.Error(err))
@@ -234,4 +237,10 @@ func parseHexColor(s string) (color.RGBA, error) {
 		return color.RGBA{}, err
 	}
 	return color.RGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 0xff}, nil
+}
+
+// reviewFacts tell the self-review whose picture it is and where the business is (media/review.go).
+type reviewFacts struct {
+	Brand string `json:"brand"`
+	Place string `json:"place"`
 }

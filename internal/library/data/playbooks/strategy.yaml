@@ -174,3 +174,27 @@ playbooks:
     rules: []
     starters:
       - {title: "Plan an event", template: "Plan an event to promote ${offering} with goal ${goal}."}
+
+  - key: setting-brief
+    name: Setting brief for ad scenes
+    version: 1
+    source: {repo: marketflow, skill: setting-brief (owner 2026-11-20), license: proprietary}
+    specialist: strategist
+    model_class: standard
+    output_contract: setting_brief
+    when_to_use: Before a video ad or poster is written, to decide where each scene really happens for this business and its buyers, from the business's own address, website pages, knowledge base and pictures.
+    keywords: []
+    required_inputs: [offering]
+    optional_inputs: [audience, language]
+    method:
+      - Start from the PLACE FACTS. The home base is the business's real address and neighbourhood (for example a named building on a named street in a town centre); never move it to another town or country.
+      - Read the website pages and knowledge base for where the offering is used and by whom (a learning hub, a shop counter, a family home, a farm, an office), and write one setting for each of those real moments, at most five.
+      - Each setting names the place, the neighbourhood or town, the vibe (light, time of day, how busy), the people who would really be there (age, role, dress that fits the town and the buyer) and two to four props that belong there.
+      - Write people and places as they are in that town today, modern and everyday, the way a local buyer sees their own life; no village or poverty cliches and no generic stock-photo office unless the business is an office.
+      - When pictures of the business are listed, match their look (colours, light, interior style) in the look line, so generated scenes sit next to the real photos.
+      - Name the setting each kind of scene should use (presenter, product, b-roll, end card) in fits.
+    rules:
+      - Use only places the facts support or that plainly fit the offering in the business's own town; mark nothing as the business's own premises unless the facts say so.
+      - No text, signs, logos or brand names of other businesses in any setting.
+      - Keep each line short enough to add to an image prompt (under 200 characters).
+    starters: []

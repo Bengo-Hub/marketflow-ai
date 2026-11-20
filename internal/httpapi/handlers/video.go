@@ -32,20 +32,21 @@ func (h *OSHandler) SetVideo(jobs *media.Jobs, clips *media.Clips, ads *media.Ad
 
 // clipRequest is marketflow-api's creative module asking for a motion poster.
 type clipRequest struct {
-	TenantID  string `json:"tenant_id"`
-	VersionID string `json:"version_id"` // CreativeVersion id: names the file and the charge
-	SceneURL  string `json:"scene_url"`  // the source poster's stored scene without text
-	Prompt    string `json:"prompt"`     // the motion, optional
-	Format    string `json:"format"`
-	Seconds   int    `json:"seconds"`
-	Tier      string `json:"tier"`
-	Accent    string `json:"accent"`
-	LogoURL   string `json:"logo_url"`
-	Headline  string `json:"headline"`
-	Subline   string `json:"subline"`
-	Price     string `json:"price"`
-	CTA       string `json:"cta"`
-	Charge    bool   `json:"charge"`
+	TenantID  string          `json:"tenant_id"`
+	VersionID string          `json:"version_id"` // CreativeVersion id: names the file and the charge
+	SceneURL  string          `json:"scene_url"`  // the source poster's stored scene without text
+	Prompt    string          `json:"prompt"`     // the motion, optional
+	Format    string          `json:"format"`
+	Seconds   int             `json:"seconds"`
+	Tier      string          `json:"tier"`
+	Accent    string          `json:"accent"`
+	LogoURL   string          `json:"logo_url"`
+	Headline  string          `json:"headline"`
+	Subline   string          `json:"subline"`
+	Price     string          `json:"price"`
+	CTA       string          `json:"cta"`
+	Contacts  []media.Contact `json:"contacts"`
+	Charge    bool            `json:"charge"`
 }
 
 // Clip handles POST /api/v1/internal/creative/clip (service key): starts a
@@ -100,7 +101,7 @@ func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
 	creq := media.ClipRequest{
 		TenantID: tenantID, VersionID: req.VersionID, SceneURL: req.SceneURL, Prompt: strings.TrimSpace(req.Prompt),
 		Format: req.Format, Seconds: req.Seconds, Tier: req.Tier, LogoURL: req.LogoURL,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent},
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
 	}
 	price := func(reg registry.Registry) (int, error) { return reg.CreditsFor(output, req.Seconds) }
 	h.startJob(w, r, tenantID, req.VersionID, req.Charge, price, "Motion poster",
@@ -144,6 +145,9 @@ type scriptRequest struct {
 	// PresenterSpeaker is the gender of the actor already saved on the brief ("male",
 	// "female", or "" when none): presenter lines follow it.
 	PresenterSpeaker string `json:"presenter_speaker"`
+	// Place is where the business is and how it looks (address, website pages, picture captions),
+	// for the setting brief that places every scene (owner, 2026-11-20).
+	Place team.PlaceFacts `json:"place"`
 }
 
 // Script handles POST /api/v1/internal/creative/script (service key): the
@@ -156,7 +160,7 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req scriptRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 96<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -197,7 +201,8 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		Seconds: req.Seconds, Photos: req.Photos, Footage: req.Footage,
 		Presenter:   req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium,
 		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames,
-		Delivery: req.Delivery, Approach: req.Approach, Reviews: req.Reviews, PresenterSpeaker: req.PresenterSpeaker})
+		Delivery: req.Delivery, Approach: req.Approach, Reviews: req.Reviews, PresenterSpeaker: req.PresenterSpeaker,
+		Place: req.Place})
 	if err != nil {
 		h.refundKey(tenantID, chargeKey)
 		if errors.Is(err, team.ErrScriptBlocked) {
@@ -209,7 +214,7 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "the script could not be written right now; nothing was charged")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"script": res.Script, "findings": res.Findings,
+	writeJSON(w, http.StatusOK, map[string]any{"script": res.Script, "findings": res.Findings, "setting_brief": res.SettingBrief,
 		"credits_charged": credits, "cost_usd": res.CostUSD})
 }
 
@@ -240,7 +245,10 @@ type adRequest struct {
 	Subline  string `json:"subline"`
 	Price    string `json:"price"`
 	CTA      string `json:"cta"`
-	Charge   bool   `json:"charge"`
+	// Contacts are the real ways to reach the business, drawn with icons on the end card.
+	Contacts []media.Contact `json:"contacts"`
+	reviewFacts
+	Charge bool `json:"charge"`
 	// Kind is the video type: template (default), presenter or presenter_premium.
 	Kind string `json:"kind"`
 	// ActorURL and Seed are the approved storyboard's actor (presenter types).

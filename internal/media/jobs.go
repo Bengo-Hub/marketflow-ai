@@ -66,6 +66,8 @@ type MediaResult struct {
 	Voices        map[string]string `json:"voices,omitempty"`
 	VoiceTimeline []VoiceSpan       `json:"voice_timeline,omitempty"`
 	TwoVoiceNote  string            `json:"two_voice_note,omitempty"`
+	// Review is what the self-review found and redid before the result was returned (review.go).
+	Review *ReviewReport `json:"review,omitempty"`
 }
 
 // Job is a job's state as callers see it.

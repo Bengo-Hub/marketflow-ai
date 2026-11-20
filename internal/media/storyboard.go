@@ -66,6 +66,9 @@ type StoryboardRequest struct {
 	Delivery string
 	// Tier is the still routes' tier: premium for the platform owner's tenant (policy.go), else standard.
 	Tier string
+	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
+	Brand string
+	Place string
 }
 
 // Actor is an ad's one presenter: the still every presenter scene is lip-synced from.
@@ -103,6 +106,8 @@ type StoryboardResult struct {
 	Actor   *Actor  `json:"actor,omitempty"`
 	Stills  []Still `json:"stills"`
 	CostUSD float64 `json:"cost_usd"`
+	// Review is what the self-review found and redrew (review.go).
+	Review *ReviewReport `json:"review,omitempty"`
 }
 
 // Storyboards makes storyboards.
@@ -176,7 +181,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			}
 			// The actor's gender follows the presenter's speaker, so the lip-synced voice fits.
 			desc = actorWithGender(desc, presenterSpeaker(req.Scenes))
-			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPrompt(req.Format, desc))
+			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPromptIn(req.Format, desc, presenterSetting(req.Scenes)))
 			if err != nil {
 				return nil, fmt.Errorf("media: actor still: %w", err)
 			}
@@ -225,6 +230,8 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 	if len(errs) > 0 {
 		return nil, errs[0]
 	}
+	// The self-review looks at the generated stills and the actor before the owner does.
+	s.reviewStills(ctx, req, res)
 	return res, nil
 }
 
@@ -374,12 +381,39 @@ func ugcStillPrompt(format, visual string) string {
 		"slightly imperfect framing, no studio lighting. No text, no letters, no words, no logos, no watermark, no screens showing writing. Keep the lower third calm for captions."
 }
 
-// sceneVisual is what a scene shows: its visual line, else its caption.
+// sceneVisual is what a scene shows: its visual line, else its caption, in its setting.
 func sceneVisual(sc ScriptScene) string {
-	if v := strings.TrimSpace(sc.Visual); v != "" {
-		return v
+	v := strings.TrimSpace(sc.Visual)
+	if v == "" {
+		v = strings.TrimSpace(sc.Caption)
 	}
-	return strings.TrimSpace(sc.Caption)
+	return withSetting(v, sc.Setting)
+}
+
+// sceneText is the visual line a clip or presenter route is sent, in the scene's setting.
+func sceneText(sc ScriptScene) string { return withSetting(strings.TrimSpace(sc.Visual), sc.Setting) }
+
+// withSetting adds the setting brief's line to a visual, so every generated picture and clip
+// happens in the business's real town and kind of place (owner, 2026-11-20).
+func withSetting(visual, setting string) string {
+	setting = strings.TrimSpace(setting)
+	switch {
+	case setting == "":
+		return visual
+	case visual == "":
+		return "Setting: " + setting
+	}
+	return strings.TrimRight(visual, ". ") + ". Setting: " + setting
+}
+
+// presenterSetting is the setting of the ad's first presenter scene ("" when none has one).
+func presenterSetting(scenes []ScriptScene) string {
+	for _, s := range scenes {
+		if s.Shot == ShotPresenter && strings.TrimSpace(s.Setting) != "" {
+			return s.Setting
+		}
+	}
+	return ""
 }
 
 // soulAspect is Soul v2's aspect_ratio for a format. The 4:5 feed has no Soul ratio; it gets the

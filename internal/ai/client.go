@@ -75,11 +75,15 @@ func recoverToolUseFailed(body []byte, model string) (*ChatResponse, bool) {
 // ToolCalls is populated on assistant messages when the model wants to invoke tools.
 // ToolCallID is set on "tool" role messages to reference the originating call.
 type Message struct {
-	Role       string     `json:"role"`    // system, user, assistant, tool
+	Role       string     `json:"role"` // system, user, assistant, tool
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Name       string     `json:"name,omitempty"`
+	// Images are pictures sent with a user message for a vision model, each a data URL
+	// (data:image/jpeg;base64,...) or an https link. A message with images is sent as content
+	// parts (vision.go); every other message keeps the plain string content.
+	Images []string `json:"-"`
 }
 
 // ToolCall is an assistant-issued function invocation (OpenAI-compatible).

@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/bengobox/marketflow-ai/internal/ai"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/providers"
 )
@@ -158,4 +161,59 @@ func mediaPolicySource(resolver *providers.Resolver) media.PolicySource {
 		}
 		return last
 	}
+}
+
+// defaultReviewTargets are the vision models the self-review tries when ProviderSetting platform /
+// media / review sets no "targets": Groq's Llama 4 Scout (cheap and fast, reads images), then
+// Anthropic's Haiku. Change the setting, not this.
+var defaultReviewTargets = []llm.Target{
+	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct", MaxTokens: 600},
+	{Provider: "anthropic", Model: "claude-haiku-4-5", MaxTokens: 600},
+}
+
+// mediaReviewer wires the self-review: its settings from ProviderSetting platform / media / review
+// (reused for a minute, the last good copy kept on a failed read) and its model call through the
+// LLM router on the configured vision targets.
+func mediaReviewer(resolver *providers.Resolver, router *llm.Router) *media.Reviewer {
+	if router == nil {
+		return nil
+	}
+	var (
+		mu   sync.Mutex
+		last = media.DefaultReviewSettings()
+		at   time.Time
+	)
+	settings := func(ctx context.Context) media.ReviewSettings {
+		mu.Lock()
+		defer mu.Unlock()
+		if resolver == nil || time.Since(at) < time.Minute {
+			return last
+		}
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		raw, err := resolver.ResolveRaw(rctx, "media", "review")
+		cancel()
+		at = time.Now()
+		if err == nil {
+			last = media.ReviewSettingsFromMap(raw)
+		}
+		return last
+	}
+	call := func(ctx context.Context, system, user string, images []string) (string, string, float64, error) {
+		targets := defaultReviewTargets
+		if raw := settings(ctx).Targets; raw != "" {
+			var list []llm.Target
+			if json.Unmarshal([]byte(raw), &list) == nil && len(list) > 0 {
+				targets = list
+			}
+		}
+		resp, c, err := router.CompleteOn(ctx, llm.Nano, targets, ai.ChatRequest{
+			Messages:    []ai.Message{{Role: "system", Content: system}, {Role: "user", Content: user, Images: images}},
+			Temperature: 0.1, MaxTokens: 600,
+		})
+		if err != nil {
+			return "", "", 0, err
+		}
+		return resp.Choices[0].Message.Content, c.Provider + "/" + c.Model, c.CostUSD, nil
+	}
+	return media.NewReviewer(call, settings)
 }

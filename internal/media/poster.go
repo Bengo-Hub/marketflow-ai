@@ -41,7 +41,10 @@ type PosterRequest struct {
 	Tier      string   // TierStandard or TierPremium
 	Palette   [][3]int // brand colours, optional
 	Overlay   Overlay
-	LogoURL   string // optional; downloaded and drawn top left
+	LogoURL   string // optional; downloaded and drawn in the calmer top corner
+	// Brand and Place tell the self-review whose poster it is and where the business is.
+	Brand string
+	Place string
 }
 
 // PosterResult is the stored poster.
@@ -61,6 +64,8 @@ type PosterResult struct {
 	SceneKey string `json:"scene_key,omitempty"`
 	SceneURL string `json:"scene_url,omitempty"`
 	Attempts int    `json:"attempts"`
+	// Review is what the self-review found and redid before the poster was returned.
+	Review *ReviewReport `json:"review,omitempty"`
 }
 
 // RouteRecompose names a text-only revision: our compositor over a stored scene.
@@ -147,11 +152,18 @@ func (p *Posters) Make(ctx context.Context, req PosterRequest) (*PosterResult, e
 		}
 		p.router.Succeeded(rt.Key)
 
+		// The self-review looks at the finished poster and redoes a failing part within budget.
+		var (
+			report *ReviewReport
+			extra  float64
+		)
+		scene, sceneURL, req, report, extra = p.reviewPoster(ctx, rt, req, scene, sceneURL)
 		res, err := p.finish(ctx, scene, req)
 		if err != nil {
 			return nil, err
 		}
-		res.Route, res.CostUSD, res.SourceURL, res.Attempts = rt.Key, rt.PriceUSD, sceneURL, i+1
+		res.Route, res.CostUSD, res.SourceURL, res.Attempts = rt.Key, rt.PriceUSD+extra, sceneURL, i+1
+		res.Review = report
 		// Keep the clean scene so text edits never pay for a new image.
 		if data, err := EncodeJPEG(scene); err == nil {
 			if key, url, err := p.store.PutPoster(ctx, req.TenantID, req.VersionID+"-scene", data); err == nil {

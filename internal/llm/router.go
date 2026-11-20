@@ -189,6 +189,40 @@ func (r *Router) Complete(ctx context.Context, class Class, req ai.ChatRequest) 
 	if len(targets) == 0 {
 		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
 	}
+	return r.complete(ctx, class, targets, req)
+}
+
+// CompleteOn runs a non-streaming call on the given targets in order instead of a class's, for a
+// task that needs one kind of model (the vision reviewer, media/review.go). Unknown or
+// unconfigured providers are skipped; breakers, metering and the class budget apply as in Complete.
+func (r *Router) CompleteOn(ctx context.Context, class Class, targets []Target, req ai.ChatRequest) (*ai.ChatResponse, Call, error) {
+	if budget, ok := classBudget[class]; ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+	policy := r.Policy(ctx)
+	var usable []resolvedTarget
+	for _, t := range r.order(targets) {
+		p, ok := r.resolve(ctx, t)
+		if !ok {
+			continue
+		}
+		model := modelFor(t, p)
+		if !paidTarget(t) && policy.Prices != nil {
+			pr := policy.PriceFor(t.Provider, model)
+			t.InputUSDPerM, t.OutputUSDPerM = pr.In, pr.Out
+		}
+		usable = append(usable, resolvedTarget{t: t, p: p, model: model})
+	}
+	if len(usable) == 0 {
+		return nil, Call{}, fmt.Errorf("%w: %s", ErrNoTarget, class)
+	}
+	return r.complete(ctx, class, usable, req)
+}
+
+// complete tries targets in order until one answers.
+func (r *Router) complete(ctx context.Context, class Class, targets []resolvedTarget, req ai.ChatRequest) (*ai.ChatResponse, Call, error) {
 	var lastErr error
 	for i, rt := range targets {
 		if ctx.Err() != nil {

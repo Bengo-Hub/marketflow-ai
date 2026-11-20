@@ -88,3 +88,4 @@ playbooks:
   marketing-ideas: {goal: strategy, output: plan, added: "2026-10-22"}
   influencer-marketing: {goal: strategy, output: plan, added: "2026-10-22"}
   events: {goal: strategy, output: plan, added: "2026-10-22"}
+  setting-brief: {goal: strategy, output: plan, added: "2026-11-20"}

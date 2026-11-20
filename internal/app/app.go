@@ -475,6 +475,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		}
 		// The routing policy: the bake-off defaults per scenario and premium for the platform owner.
 		media.SetPolicySource(mediaPolicySource(resolver))
+		// The self-review of posters, stills and videos on a cheap vision model (media/review.go).
+		media.SetReviewer(mediaReviewer(resolver, modelRouter))
 		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger).WithEndpoints(imageEndpoints)
 		osHandler.SetPosters(posters)
 		// Motion posters and template video ads: background jobs in Redis; ffmpeg

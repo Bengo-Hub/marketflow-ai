@@ -86,9 +86,10 @@ playbooks:
       - Use the product photos the owner provides for image-to-video scenes; describe motion simply (slow push-in, rotate, hand reveal).
       - End on one specific call to action matching the objective, naming the action, what they get and the channel ("WhatsApp 'ORDER' to 0712 for delivery today" only with real details); never "learn more" or "get started".
       - Give the music a mood in a few words (warm, hopeful, builds to the offer) that fits the brand voice.
+      - When earlier steps give research, strategy or a setting brief, build on them. The hook answers the buyer doubt the research found, the angle is the strategy's, and every scene happens in a setting from the brief.
       - Add a sound cue (sfx) only where it lifts a moment, such as a soft whoosh on a product reveal or a till ding on the price; most scenes have none, and never under a line the voice must carry.
     rules:
-      - Vertical 9:16 with text inside the safe area; captions at most two lines.
+      - Use the format the task gives (landscape 16:9 by default), with text inside the safe area; captions at most two lines.
       - Synthetic people are labelled AI-generated; never use a real public figure.
       - Sound cues are short plain descriptions (at most 60 characters), never music, never speech.
       - One voice reads the whole ad; leave speaker empty.
@@ -115,12 +116,13 @@ playbooks:
       - Follow the approach given in the task (educate, a day in the life, a routine, problem then solve, before and after, myth versus fact, founder story, real review, comparison, unboxing) and set "approach" to its key.
       - When two people talking helps the ad (a question and its answer, a myth and the fact, a friend showing a friend), write it for two voices taking turns, a man and a woman. Set each spoken scene's speaker to "male" or "female" by who would naturally say that line, and alternate; every presenter scene uses the one on-screen presenter's speaker. When one voice is better, leave every speaker empty.
       - Direct the read with at most one delivery tag at the start of a line where the feeling changes ([curious] for the question, [reassuring] for the answer); keep lines short enough to say in one breath.
-      - Describe the presenter in "actor" in one line (age range, look, clothes, setting that fits the audience), plainly and without naming a real person.
+      - Describe the presenter in "actor" in one line (age range, look, clothes) as a person who belongs in the presenter setting of the setting brief, plainly and without naming a real person.
+      - When earlier steps give research, strategy or a setting brief, build on them. The hook answers the buyer doubt the research found, the angle is the strategy's, and every scene happens in a setting from the brief.
     rules:
       - A synthetic presenter explains and recommends; it never claims to be a customer or to have used, tried or tested the product ("I tried it", "it changed my skin", "my results").
       - Customer experiences appear only from real testimonials the business holds (with consent), quoted and attributed, never invented or reworded into stronger claims.
       - Every synthetic person carries an on-screen "AI-generated" note, and the platform AI label is set.
-      - Vertical 9:16, captions inside the safe band (720x1200 centred), music baked in for paid ads.
+      - Use the format the task gives (landscape 16:9 by default), captions inside the safe band, music baked in for paid ads.
       - No real public figures, no voice cloning without recorded consent.
       - Neither voice in a two-voice ad plays a customer, and the two never pretend to be strangers giving an unprompted review; they explain, ask and answer.
     starters:
@@ -141,7 +143,8 @@ playbooks:
     method:
       - One message per poster - an outcome-first headline under 8 words (what the buyer gets, not the product name alone), a supporting line with the price or proof from the facts, and one call to action on one channel (WhatsApp, M-Pesa or one short form).
       - Pick the layout (product hero, before and after only when allowed, stat callout with a real number, review card with a real review, offer card).
-      - Write the image prompt for the background or product scene and the overlay text separately, so text is rendered cleanly.
+      - Write the image prompt for the background or product scene and the overlay text separately, so text is rendered cleanly; the scene is in the business's own town and setting (the setting brief or the address), never a generic studio.
+      - The call to action is a short line of words (the action and the channel); the poster draws the real WhatsApp, phone, website or product link with icons under it, so never describe a button or invent a contact.
       - Give sizes needed (1080x1080, 1080x1350, 1080x1920) and the brand colours.
     rules:
       - Never generate fake reviews or ratings on a poster.

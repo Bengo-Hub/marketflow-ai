@@ -59,6 +59,8 @@ type anthropicContentBlock struct {
 	Input     any    `json:"input,omitempty"`       // for tool_use (parsed args)
 	ToolUseID string `json:"tool_use_id,omitempty"` // for tool_result
 	Content   string `json:"content,omitempty"`     // for tool_result
+	// Source is an image block's picture (vision.go).
+	Source *anthropicImageSource `json:"source,omitempty"`
 }
 
 type anthropicToolDef struct {
@@ -257,6 +259,10 @@ func (c *AnthropicClient) translateRequest(req ChatRequest) (anthropicRequest, s
 		case "system":
 			system = m.Content
 		case "user":
+			if len(m.Images) > 0 {
+				messages = append(messages, anthropicMessage{Role: "user", Content: anthropicImageBlocks(m)})
+				continue
+			}
 			messages = append(messages, anthropicMessage{Role: "user", Content: m.Content})
 		case "assistant":
 			if len(m.ToolCalls) > 0 {

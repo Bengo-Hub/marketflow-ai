@@ -59,9 +59,10 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Footage: req.FootageURLs,
 		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
-		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Accent: accent}}
+		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent}}
 	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
 	areq.MaxVideoUSD = media.Policy(r.Context()).MaxVideoUSD
+	areq.Brand, areq.Place = req.Brand, req.Place
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
 		return req, areq, tenantID, false
@@ -334,6 +335,7 @@ type storyboardRequest struct {
 	Charge      bool                `json:"charge"`
 	// Delivery is the ad's voice delivery; "ugc" draws the stills as candid phone photos.
 	Delivery string `json:"delivery"`
+	reviewFacts
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -367,7 +369,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 	}
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
-		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard)}
+		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place}
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only

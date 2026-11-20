@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"math"
 	"strings"
 	"sync"
 
@@ -49,10 +50,24 @@ type Overlay struct {
 	Headline string
 	Subline  string
 	Price    string // shown as given, e.g. "KES 850"
-	CTA      string // e.g. "Order on WhatsApp"
+	CTA      string // e.g. "Order on WhatsApp", drawn as words, never as a button
+	// Contacts are the real ways to reach the business (WhatsApp, phone, website, email, a
+	// product link), drawn with their icons under the call to action (contacts.go).
+	Contacts []Contact
 	Logo     image.Image
-	Accent   color.RGBA // brand colour for the price chip and the button
+	Accent   color.RGBA // brand colour for the price chip, the icons and the CTA rule
+	// LogoCorner pins the logo to LogoTopLeft or LogoTopRight; "" lets the compositor pick the
+	// calmer top corner of the scene (the self-review asks for the other corner on a retry).
+	LogoCorner string
+	// Strong draws a taller, darker band under the words (a layout retry for legibility).
+	Strong bool
 }
+
+// Logo corners.
+const (
+	LogoTopLeft  = "top_left"
+	LogoTopRight = "top_right"
+)
 
 var (
 	fontsOnce     sync.Once
@@ -121,38 +136,33 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
 
 	// A dark band over the lower 45%, fading in, so white text reads on any scene.
-	bandStart := H * 55 / 100
+	bandStart, peak := H*55/100, float64(bandAlpha)
+	if o.Strong {
+		// A layout retry after the review found the words hard to read: a taller, darker band.
+		bandStart, peak = H*42/100, 0xf2
+	}
 	for y := bandStart; y < H; y++ {
 		t := float64(y-bandStart) / float64(H-bandStart)
-		a := uint8(float64(bandAlpha) * min1(t*1.6))
+		a := uint8(peak * min1(t*1.6))
 		draw.Draw(canvas, image.Rect(0, y, W, y+1), image.NewUniform(color.RGBA{0, 0, 0, a}), image.Point{}, draw.Over)
 	}
 
 	U := layoutUnit(W, H)
 	margin := U * 6 / 100
 	if o.Logo != nil {
-		lw := U * 20 / 100
-		lb := o.Logo.Bounds()
-		lh := lb.Dy() * lw / max(lb.Dx(), 1)
-		if lh > H/8 {
-			lh = H / 8
-			lw = lb.Dx() * lh / max(lb.Dy(), 1)
-		}
-		at := image.Rect(margin, margin, margin+lw, margin+lh)
-		// A light logo vanishes on a light scene (seen on the POS end card): it gets a dark
-		// plate whenever the scene under it is light, or unknown (a video overlay).
-		if lightLogo(o.Logo) && !darkBehind(canvas, at) {
-			pad := max(lw, lh) / 8
-			fillRounded(canvas, at.Inset(-pad), pad, color.RGBA{0, 0, 0, 0x9c})
-		}
-		xdraw.CatmullRom.Scale(canvas, at, o.Logo, lb, draw.Over, nil)
+		placeLogo(canvas, o.Logo, logoCorner(canvas, o, margin, U), margin, U)
 	}
 
 	textW := W - 2*margin
-	// Lay out bottom-up: button, then price, subline and headline above it.
+	// Lay out bottom-up: the contacts, the call to action as words, then price, subline and
+	// headline above it. Nothing is drawn as a button.
 	y := H - margin
+	if list := CleanContacts(o.Contacts); len(list) > 0 {
+		y = drawContacts(canvas, reg, list, margin, y, textW, U, o.Accent)
+		y -= H * 2 / 100
+	}
 	if cta := strings.TrimSpace(o.CTA); cta != "" {
-		y = drawButton(canvas, bold, cta, margin, y, W, U, o.Accent)
+		y = drawCTA(canvas, bold, cta, margin, y, textW, U, o.Accent)
 		y -= H * 2 / 100
 	}
 	if price := strings.TrimSpace(o.Price); price != "" {
@@ -229,20 +239,140 @@ func drawChip(dst *image.RGBA, f *opentype.Font, text string, x, bottom, unit in
 	return r.Min.Y
 }
 
-// drawButton draws the call to action as a full-width accent bar ending at bottom.
-func drawButton(dst *image.RGBA, f *opentype.Font, text string, x, bottom, W, unit int, accent color.RGBA) int {
-	size := float64(unit) / 22
-	fc, _ := face(f, size)
-	width := W - 2*x
-	text = ellipsize(fc, text, width-int(size))
-	h := int(size * 2.1)
-	r := image.Rect(x, bottom-h, x+width, bottom)
-	draw.Draw(dst, r, image.NewUniform(accent), image.Point{}, draw.Src)
-	tw := font.MeasureString(fc, text).Ceil()
-	d := &font.Drawer{Dst: dst, Src: image.NewUniform(color.White), Face: fc,
-		Dot: fixed.P(x+(width-tw)/2, bottom-(h-int(size))/2-int(size*0.18))}
-	d.DrawString(text)
-	return r.Min.Y
+// logoRect is where the logo goes in a top corner: about a sixth of the short side wide, never
+// taller than a ninth of the frame, inside the safe margin.
+func logoRect(logo image.Image, corner string, W, H, margin, unit int) image.Rectangle {
+	lw := unit * 16 / 100
+	lb := logo.Bounds()
+	lh := lb.Dy() * lw / max(lb.Dx(), 1)
+	if lh > H/9 {
+		lh = H / 9
+		lw = lb.Dx() * lh / max(lb.Dy(), 1)
+	}
+	if corner == LogoTopRight {
+		return image.Rect(W-margin-lw, margin, W-margin, margin+lh)
+	}
+	return image.Rect(margin, margin, margin+lw, margin+lh)
+}
+
+// logoCorner is the corner the logo goes in: the one asked for, else the calmer top corner of an
+// opaque scene (fewer edges and less skin, so the logo never sits on a face or a busy area). Over
+// a video overlay the scene is not known here, and the logo goes top left on its plate.
+func logoCorner(canvas *image.RGBA, o Overlay, margin, unit int) string {
+	if o.LogoCorner == LogoTopLeft || o.LogoCorner == LogoTopRight {
+		return o.LogoCorner
+	}
+	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
+	left := logoRect(o.Logo, LogoTopLeft, W, H, margin, unit)
+	right := logoRect(o.Logo, LogoTopRight, W, H, margin, unit)
+	pad := margin / 2
+	l, lok := busyness(canvas, left.Inset(-pad))
+	r, rok := busyness(canvas, right.Inset(-pad))
+	if lok && rok && r+0.02 < l {
+		return LogoTopRight
+	}
+	return LogoTopLeft
+}
+
+// placeLogo draws the logo with a plate behind it whenever it would not stand out: a light logo
+// on a light scene, a dark logo on a dark one, or any logo over an unknown scene (a video
+// overlay). The plate is dark for a light logo and light for a dark one.
+func placeLogo(canvas *image.RGBA, logo image.Image, corner string, margin, unit int) {
+	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
+	at := logoRect(logo, corner, W, H, margin, unit)
+	logoL := logoLuma(logo)
+	bg, known := meanLuma(canvas, at)
+	if !known || math.Abs(logoL-bg) < 0.35 {
+		pad := max(at.Dx(), at.Dy()) / 8
+		plate := color.RGBA{0, 0, 0, 0xa8}
+		if logoL < 0.5 {
+			plate = color.RGBA{0xff, 0xff, 0xff, 0xe0}
+		}
+		fillRounded(canvas, at.Inset(-pad), pad, plate)
+	}
+	xdraw.CatmullRom.Scale(canvas, at, logo, logo.Bounds(), draw.Over, nil)
+}
+
+// busyness scores how busy an opaque area is (0 calm, about 1 very busy): the mean luma step
+// between neighbouring samples plus the share of skin-toned samples, a cheap stand-in for a face.
+// It reports false over a transparent canvas.
+func busyness(canvas *image.RGBA, r image.Rectangle) (float64, bool) {
+	r = r.Intersect(canvas.Bounds())
+	if r.Empty() {
+		return 0, false
+	}
+	step := max(1, max(r.Dx(), r.Dy())/40)
+	var edges, skin, n float64
+	luma := func(c color.RGBA) float64 {
+		return (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
+	}
+	for y := r.Min.Y; y+step < r.Max.Y; y += step {
+		for x := r.Min.X; x+step < r.Max.X; x += step {
+			c := canvas.RGBAAt(x, y)
+			if c.A < 0xf0 {
+				return 0, false
+			}
+			l := luma(c)
+			edges += math.Abs(l-luma(canvas.RGBAAt(x+step, y))) + math.Abs(l-luma(canvas.RGBAAt(x, y+step)))
+			if skinTone(c) {
+				skin++
+			}
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, false
+	}
+	return edges/n*2 + skin/n, true
+}
+
+// skinTone is the classic RGB skin rule (Kovac et al.), which covers dark and light skin in daylight.
+func skinTone(c color.RGBA) bool {
+	r, g, b := int(c.R), int(c.G), int(c.B)
+	mx, mn := max(r, g, b), min(r, g, b)
+	return r > 95 && g > 40 && b > 20 && mx-mn > 15 && r-g > 15 && r > b
+}
+
+// logoLuma is the mean luma of a logo's visible pixels (0.5 when it has none).
+func logoLuma(img image.Image) float64 {
+	b := img.Bounds()
+	step := max(1, max(b.Dx(), b.Dy())/64)
+	var sum, n float64
+	for y := b.Min.Y; y < b.Max.Y; y += step {
+		for x := b.Min.X; x < b.Max.X; x += step {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if a < 0x8000 {
+				continue
+			}
+			sum += (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)) / float64(a)
+			n++
+		}
+	}
+	if n == 0 {
+		return 0.5
+	}
+	return sum / n
+}
+
+// meanLuma is the mean luma of an opaque area; it reports false over a transparent canvas.
+func meanLuma(canvas *image.RGBA, r image.Rectangle) (float64, bool) {
+	r = r.Intersect(canvas.Bounds())
+	step := max(1, max(r.Dx(), r.Dy())/32)
+	var sum, n float64
+	for y := r.Min.Y; y < r.Max.Y; y += step {
+		for x := r.Min.X; x < r.Max.X; x += step {
+			c := canvas.RGBAAt(x, y)
+			if c.A < 0xf0 {
+				return 0, false
+			}
+			sum += (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, false
+	}
+	return sum / n, true
 }
 
 func wrap(fc font.Face, text string, width int) []string {
@@ -291,45 +421,6 @@ func maxf(a, b float64) float64 {
 	return b
 }
 
-// lightLogo reports whether a logo's visible pixels are mostly light (a white logo).
-func lightLogo(img image.Image) bool {
-	b := img.Bounds()
-	step := max(1, max(b.Dx(), b.Dy())/64)
-	var sum, n float64
-	for y := b.Min.Y; y < b.Max.Y; y += step {
-		for x := b.Min.X; x < b.Max.X; x += step {
-			r, g, bl, a := img.At(x, y).RGBA()
-			if a < 0x8000 {
-				continue
-			}
-			// Un-premultiply, then Rec. 709 luma.
-			l := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)) / float64(a)
-			sum += l
-			n++
-		}
-	}
-	return n > 0 && sum/n > 0.6
-}
-
-// darkBehind reports whether the canvas under r is an opaque, dark scene. A transparent
-// canvas (a video overlay, whose scene is not known here) is not.
-func darkBehind(canvas *image.RGBA, r image.Rectangle) bool {
-	r = r.Intersect(canvas.Bounds())
-	step := max(1, max(r.Dx(), r.Dy())/32)
-	var sum, n float64
-	for y := r.Min.Y; y < r.Max.Y; y += step {
-		for x := r.Min.X; x < r.Max.X; x += step {
-			c := canvas.RGBAAt(x, y)
-			if c.A < 0xf0 {
-				return false
-			}
-			sum += (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
-			n++
-		}
-	}
-	return n > 0 && sum/n < 0.35
-}
-
 // fillRounded fills r with c, its corners rounded by radius.
 func fillRounded(dst *image.RGBA, r image.Rectangle, radius int, c color.RGBA) {
 	src := image.NewUniform(c)
@@ -343,4 +434,18 @@ func fillRounded(dst *image.RGBA, r image.Rectangle, radius int, c color.RGBA) {
 		}
 		draw.Draw(dst, image.Rect(r.Min.X+inset, y, r.Max.X-inset, y+1), src, image.Point{}, draw.Over)
 	}
+}
+
+// AutoLogoCorner is the corner the compositor picks for the logo over this scene.
+func AutoLogoCorner(scene image.Image, format string, o Overlay) string {
+	size, ok := Formats[format]
+	if !ok || o.Logo == nil {
+		return LogoTopLeft
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, size.X, size.Y))
+	if scene != nil {
+		cover(canvas, scene)
+	}
+	U := layoutUnit(size.X, size.Y)
+	return logoCorner(canvas, o, U*6/100, U)
 }
