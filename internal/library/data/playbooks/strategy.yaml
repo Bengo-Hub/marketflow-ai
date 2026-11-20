@@ -197,4 +197,5 @@ playbooks:
       - Use only places the facts support or that plainly fit the offering in the business's own town; mark nothing as the business's own premises unless the facts say so.
       - No text, signs, logos or brand names of other businesses in any setting.
       - Keep each line short enough to add to an image prompt (under 200 characters).
+      - Copy the address exactly as the facts give it; never rename its street or building.
     starters: []

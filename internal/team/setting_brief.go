@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func capField(s string) string {
 func (n *SettingNote) clean() {
 	n.Key = strings.ToLower(capField(n.Key))
 	n.Place, n.Neighbourhood, n.Vibe = capField(n.Place), capField(n.Neighbourhood), capField(n.Vibe)
-	n.People, n.Props, n.Fits = capField(n.People), capField(n.Props), strings.ToLower(capField(n.Fits))
+	n.People, n.Props, n.Fits = capField(n.People), cleanProps(capField(n.Props)), strings.ToLower(capField(n.Fits))
 }
 
 // clean trims every field, keeps at most five settings with a place, and refuses a brief with
@@ -279,6 +280,7 @@ func (r *Runtime) settingBrief(ctx context.Context, in VideoScriptRequest, tc Te
 	if b.HomeBase.Place == "" && fallback != nil {
 		b.HomeBase = fallback.HomeBase
 	}
+	anchorAddress(&b, in.Place)
 	b.Source = "team"
 	return &b
 }
@@ -356,4 +358,48 @@ func mentionsPlace(line string, b *SettingBrief) bool {
 		}
 	}
 	return false
+}
+
+// textProp matches props that carry writing (signs, logos, banners, screens with forms, QR
+// codes): image models garble writing, and another business's logo must never appear, so a
+// setting never asks for one.
+var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number)\b`)
+
+// cleanProps drops the props that carry writing.
+func cleanProps(props string) string {
+	var kept []string
+	for _, p := range strings.Split(props, ",") {
+		if p = strings.TrimSpace(p); p != "" && !textProp.MatchString(p) {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, ", ")
+}
+
+// streetWord marks a neighbourhood that names a street, which only the facts may give.
+var streetWord = regexp.MustCompile(`(?i)\b(road|street|avenue|highway|lane|drive|rd|st)\b`)
+
+// anchorAddress keeps the brief to the business's real address: the home base is the address as
+// given, and a setting that names a street the facts do not is moved to the address's area.
+func anchorAddress(b *SettingBrief, p PlaceFacts) {
+	addr := strings.TrimSpace(p.Address)
+	if b == nil || addr == "" {
+		return
+	}
+	area := strings.TrimSpace(p.City)
+	if parts := strings.Split(addr, ","); area == "" && len(parts) > 1 {
+		area = strings.TrimSpace(parts[len(parts)-1])
+	}
+	b.HomeBase.Place = capField(addr)
+	b.HomeBase.Neighbourhood = ""
+	if area != "" && !strings.Contains(strings.ToLower(addr), strings.ToLower(area)) {
+		b.HomeBase.Neighbourhood = area
+	}
+	low := strings.ToLower(addr)
+	for i := range b.Settings {
+		n := &b.Settings[i]
+		if streetWord.MatchString(n.Neighbourhood) && !strings.Contains(low, strings.ToLower(strings.TrimSpace(strings.Split(n.Neighbourhood, ",")[0]))) {
+			n.Neighbourhood = area
+		}
+	}
 }

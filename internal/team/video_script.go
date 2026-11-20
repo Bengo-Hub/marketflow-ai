@@ -61,6 +61,8 @@ type VideoScriptRequest struct {
 	// Place is where the business is and how it looks (address, website pages, pictures), for the
 	// setting brief that places every scene (setting_brief.go).
 	Place PlaceFacts
+	// ActorPrompt is the presenter the owner described; presenter visuals and the actor line follow it.
+	ActorPrompt string
 }
 
 // DeliveryUGC is the creator-style delivery (media.DeliveryUGC; kept as a string here so the
@@ -304,7 +306,10 @@ const settingRule = "\nPlace every scene in the SETTING BRIEF given above: set e
 const hookRule = " Each of the three hooks uses something specific and true from the facts, the setting brief or the brand " +
 	"context (the buyer's real moment, a real number, the place, the product doing its job), each for a different reason to " +
 	"watch; never a stock opener such as \"Are you tired of\", \"Introducing\" or \"Look no further\". Use only the offers, prices " +
-	"and terms in the facts: when a detail is missing (a price, a delivery time, a trial, a payment method), leave it out."
+	"and terms in the facts: when a detail is missing (a price, a delivery time, a trial, a payment method), leave it out." +
+	" Never write a phone number, web address or QR code in the voiceover, captions or CTA: the end card shows the business's real contacts. " +
+	"No urgency or scarcity (spots fill fast, limited places, hurry) unless the facts state a real deadline or limit. " +
+	"Visual lines never show writing, forms, signs, logos or QR codes."
 
 // scriptTask tells the writer what this ad can show.
 func scriptTask(in VideoScriptRequest) string {
@@ -333,6 +338,9 @@ func scriptTask(in VideoScriptRequest) string {
 			"Open with a presenter hook and use presenter for at most half of the scenes. The presenter explains and recommends; it never claims to have used the product or had a result itself. ")
 		b.WriteString("Give each scene a short visual line describing what is seen (for b_roll, the setting to film; never text on screen). ")
 		b.WriteString("end_card is the last scene, with the call to action.\n")
+		if d := strings.TrimSpace(in.ActorPrompt); d != "" {
+			fmt.Fprintf(&b, "The presenter is this person, as the owner described them: %s. Every presenter visual and the actor line describe this same person.\n", trimTo(d, 300))
+		}
 	} else {
 		b.WriteString("end_card is the last scene, with the call to action. There is no presenter and no person on screen.\n")
 	}

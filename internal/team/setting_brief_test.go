@@ -78,3 +78,29 @@ func TestSettingTaskMarksThePlatformDefault(t *testing.T) {
 		t.Fatal("the brief text lists settings by key")
 	}
 }
+
+func TestSettingsDropWritingAndInventedStreets(t *testing.T) {
+	if got := cleanProps("tablets, Codevertex logo sign, robotics kits, M-Pesa QR code, banner with the name"); got != "tablets, robotics kits" {
+		t.Fatalf("props %q", got)
+	}
+	b := &SettingBrief{HomeBase: SettingNote{Place: "Pioneer House", Neighbourhood: "Oginga-Odinga Road, Kisumu CBD"},
+		Settings: []SettingNote{{Place: "a classroom", Neighbourhood: "Oginga-Odinga Road, Kisumu CBD"}, {Place: "a family home", Neighbourhood: "Milimani, Kisumu"}}}
+	anchorAddress(b, PlaceFacts{Address: "Pioneer House, Oginga Street, Kisumu CBD"})
+	if b.HomeBase.Place != "Pioneer House, Oginga Street, Kisumu CBD" || b.HomeBase.Neighbourhood != "" {
+		t.Fatalf("home base %+v", b.HomeBase)
+	}
+	if b.Settings[0].Neighbourhood != "Kisumu CBD" || b.Settings[1].Neighbourhood != "Milimani, Kisumu" {
+		t.Fatalf("settings %+v", b.Settings)
+	}
+}
+
+func TestGuardOffersDropsPhonesAndScarcity(t *testing.T) {
+	v := &VideoScript{Scenes: []Scene{{Voiceover: "Enroll now on WhatsApp +254 712 345 678. Pay via M-Pesa. Spots fill fast!"}}, CTA: "WhatsApp 0712 345 678 to enroll"}
+	f := GuardOffers(v, "Digitika Kids & Teens\nAges 6 to 16")
+	if strings.Contains(v.Scenes[0].Voiceover, "712") || strings.Contains(v.Scenes[0].Voiceover, "fast") || strings.Contains(v.CTA, "0712") {
+		t.Fatalf("script %+v", v)
+	}
+	if !strings.Contains(v.Scenes[0].Voiceover, "Pay via M-Pesa") || len(f) < 2 {
+		t.Fatalf("kept %q, findings %d", v.Scenes[0].Voiceover, len(f))
+	}
+}

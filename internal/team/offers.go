@@ -32,6 +32,12 @@ var offerRules = []offerRule{
 	{regexp.MustCompile(`(?i)\bpromo(?:tion)?\s+code\b|\bcoupon\b|\bvoucher\b|\bcashback\b`),
 		[]string{"promo", "promotion code", "coupon", "voucher", "cashback"}, "a promotion"},
 	{regexp.MustCompile(`(?i)\bbure\b`), []string{"bure", "free"}, "a free offer"},
+	// Scarcity the brief does not state is invented urgency (marketing laws: urgency only when true).
+	{regexp.MustCompile(`(?i)\bspots?\s+(?:fill|are filling|go)\s+fast\b|\blimited\s+(?:spots|places|seats|slots)\b|\bonly\s+\d+\s+(?:spots|places|seats|slots)\s+left\b|\bselling\s+fast\b|\bhurry\b`),
+		[]string{"limited", "spots left", "places left", "seats left"}, "scarcity"},
+	// A phone number in the voice or captions is never the writer's to give: the end card draws the
+	// business's real contacts (media/contacts.go), and a written number may be made up.
+	{regexp.MustCompile(`(?:\+?254[\s-]?|\b0)[17]\d{2}[\s-]?\d{3}[\s-]?\d{3}\b`), []string{"\x00"}, "a phone number"},
 }
 
 // backed reports whether the brief's text holds any of the words.

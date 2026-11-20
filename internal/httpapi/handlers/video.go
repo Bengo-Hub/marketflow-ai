@@ -148,6 +148,8 @@ type scriptRequest struct {
 	// Place is where the business is and how it looks (address, website pages, picture captions),
 	// for the setting brief that places every scene (owner, 2026-11-20).
 	Place team.PlaceFacts `json:"place"`
+	// ActorPrompt is the presenter the owner described, so presenter visuals match the actor drawn.
+	ActorPrompt string `json:"actor_prompt"`
 }
 
 // Script handles POST /api/v1/internal/creative/script (service key): the
@@ -202,7 +204,7 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 		Presenter:   req.Kind == media.AdPresenter || req.Kind == media.AdPresenterPremium,
 		BrandPhotos: req.BrandPhotos, ActorNameStyle: req.ActorNameStyle, ActorNames: req.ActorNames,
 		Delivery: req.Delivery, Approach: req.Approach, Reviews: req.Reviews, PresenterSpeaker: req.PresenterSpeaker,
-		Place: req.Place})
+		Place: req.Place, ActorPrompt: req.ActorPrompt})
 	if err != nil {
 		h.refundKey(tenantID, chargeKey)
 		if errors.Is(err, team.ErrScriptBlocked) {
