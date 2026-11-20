@@ -35,10 +35,14 @@ type RoutePolicy struct {
 	Prefer map[string][]string `json:"prefer"`
 	// PremiumForExempt gives the exempt tenant premium routes by default.
 	PremiumForExempt bool `json:"premium_for_exempt"`
-	// PremiumBudgetUSD is the most an exempt tenant's all-premium video ad may cost before its
-	// dearest scenes fall back to standard (0: no limit).
+	// PremiumBudgetUSD is the most an exempt tenant's video ad may cost at provider prices before
+	// its dearest scenes fall back to standard. Owner rule 2026-11-20: never above
+	// MaxVideoBudgetUSD, premium included; a setting above it, or 0, reads as the ceiling.
 	PremiumBudgetUSD float64 `json:"premium_budget_usd"`
 }
+
+// MaxVideoBudgetUSD is the owner's hard ceiling on one video ad's provider cost (2026-11-20).
+const MaxVideoBudgetUSD = 2.0
 
 // DefaultRoutePolicy is the bake-off evidence as code defaults:
 //   - presenter: Creatify Boreal (owner's pick after the 2026-11-11 paid test: good lip-sync and
@@ -63,7 +67,7 @@ func DefaultRoutePolicy() RoutePolicy {
 			ScenarioPoster + "/" + TierPremium:     {"fal/nano-banana-pro"},
 		},
 		PremiumForExempt: true,
-		PremiumBudgetUSD: 8,
+		PremiumBudgetUSD: MaxVideoBudgetUSD,
 	}
 }
 
@@ -95,8 +99,11 @@ func PolicyFromSettings(s map[string]string) RoutePolicy {
 	if v, err := strconv.ParseBool(strings.TrimSpace(s["premium_for_exempt"])); err == nil {
 		p.PremiumForExempt = v
 	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(s["premium_budget_usd"]), 64); err == nil && v >= 0 {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s["premium_budget_usd"]), 64); err == nil && v > 0 {
 		p.PremiumBudgetUSD = v
+	}
+	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > MaxVideoBudgetUSD {
+		p.PremiumBudgetUSD = MaxVideoBudgetUSD
 	}
 	return p
 }

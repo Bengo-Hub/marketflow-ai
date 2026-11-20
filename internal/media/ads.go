@@ -501,9 +501,8 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 		adSeconds += sp.Seconds
 		plan.Scenes = append(plan.Scenes, sp)
 	}
-	if req.AutoPremium && req.PremiumBudgetUSD > 0 {
-		a.fitPremiumBudget(ctx, req, &plan)
-	}
+	// Music is priced before the budget fit so the fit counts it (it was left out before
+	// 2026-11-20, so an "in budget" plan could still run over by the music bed).
 	if plan.Audio == AudioScore {
 		if c := a.cachedMusic(ctx, req, musicPrompt(req.Mood, req.Delivery, a.audio.MusicStyle), adSeconds); c != nil {
 			plan.MusicRoute = c.Route // the earlier version's music is reused at no cost
@@ -511,8 +510,21 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 			plan.MusicUSD, plan.MusicRoute = a.sounds.Quote(ctx, CapMusic, tierOf(req), adSeconds)
 		}
 	}
+	if req.AutoPremium {
+		budget := req.PremiumBudgetUSD
+		if budget <= 0 || budget > MaxVideoBudgetUSD {
+			budget = MaxVideoBudgetUSD
+		}
+		req.PremiumBudgetUSD = budget
+		a.fitPremiumBudget(ctx, req, &plan)
+	}
 	plan.VoiceUSD = float64(plan.VoiceChars) * voiceUSDPer1000 / 1000
 	plan.CostUSD += plan.VoiceUSD + plan.SFXUSD + plan.MusicUSD
+	// Owner rule 2026-11-20: no video ad costs more than MaxVideoBudgetUSD at provider prices, on
+	// any tier or tenant. A plan still over it is refused with what to change, before any spend.
+	if plan.CostUSD > MaxVideoBudgetUSD+0.005 {
+		return plan, &UserError{Msg: fmt.Sprintf("this video would cost about USD %.2f to make, over the USD %.2f limit per video; make it shorter, use fewer scenes or a standard quality", plan.CostUSD, MaxVideoBudgetUSD)}
+	}
 	return plan, nil
 }
 
@@ -553,7 +565,7 @@ func (a *Ads) priceScene(ctx context.Context, req AdRequest, s ScriptScene, sp *
 // until its paid scenes, voice and cues fit the budget (or none is left to move).
 func (a *Ads) fitPremiumBudget(ctx context.Context, req AdRequest, plan *AdPlan) {
 	total := func() float64 {
-		return plan.CostUSD + float64(plan.VoiceChars)*voiceUSDPer1000/1000 + plan.SFXUSD
+		return plan.CostUSD + float64(plan.VoiceChars)*voiceUSDPer1000/1000 + plan.SFXUSD + plan.MusicUSD
 	}
 	tried := map[int]bool{}
 	for total() > req.PremiumBudgetUSD {

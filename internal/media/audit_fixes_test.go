@@ -201,8 +201,11 @@ func TestRoutingPolicyDefaultsAndOverrides(t *testing.T) {
 	p := PolicyFromSettings(map[string]string{"prefer": `{"presenter/standard":["fal/veed-fabric"]}`,
 		"premium_for_exempt": "false", "premium_budget_usd": "3.5"})
 	if p.Prefer["presenter/standard"][0] != "fal/veed-fabric" || p.Prefer["ad_clip/standard"][0] != "fal/hailuo-2.3-fast" ||
-		p.PremiumForExempt || p.PremiumBudgetUSD != 3.5 {
-		t.Fatalf("overrides: %+v", p)
+		p.PremiumForExempt || p.PremiumBudgetUSD != MaxVideoBudgetUSD {
+		t.Fatalf("overrides (3.5 is over the USD 2 ceiling, so it clamps): %+v", p)
+	}
+	if low := PolicyFromSettings(map[string]string{"premium_budget_usd": "1.25"}); low.PremiumBudgetUSD != 1.25 {
+		t.Fatalf("a budget under the ceiling is kept: %+v", low)
 	}
 	if bad := PolicyFromSettings(map[string]string{"prefer": "{not json", "premium_budget_usd": "x"}); bad.PremiumBudgetUSD != def.PremiumBudgetUSD {
 		t.Fatalf("bad settings: %+v", bad)
@@ -226,16 +229,18 @@ func TestPremiumForThePlatformOwnerFallsBackByScene(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Scenes[0].Tier != TierPremium || plan.Scenes[0].Route != "higgsfield/seedance-2.5-720p" ||
-		plan.Scenes[1].Tier != TierPremium || plan.Scenes[1].Route != "higgsfield/kling-v3-std" {
-		t.Fatalf("all premium: %+v", plan.Scenes)
+	// No budget set reads as the USD 2 ceiling (owner 2026-11-20): the Seedance presenter cannot
+	// fit, so it falls back to Boreal, while the premium Kling clip still fits.
+	if plan.Scenes[0].Tier != TierStandard || plan.Scenes[0].Route != "fal/creatify-boreal" ||
+		plan.Scenes[1].Tier != TierPremium || plan.Scenes[1].Route != "higgsfield/kling-v3-std" || plan.CostUSD > MaxVideoBudgetUSD {
+		t.Fatalf("premium within the USD 2 ceiling: %.2f %+v", plan.CostUSD, plan.Scenes)
 	}
 	req.PremiumBudgetUSD = 0.05
 	cheap, err := a.Plan(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cheap.Scenes[0].Tier != TierStandard || cheap.Scenes[0].Route != "fal/creatify-boreal" || cheap.CostUSD >= plan.CostUSD {
-		t.Fatalf("over budget, scenes not moved to standard: %+v", cheap.Scenes)
+	if cheap.Scenes[0].Tier != TierStandard || cheap.Scenes[1].Tier != TierStandard || cheap.CostUSD >= plan.CostUSD {
+		t.Fatalf("over a 0.05 budget, every scene moves to standard: %+v", cheap.Scenes)
 	}
 }
