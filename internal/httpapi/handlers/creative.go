@@ -149,6 +149,9 @@ type creativeQuote struct {
 	Enough          bool             `json:"enough"`
 	Shortfall       int              `json:"shortfall"`
 	SuggestedBundle *registry.Bundle `json:"suggested_bundle,omitempty"`
+	// MaxVideoUSD is the per-video and per-poster provider-cost ceiling in force (platform / media /
+	// routing max_video_budget_usd), shown with every quote so the owner sees the cap.
+	MaxVideoUSD float64 `json:"max_video_usd"`
 }
 
 // CreativeQuote handles GET /api/v1/os/creative/quote?tier=standard|premium&count=N:
@@ -161,7 +164,7 @@ func (h *OSHandler) CreativeQuote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, msg)
 		return
 	}
-	q := creativeQuote{Tier: media.TierStandard, Count: 1}
+	q := creativeQuote{Tier: media.TierStandard, Count: 1, MaxVideoUSD: media.Policy(r.Context()).MaxVideoUSD}
 	if r.URL.Query().Get("tier") == media.TierPremium {
 		q.Tier = media.TierPremium
 	}

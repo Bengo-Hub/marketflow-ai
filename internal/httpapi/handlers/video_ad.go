@@ -307,7 +307,7 @@ func (h *OSHandler) AdQuote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "video price is not configured")
 		return
 	}
-	q := adQuote{creativeQuote: creativeQuote{Tier: areq.Tier, Count: 1, CreditsEach: credits, CreditsNeeded: credits, Balance: -1}, Plan: plan}
+	q := adQuote{creativeQuote: creativeQuote{Tier: areq.Tier, Count: 1, CreditsEach: credits, CreditsNeeded: credits, Balance: -1, MaxVideoUSD: areq.MaxVideoUSD}, Plan: plan}
 	if h.credits != nil {
 		q.Balance = h.balance(r.Context(), tenantID)
 	}
