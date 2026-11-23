@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"path/filepath"
@@ -164,6 +165,8 @@ type AdRequest struct {
 	// MaxVideoUSD is the platform's per-video provider-cost ceiling (max_video_budget_usd); 0
 	// reads it from the routing policy in force.
 	MaxVideoUSD float64
+	// LogoEveryScene lays the logo small in a corner over every scene (creative.logo_every_scene).
+	LogoEveryScene bool
 	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
 	Brand string
 	Place string
@@ -929,12 +932,13 @@ func (a *Ads) Make(ctx context.Context, req AdRequest) (*MediaResult, error) {
 		}
 		t += o.seconds
 	}
+	logoCorner := a.sceneLogoCorner(ctx, req)
 	card := req.EndCard
 	assemble := func() (*MediaResult, error) {
 		c := card
 		return a.asm.Make(ctx, AssembleRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
 			Scenes: scenes, Words: words, Captions: true, SceneCaptions: sceneCaps, EndCard: &c, LogoURL: req.LogoURL,
-			MusicURL: musicURL, Mix: mix, AINote: adAINote(req)})
+			MusicURL: musicURL, Mix: mix, AINote: adAINote(req), SceneLogo: req.LogoEveryScene, SceneLogoCorner: logoCorner})
 	}
 	res, err := assemble()
 	if err != nil {
@@ -1256,4 +1260,32 @@ func pick(list []string, asset int, next *int) string {
 // clampSeconds bounds a silent scene's scripted length.
 func clampSeconds(s float64) float64 {
 	return min(max(s, 1.5), 8)
+}
+
+// sceneLogoCorner is the corner the scene logo keeps for the whole ad: the calmer top corner over
+// the actor and the first stills, so it stays off faces. Top right when they cannot be read.
+func (a *Ads) sceneLogoCorner(ctx context.Context, req AdRequest) string {
+	if !req.LogoEveryScene || req.LogoURL == "" || a.asm == nil || a.asm.posts == nil {
+		return LogoTopRight
+	}
+	logo, err := a.asm.posts.download(ctx, req.LogoURL)
+	if err != nil {
+		return LogoTopRight
+	}
+	urls := []string{}
+	if req.ActorURL != "" {
+		urls = append(urls, req.ActorURL)
+	}
+	for _, s := range req.Scenes {
+		if u := req.Stills[s.ID]; u != "" && len(urls) < 3 {
+			urls = append(urls, u)
+		}
+	}
+	var frames []image.Image
+	for _, u := range urls {
+		if img, err := a.asm.posts.download(ctx, u); err == nil {
+			frames = append(frames, img)
+		}
+	}
+	return WatermarkCorner(frames, req.Format, logo)
 }

@@ -47,6 +47,8 @@ type clipRequest struct {
 	CTA       string          `json:"cta"`
 	Contacts  []media.Contact `json:"contacts"`
 	Charge    bool            `json:"charge"`
+	// LogoPlate is how the logo is backed (creative.logo_plate_* settings and the brand tint).
+	LogoPlate media.PlateStyle `json:"logo_plate"`
 }
 
 // Clip handles POST /api/v1/internal/creative/clip (service key): starts a
@@ -101,7 +103,7 @@ func (h *OSHandler) Clip(w http.ResponseWriter, r *http.Request) {
 	creq := media.ClipRequest{
 		TenantID: tenantID, VersionID: req.VersionID, SceneURL: req.SceneURL, Prompt: strings.TrimSpace(req.Prompt),
 		Format: req.Format, Seconds: req.Seconds, Tier: req.Tier, LogoURL: req.LogoURL,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate},
 	}
 	price := func(reg registry.Registry) (int, error) { return reg.CreditsFor(output, req.Seconds) }
 	h.startJob(w, r, tenantID, req.VersionID, req.Charge, price, "Motion poster",
@@ -222,6 +224,8 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 
 // adRequest is marketflow-api asking for a template video ad from an approved script.
 type adRequest struct {
+	// LogoEveryScene lays the logo small over every scene (creative.logo_every_scene); unset is on.
+	LogoEveryScene *bool `json:"logo_every_scene"`
 	TenantID    string              `json:"tenant_id"`
 	VersionID   string              `json:"version_id"`
 	Format      string              `json:"format"`

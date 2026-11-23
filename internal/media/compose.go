@@ -59,6 +59,8 @@ type Overlay struct {
 	// LogoCorner pins the logo to LogoTopLeft or LogoTopRight; "" lets the compositor pick the
 	// calmer top corner of the scene (the self-review asks for the other corner on a retry).
 	LogoCorner string
+	// Plate is how the logo is backed (style, opacity, brand tint): logo_plate.go.
+	Plate PlateStyle
 	// Strong draws a taller, darker band under the words (a layout retry for legibility).
 	Strong bool
 }
@@ -150,7 +152,10 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 	U := layoutUnit(W, H)
 	margin := U * 6 / 100
 	if o.Logo != nil {
-		placeLogo(canvas, o.Logo, logoCorner(canvas, o, margin, U), margin, U)
+		// One logo helper for posters, motion posters, end cards and scene logos (logo_plate.go).
+		info := analyseLogo(o.Logo)
+		o.Logo = info.img
+		placeLogo(canvas, info, logoCorner(canvas, o, margin, U), margin, U, o.Plate)
 	}
 
 	textW := W - 2*margin
@@ -240,15 +245,10 @@ func drawChip(dst *image.RGBA, f *opentype.Font, text string, x, bottom, unit in
 }
 
 // logoRect is where the logo goes in a top corner: about a sixth of the short side wide, never
-// taller than a ninth of the frame, inside the safe margin.
+// taller than a ninth of the frame, its area capped (logoBox), inside the safe margin.
 func logoRect(logo image.Image, corner string, W, H, margin, unit int) image.Rectangle {
-	lw := unit * 16 / 100
-	lb := logo.Bounds()
-	lh := lb.Dy() * lw / max(lb.Dx(), 1)
-	if lh > H/9 {
-		lh = H / 9
-		lw = lb.Dx() * lh / max(lb.Dy(), 1)
-	}
+	box := logoBox(logo, unit*16/100, H/9)
+	lw, lh := box.X, box.Y
 	if corner == LogoTopRight {
 		return image.Rect(W-margin-lw, margin, W-margin, margin+lh)
 	}
@@ -274,23 +274,10 @@ func logoCorner(canvas *image.RGBA, o Overlay, margin, unit int) string {
 	return LogoTopLeft
 }
 
-// placeLogo draws the logo with a plate behind it whenever it would not stand out: a light logo
-// on a light scene, a dark logo on a dark one, or any logo over an unknown scene (a video
-// overlay). The plate is dark for a light logo and light for a dark one.
-func placeLogo(canvas *image.RGBA, logo image.Image, corner string, margin, unit int) {
+// placeLogo draws the logo on its adaptive plate (logo_plate.go) in the corner.
+func placeLogo(canvas *image.RGBA, info logoInfo, corner string, margin, unit int, st PlateStyle) {
 	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
-	at := logoRect(logo, corner, W, H, margin, unit)
-	logoL := logoLuma(logo)
-	bg, known := meanLuma(canvas, at)
-	if !known || math.Abs(logoL-bg) < 0.35 {
-		pad := max(at.Dx(), at.Dy()) / 8
-		plate := color.RGBA{0, 0, 0, 0xa8}
-		if logoL < 0.5 {
-			plate = color.RGBA{0xff, 0xff, 0xff, 0xe0}
-		}
-		fillRounded(canvas, at.Inset(-pad), pad, plate)
-	}
-	xdraw.CatmullRom.Scale(canvas, at, logo, logo.Bounds(), draw.Over, nil)
+	drawLogo(canvas, info, logoRect(info.img, corner, W, H, margin, unit), st)
 }
 
 // busyness scores how busy an opaque area is (0 calm, about 1 very busy): the mean luma step
@@ -333,47 +320,6 @@ func skinTone(c color.RGBA) bool {
 	return r > 95 && g > 40 && b > 20 && mx-mn > 15 && r-g > 15 && r > b
 }
 
-// logoLuma is the mean luma of a logo's visible pixels (0.5 when it has none).
-func logoLuma(img image.Image) float64 {
-	b := img.Bounds()
-	step := max(1, max(b.Dx(), b.Dy())/64)
-	var sum, n float64
-	for y := b.Min.Y; y < b.Max.Y; y += step {
-		for x := b.Min.X; x < b.Max.X; x += step {
-			r, g, bl, a := img.At(x, y).RGBA()
-			if a < 0x8000 {
-				continue
-			}
-			sum += (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)) / float64(a)
-			n++
-		}
-	}
-	if n == 0 {
-		return 0.5
-	}
-	return sum / n
-}
-
-// meanLuma is the mean luma of an opaque area; it reports false over a transparent canvas.
-func meanLuma(canvas *image.RGBA, r image.Rectangle) (float64, bool) {
-	r = r.Intersect(canvas.Bounds())
-	step := max(1, max(r.Dx(), r.Dy())/32)
-	var sum, n float64
-	for y := r.Min.Y; y < r.Max.Y; y += step {
-		for x := r.Min.X; x < r.Max.X; x += step {
-			c := canvas.RGBAAt(x, y)
-			if c.A < 0xf0 {
-				return 0, false
-			}
-			sum += (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
-			n++
-		}
-	}
-	if n == 0 {
-		return 0, false
-	}
-	return sum / n, true
-}
 
 func wrap(fc font.Face, text string, width int) []string {
 	var lines []string

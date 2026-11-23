@@ -73,6 +73,10 @@ type AssembleRequest struct {
 	Mix     AudioMix
 	EndCard *Overlay // the closing words (headline, price, CTA, logo), over the last seconds
 	LogoURL string   // fetched into EndCard.Logo when set
+	// SceneLogo lays the logo small in a corner over every scene before the end card
+	// (creative.logo_every_scene), in SceneLogoCorner, on the same plate as the end card.
+	SceneLogo       bool
+	SceneLogoCorner string
 	// AINote, when set, is shown small for the whole ad, over the end card too: the disclosure
 	// required whenever a synthetic person appears.
 	AINote string
@@ -215,12 +219,20 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 		}
 		layers = append(layers, layer{p, l.Start, math.Min(l.End, total)})
 	}
+	// The logo is read once; a missing or broken logo leaves it out quietly, never failing the ad.
+	var logo image.Image
+	if req.LogoURL != "" && a.posts != nil {
+		if l, err := a.posts.download(ctx, req.LogoURL); err == nil {
+			logo = l
+		} else {
+			a.logger.Info("logo not drawn", zap.Error(err))
+		}
+	}
+	logoUntil := total
 	if req.EndCard != nil {
 		card := *req.EndCard
-		if req.LogoURL != "" && card.Logo == nil && a.posts != nil {
-			if logo, err := a.posts.download(ctx, req.LogoURL); err == nil {
-				card.Logo = logo
-			}
+		if card.Logo == nil {
+			card.Logo = logo
 		}
 		img, err := ComposeOverlay(req.Format, card)
 		if err != nil {
@@ -240,6 +252,19 @@ func (a *Assembler) Make(ctx context.Context, req AssembleRequest) (*MediaResult
 			}
 		}
 		layers = append(kept, layer{p, start, total})
+		logoUntil = start
+	}
+	if req.SceneLogo && logo != nil && logoUntil > 0 {
+		plate := PlateStyle{}
+		if req.EndCard != nil {
+			plate = req.EndCard.Plate
+		}
+		if wm, err := ComposeWatermark(req.Format, logo, req.SceneLogoCorner, plate); err == nil && wm != nil {
+			p := filepath.Join(dir, "scenelogo.png")
+			if err := writePNG(p, wm); err == nil {
+				layers = append(layers, layer{p, 0, logoUntil})
+			}
+		}
 	}
 	// The disclosure goes last, so nothing is drawn over it.
 	if note := strings.TrimSpace(req.AINote); note != "" {

@@ -173,11 +173,11 @@ func TestRealignWordsSkipsPauses(t *testing.T) {
 	}
 }
 
-// A light logo gets a dark plate over a video overlay (scene unknown) and over a light
-// scene, never over a dark one.
+// A light logo gets a dark plate, over a video overlay (scene unknown) and over any scene, and
+// never a light one (logo_plate.go).
 func TestLogoPlateOnLightScenes(t *testing.T) {
-	logo := image.NewRGBA(image.Rect(0, 0, 200, 100))
-	draw.Draw(logo, logo.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	logo := image.NewRGBA(image.Rect(0, 0, 220, 120))
+	draw.Draw(logo, image.Rect(10, 10, 210, 110), image.NewUniform(color.White), image.Point{}, draw.Src)
 	overlay, err := ComposeOverlay("1080x1920", Overlay{Headline: "Digitika", Logo: logo})
 	if err != nil {
 		t.Fatal(err)
@@ -194,8 +194,8 @@ func TestLogoPlateOnLightScenes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, g, b, _ := poster.At(margin-4, margin+20).RGBA()
-	if r>>8 != 20 || g>>8 != 20 || b>>8 != 30 {
-		t.Fatalf("a plate was drawn over a dark scene: %d %d %d", r>>8, g>>8, b>>8)
+	if r>>8 > 40 || g>>8 > 40 || b>>8 > 45 {
+		t.Fatalf("a light plate behind a light logo over a dark scene: %d %d %d", r>>8, g>>8, b>>8)
 	}
 }
 
@@ -261,5 +261,17 @@ func TestEndCardPreview(t *testing.T) {
 	req.EndCard = nil
 	if s.endCardPreview(context.Background(), req, res) != nil {
 		t.Fatal("no end card words, no preview")
+	}
+	// The recompose-only path: the same still, new words and plate, a new file, nothing drawn,
+	// and a broken logo URL is left out quietly.
+	calls := len(f.inputs)
+	again, err := s.ComposeEndCardPreview(context.Background(), EndCardPreviewRequest{TenantID: [16]byte{1}, VersionID: "v9",
+		Format: "1920x1080", SceneID: "s2", StillURL: f.srv.URL + "/scene.png", LogoURL: f.srv.URL + "/missing-logo.png", Name: "r1",
+		EndCard: Overlay{Headline: "Digitika", CTA: "Email us", Plate: PlateStyle{Style: PlateLight}}})
+	if err != nil || again.Key == p.Key || again.SceneID != "s2" || len(f.inputs) != calls {
+		t.Fatalf("recompose %+v %v (generation calls %d to %d)", again, err, calls, len(f.inputs))
+	}
+	if _, err := s.ComposeEndCardPreview(context.Background(), EndCardPreviewRequest{Format: "1920x1080", StillURL: f.srv.URL + "/gone"}); err == nil {
+		t.Fatal("an unreadable still gave a preview")
 	}
 }

@@ -500,12 +500,41 @@ func (s *Storyboards) endCardPreview(ctx context.Context, req StoryboardRequest,
 	if sceneID == "" || stillURL == "" {
 		return nil
 	}
-	scene, err := s.posts.download(ctx, stillURL)
+	p, err := s.ComposeEndCardPreview(ctx, EndCardPreviewRequest{TenantID: req.TenantID, VersionID: req.VersionID, Format: req.Format,
+		SceneID: sceneID, StillURL: stillURL, EndCard: *req.EndCard, LogoURL: req.LogoURL})
 	if err != nil {
 		s.logger.Info("end card preview skipped", zap.Error(err))
 		return nil
 	}
-	o := *req.EndCard
+	return p
+}
+
+// EndCardPreviewRequest recomposes an end card preview over a still already drawn.
+type EndCardPreviewRequest struct {
+	TenantID  uuid.UUID
+	VersionID string
+	Format    string
+	SceneID   string
+	StillURL  string
+	EndCard   Overlay
+	LogoURL   string
+	// Name is the stored file's suffix; "" is the storyboard's own preview name.
+	Name string
+}
+
+// ComposeEndCardPreview lays the end card overlay over its approved still and stores the result.
+// It is the recompose-only path too (owner, 2026-11-24): new words, contacts or a new logo plate
+// reach the preview without redrawing any still, so it never costs a credit. A missing or broken
+// logo is left out quietly.
+func (s *Storyboards) ComposeEndCardPreview(ctx context.Context, req EndCardPreviewRequest) (*EndCardPreview, error) {
+	if s == nil || s.posts == nil || s.store == nil {
+		return nil, fmt.Errorf("media: end card previews are not available")
+	}
+	scene, err := s.posts.download(ctx, req.StillURL)
+	if err != nil {
+		return nil, fmt.Errorf("media: the end card still could not be read: %w", err)
+	}
+	o := req.EndCard
 	if req.LogoURL != "" && o.Logo == nil {
 		if logo, err := s.posts.download(ctx, req.LogoURL); err == nil {
 			o.Logo = logo
@@ -515,18 +544,21 @@ func (s *Storyboards) endCardPreview(ctx context.Context, req StoryboardRequest,
 	// to the format as the assembly fits it, so the preview matches the rendered end card.
 	layer, err := ComposeOverlay(req.Format, o)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	img := FitFrame(scene, layer.Bounds().Size())
 	draw.Draw(img, img.Bounds(), layer, image.Point{}, draw.Over)
 	data, err := EncodeJPEG(img)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	key, url, err := s.store.PutPoster(ctx, req.TenantID, req.VersionID+"-endcard-preview", data)
+	name := req.VersionID + "-endcard-preview"
+	if req.Name != "" {
+		name += "-" + req.Name
+	}
+	key, url, err := s.store.PutPoster(ctx, req.TenantID, name, data)
 	if err != nil {
-		s.logger.Info("end card preview not stored", zap.Error(err))
-		return nil
+		return nil, fmt.Errorf("media: end card preview not stored: %w", err)
 	}
-	return &EndCardPreview{SceneID: sceneID, URL: url, Key: key}
+	return &EndCardPreview{SceneID: req.SceneID, URL: url, Key: key}, nil
 }

@@ -124,7 +124,7 @@ func (h *OSHandler) Poster(w http.ResponseWriter, r *http.Request) {
 	res, err := h.posters.Make(ctx, media.PosterRequest{
 		TenantID: tenantID, VersionID: req.VersionID, Prompt: req.Prompt, PhotoURLs: req.PhotoURLs,
 		Format: req.Format, Tier: req.Tier, Palette: [][3]int(req.Palette), LogoURL: req.LogoURL, Brand: req.Brand, Place: req.Place,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate},
 	})
 	if err != nil {
 		h.refund(r, tenantID, chargeKey)
@@ -212,7 +212,7 @@ func (h *OSHandler) recompose(w http.ResponseWriter, r *http.Request, tenantID u
 	defer cancel()
 	res, err := h.posters.Recompose(ctx, media.PosterRequest{
 		TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, LogoURL: req.LogoURL,
-		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent},
+		Overlay: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate},
 	}, req.SceneURL)
 	if err != nil {
 		h.logger.Warn("recompose failed", zap.String("version_id", req.VersionID), zap.Error(err))
@@ -242,8 +242,11 @@ func parseHexColor(s string) (color.RGBA, error) {
 	return color.RGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 0xff}, nil
 }
 
-// reviewFacts tell the self-review whose picture it is and where the business is (media/review.go).
+// reviewFacts are the brand facts every creative request carries: whose picture it is and where
+// the business is, for the self-review (media/review.go), and how its logo is backed.
 type reviewFacts struct {
+	// LogoPlate is how logos are backed (creative.logo_plate_* settings and the brand colours).
+	LogoPlate media.PlateStyle `json:"logo_plate"`
 	Brand string `json:"brand"`
 	Place string `json:"place"`
 }

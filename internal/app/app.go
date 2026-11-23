@@ -683,6 +683,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/creative/ad", osHandler.Ad)
 		r.Post("/creative/ad/quote", osHandler.AdQuote)
 		r.Post("/creative/storyboard", osHandler.Storyboard)
+		r.Post("/creative/end-card-preview", osHandler.EndCardPreview)
 		// The ad templates for the Studio's picker (owner, 2026-11-14).
 		r.Get("/creative/ad-templates", osHandler.AdTemplates)
 		r.Get("/creative/jobs/{version_id}", osHandler.JobStatus)

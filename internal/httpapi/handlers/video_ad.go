@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,10 +60,11 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Footage: req.FootageURLs,
 		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
-		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent}}
+		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}}
 	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
 	areq.MaxVideoUSD = media.Policy(r.Context()).MaxVideoUSD
 	areq.Brand, areq.Place = req.Brand, req.Place
+	areq.LogoEveryScene = req.LogoEveryScene == nil || *req.LogoEveryScene
 	if err := h.ads.Validate(areq); err != nil {
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "media: "))
 		return req, areq, tenantID, false
@@ -379,7 +381,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
 		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place}
 	if accent, err := parseHexColor(req.Accent); err == nil && strings.TrimSpace(req.Headline+req.CTA) != "" {
-		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent}
+		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}
 		sreq.LogoURL = req.LogoURL
 	}
 	price := func(reg registry.Registry) (int, error) {
@@ -573,4 +575,69 @@ func FalWebhook(keys *media.FalKeys, box media.PushBox, logger *zap.Logger) http
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// endCardPreviewRequest asks for the end card preview again over its still (no redraw).
+type endCardPreviewRequest struct {
+	TenantID  string           `json:"tenant_id"`
+	VersionID string           `json:"version_id"`
+	Format    string           `json:"format"`
+	SceneID   string           `json:"scene_id"`
+	StillURL  string           `json:"still_url"`
+	Headline  string           `json:"headline"`
+	Subline   string           `json:"subline"`
+	Price     string           `json:"price"`
+	CTA       string           `json:"cta"`
+	Contacts  []media.Contact  `json:"contacts"`
+	Accent    string           `json:"accent"`
+	LogoURL   string           `json:"logo_url"`
+	LogoPlate media.PlateStyle `json:"logo_plate"`
+}
+
+// EndCardPreview handles POST /api/v1/internal/creative/end-card-preview (service key): the
+// recompose-only path (owner, 2026-11-24). It lays the end card's words, contacts and logo over
+// the still the storyboard already drew and stores the preview; nothing is generated and nothing
+// is charged, so the approved stills stay as they are.
+func (h *OSHandler) EndCardPreview(w http.ResponseWriter, r *http.Request) {
+	if h.storyboards == nil {
+		writeError(w, http.StatusServiceUnavailable, "storyboards are not available on this server yet")
+		return
+	}
+	var req endCardPreviewRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tenantID, ok := jobIDs(w, req.TenantID, req.VersionID)
+	if !ok {
+		return
+	}
+	if _, ok := media.Formats[req.Format]; !ok {
+		writeError(w, http.StatusBadRequest, "format must be "+media.FormatsText)
+		return
+	}
+	if !strings.HasPrefix(req.StillURL, "https://") && !strings.HasPrefix(req.StillURL, "http://") {
+		writeError(w, http.StatusBadRequest, "still_url must be the end card's stored still")
+		return
+	}
+	accent, err := parseHexColor(req.Accent)
+	if err != nil || strings.TrimSpace(req.Headline+req.CTA) == "" {
+		writeError(w, http.StatusBadRequest, "an end card needs a headline or CTA and an accent #rrggbb")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	p, err := h.storyboards.ComposeEndCardPreview(ctx, media.EndCardPreviewRequest{TenantID: tenantID, VersionID: req.VersionID,
+		Format: req.Format, SceneID: req.SceneID, StillURL: req.StillURL, LogoURL: req.LogoURL,
+		Name: strconv.FormatInt(time.Now().Unix(), 36),
+		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts,
+			Accent: accent, Plate: req.LogoPlate}})
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("end card preview failed", zap.String("version_id", req.VersionID), zap.Error(err))
+		}
+		writeError(w, http.StatusBadGateway, "the end card preview could not be made right now")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"end_card_preview": p})
 }
