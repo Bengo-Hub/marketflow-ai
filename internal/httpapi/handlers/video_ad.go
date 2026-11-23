@@ -383,7 +383,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			return &media.MediaResult{Storyboard: sb, CostUSD: sb.CostUSD}, nil
-		})
+		}, true) // a storyboard asked for again is made again (new script or actor)
 }
 
 // jobID is the job a status or refund call names: the version's render, or with

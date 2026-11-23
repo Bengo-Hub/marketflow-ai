@@ -375,7 +375,7 @@ func (h *OSHandler) JobStatus(w http.ResponseWriter, r *http.Request) {
 // or reports the job already running or done without charging again. A busy pod
 // refuses before any charge (429).
 func (h *OSHandler) startJob(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, versionID string, charge bool,
-	price func(registry.Registry) (int, error), label string, work func(ctx context.Context) (*media.MediaResult, error)) {
+	price func(registry.Registry) (int, error), label string, work func(ctx context.Context) (*media.MediaResult, error), restartDone ...bool) {
 	prev, ok, err := h.jobs.Get(r.Context(), versionID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "video jobs are unavailable right now")
@@ -385,7 +385,8 @@ func (h *OSHandler) startJob(w http.ResponseWriter, r *http.Request, tenantID uu
 		writeJSON(w, http.StatusAccepted, prev)
 		return
 	}
-	if ok && prev.Status == media.JobDone {
+	again := ok && prev.Status == media.JobDone && len(restartDone) > 0 && restartDone[0]
+	if ok && prev.Status == media.JobDone && !again {
 		writeJSON(w, http.StatusOK, prev)
 		return
 	}
@@ -395,6 +396,11 @@ func (h *OSHandler) startJob(w http.ResponseWriter, r *http.Request, tenantID uu
 		return
 	}
 	attempt, key := media.NextCharge(versionID, prev, ok)
+	if again {
+		// A storyboard made again (a new script, a redrawn actor) is a new attempt with its own charge.
+		attempt = max(prev.Attempt, 1) + 1
+		key = fmt.Sprintf("render:%s:%d", versionID, attempt)
+	}
 	chargeKey, credits := "", 0
 	if charge && h.credits != nil {
 		units, err := price(h.registry(r.Context()))
