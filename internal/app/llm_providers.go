@@ -27,6 +27,7 @@ type llmProviders struct {
 
 	mu         sync.Mutex
 	set        map[string]llm.Provider
+	missed     map[string]time.Time // names compatible() found unconfigured, and when
 	loadedAt   time.Time
 	refreshing bool
 }
@@ -49,7 +50,50 @@ func (s *llmProviders) Provider(ctx context.Context, name string) (llm.Provider,
 	}
 	p, ok := s.set[name]
 	s.mu.Unlock()
-	return p, ok
+	if ok {
+		return p, true
+	}
+	return s.compatible(ctx, name)
+}
+
+// compatible resolves a provider the fixed set does not know: any platform row
+// ai_llm/<name> with a base_url and an api_key is an OpenAI-compatible endpoint
+// (OpenRouter, Google Gemini's OpenAI endpoint, Cerebras and the like). A routing
+// policy or the media review names it, and Platform > Providers holds its key, so
+// a new free fallback needs no code. Misses are remembered for the same TTL.
+func (s *llmProviders) compatible(ctx context.Context, name string) (llm.Provider, bool) {
+	s.mu.Lock()
+	if at, miss := s.missed[name]; miss && time.Since(at) < providerTTL {
+		s.mu.Unlock()
+		return llm.Provider{}, false
+	}
+	s.mu.Unlock()
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	raw, err := s.resolver.ResolveRaw(rctx, "ai_llm", name)
+	var p llm.Provider
+	ok := err == nil && raw["base_url"] != "" && raw["api_key"] != ""
+	if ok {
+		p = llm.Provider{
+			Client: ai.NewClient(raw["base_url"], raw["api_key"], s.logger),
+			Models: llm.Models{Main: raw["main_model"], Fallback: raw["fallback_model"], Premium: raw["premium_model"]},
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !ok {
+		if s.missed == nil {
+			s.missed = map[string]time.Time{}
+		}
+		s.missed[name] = time.Now()
+		return llm.Provider{}, false
+	}
+	if s.set == nil {
+		s.set = map[string]llm.Provider{}
+	}
+	s.set[name] = p
+	s.logger.Info("openai-compatible llm provider resolved", zap.String("provider", name))
+	return p, true
 }
 
 func (s *llmProviders) load(parent context.Context) map[string]llm.Provider {
