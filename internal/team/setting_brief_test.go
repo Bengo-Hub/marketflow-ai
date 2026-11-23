@@ -80,7 +80,7 @@ func TestSettingTaskMarksThePlatformDefault(t *testing.T) {
 }
 
 func TestSettingsDropWritingAndInventedStreets(t *testing.T) {
-	if got := cleanProps("tablets, Codevertex logo sign, robotics kits, M-Pesa QR code, banner with the name"); got != "tablets, robotics kits" {
+	if got := cleanProps("tablets, Codevertex logo sign, robotics kits, M-Pesa QR code, banner with the name, M-Pesa icon, smartphone showing a receipt, tablet displaying the site, receipt printer"); got != "tablets, robotics kits, receipt printer" {
 		t.Fatalf("props %q", got)
 	}
 	b := &SettingBrief{HomeBase: SettingNote{Place: "Pioneer House", Neighbourhood: "Oginga-Odinga Road, Kisumu CBD"},

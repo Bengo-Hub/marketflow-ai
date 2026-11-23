@@ -360,10 +360,10 @@ func mentionsPlace(line string, b *SettingBrief) bool {
 	return false
 }
 
-// textProp matches props that carry writing (signs, logos, banners, screens with forms, QR
-// codes): image models garble writing, and another business's logo must never appear, so a
+// textProp matches props that carry writing (signs, logos, icons, banners, QR codes, or anything a
+// screen or phone is showing or displaying): image models garble writing, and another business's logo must never appear, so a
 // setting never asks for one.
-var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number)\b`)
+var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display)\b`)
 
 // cleanProps drops the props that carry writing.
 func cleanProps(props string) string {
