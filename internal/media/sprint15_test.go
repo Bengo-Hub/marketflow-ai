@@ -241,3 +241,25 @@ func TestStoryboardMakeOnSoul(t *testing.T) {
 		t.Fatalf("stills %+v", res.Stills)
 	}
 }
+
+// The end card preview is the end card's still with our overlay on it, stored for the plan.
+func TestEndCardPreview(t *testing.T) {
+	f := newFakeProviders(t)
+	store := &memStore{}
+	s := NewStoryboards(keysFor("higgsfield"), store, NewPosters(keysFor("higgsfield"), store, nil), nil)
+	req := StoryboardRequest{TenantID: [16]byte{1}, VersionID: "v9", Format: "1920x1080",
+		Scenes:  []ScriptScene{{ID: "s1", Shot: ShotBRoll}, {ID: "s2", Shot: ShotEndCard}},
+		EndCard: &Overlay{Headline: "Digitika Kids & Teens", CTA: "Message us on WhatsApp", Contacts: []Contact{{Kind: ContactWhatsApp, Value: "0712 345 678"}}}}
+	res := &StoryboardResult{Stills: []Still{{SceneID: "s1", URL: f.srv.URL + "/scene.png"}, {SceneID: "s2", URL: f.srv.URL + "/scene.png"}}}
+	p := s.endCardPreview(context.Background(), req, res)
+	if p == nil || p.SceneID != "s2" || p.URL == "" {
+		t.Fatalf("preview %+v", p)
+	}
+	if _, ok := store.puts[p.Key]; !ok {
+		t.Fatal("the preview was not stored")
+	}
+	req.EndCard = nil
+	if s.endCardPreview(context.Background(), req, res) != nil {
+		t.Fatal("no end card words, no preview")
+	}
+}

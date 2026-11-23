@@ -152,3 +152,20 @@ func solid(w, h int, c color.RGBA) *image.RGBA {
 	}
 	return img
 }
+
+// Picture prompts never ask the image model for what the overlay draws.
+func TestPictureOnlyDropsOverlayWords(t *testing.T) {
+	got := sceneVisual(ScriptScene{Shot: ShotEndCard, Visual: "Digitika logo with contact details, WhatsApp icon",
+		Setting: "Pioneer House reception, Kisumu CBD; calm evening; presenter by the Codevertex logo; M-Pesa icon"})
+	for _, w := range []string{"logo", "icon", "WhatsApp", "contact"} {
+		if strings.Contains(got, w) {
+			t.Fatalf("%q still asks for %s", got, w)
+		}
+	}
+	if !strings.Contains(got, "Pioneer House reception") {
+		t.Fatalf("the place was lost: %q", got)
+	}
+	if v := pictureOnly("A customer taps a phone on the counter to pay"); v != "A customer taps a phone on the counter to pay" {
+		t.Fatalf("a plain action changed: %q", v)
+	}
+}

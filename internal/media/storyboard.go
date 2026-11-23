@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"image"
+	"image/draw"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +72,10 @@ type StoryboardRequest struct {
 	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
 	Brand string
 	Place string
+	// EndCard and LogoURL are the end card's words, contacts and logo: composed over the end card's
+	// still as a preview, so the plan the owner approves shows the end card that renders.
+	EndCard *Overlay
+	LogoURL string
 }
 
 // Actor is an ad's one presenter: the still every presenter scene is lip-synced from.
@@ -108,6 +115,8 @@ type StoryboardResult struct {
 	CostUSD float64 `json:"cost_usd"`
 	// Review is what the self-review found and redrew (review.go).
 	Review *ReviewReport `json:"review,omitempty"`
+	// EndCardPreview is the end card as it will render: its still with our overlay drawn on it.
+	EndCardPreview *EndCardPreview `json:"end_card_preview,omitempty"`
 }
 
 // Storyboards makes storyboards.
@@ -232,6 +241,8 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 	}
 	// The self-review looks at the generated stills and the actor before the owner does.
 	s.reviewStills(ctx, req, res)
+	// The end card is previewed after the review, so a redrawn end card still is the one shown.
+	res.EndCardPreview = s.endCardPreview(ctx, req, res)
 	return res, nil
 }
 
@@ -396,7 +407,7 @@ func sceneText(sc ScriptScene) string { return withSetting(strings.TrimSpace(sc.
 // withSetting adds the setting brief's line to a visual, so every generated picture and clip
 // happens in the business's real town and kind of place (owner, 2026-11-20).
 func withSetting(visual, setting string) string {
-	setting = strings.TrimSpace(setting)
+	visual, setting = pictureOnly(visual), pictureOnly(setting)
 	switch {
 	case setting == "":
 		return visual
@@ -432,4 +443,90 @@ func soulAspect(format string) string {
 func seedFor(versionID, desc string) int64 {
 	h := sha256.Sum256([]byte(versionID + "|" + desc))
 	return int64(binary.BigEndian.Uint32(h[:4]))
+}
+
+// overlayWord marks what only our overlay draws: icons, logos, buttons, contact details, calls to
+// action and any writing. An image model asked for them paints a fake WhatsApp icon or garbled
+// text into the scene (owner, 2026-11-23), so they never reach a picture or clip prompt.
+var overlayWord = regexp.MustCompile(`(?i)\b(icons?|logos?|buttons?|contacts?|contact details|whatsapp|qr|call to action|cta|phone numbers?|e-?mails?|websites?|web address|url|links?|signs?|signage|banners?|captions?|text|writing|lettering|headline|price tag)\b`)
+
+// clauseSplit cuts a prompt into its clauses, keeping the separators.
+var clauseSplit = regexp.MustCompile(`[^,;.]+[,;.]?`)
+
+// pictureOnly keeps the clauses of a visual or setting line that describe the picture and drops
+// those asking for what the overlay draws.
+func pictureOnly(s string) string {
+	s = strings.TrimSpace(s)
+	if !overlayWord.MatchString(s) {
+		return s
+	}
+	var kept []string
+	for _, c := range clauseSplit.FindAllString(s, -1) {
+		if t := strings.TrimSpace(c); t != "" && !overlayWord.MatchString(t) {
+			kept = append(kept, t)
+		}
+	}
+	out := strings.TrimSpace(strings.Join(kept, " "))
+	return strings.TrimRight(strings.TrimLeft(out, ",; "), ",; ")
+}
+
+// EndCardPreview is the end card as it will render.
+type EndCardPreview struct {
+	SceneID string `json:"scene_id"`
+	URL     string `json:"url"`
+	Key     string `json:"key,omitempty"`
+}
+
+// endCardPreview composes the end card overlay (headline, the CTA as words, the contact strip
+// and the logo) over the end card scene's still with the same layer the render uses
+// (ComposeOverlay and drawOverlay), and stores it. Nothing is generated, so it costs nothing; a
+// failure leaves the plan without a preview rather than failing the storyboard.
+func (s *Storyboards) endCardPreview(ctx context.Context, req StoryboardRequest, res *StoryboardResult) *EndCardPreview {
+	if req.EndCard == nil || res == nil {
+		return nil
+	}
+	var sceneID string
+	for _, sc := range req.Scenes {
+		if sc.Shot == ShotEndCard {
+			sceneID = sc.ID
+		}
+	}
+	var stillURL string
+	for _, st := range res.Stills {
+		if st.SceneID == sceneID && st.URL != "" {
+			stillURL = st.URL
+		}
+	}
+	if sceneID == "" || stillURL == "" {
+		return nil
+	}
+	scene, err := s.posts.download(ctx, stillURL)
+	if err != nil {
+		s.logger.Info("end card preview skipped", zap.Error(err))
+		return nil
+	}
+	o := *req.EndCard
+	if req.LogoURL != "" && o.Logo == nil {
+		if logo, err := s.posts.download(ctx, req.LogoURL); err == nil {
+			o.Logo = logo
+		}
+	}
+	// The same layer the render lays over the end card (ComposeOverlay), over the still fitted
+	// to the format as the assembly fits it, so the preview matches the rendered end card.
+	layer, err := ComposeOverlay(req.Format, o)
+	if err != nil {
+		return nil
+	}
+	img := FitFrame(scene, layer.Bounds().Size())
+	draw.Draw(img, img.Bounds(), layer, image.Point{}, draw.Over)
+	data, err := EncodeJPEG(img)
+	if err != nil {
+		return nil
+	}
+	key, url, err := s.store.PutPoster(ctx, req.TenantID, req.VersionID+"-endcard-preview", data)
+	if err != nil {
+		s.logger.Info("end card preview not stored", zap.Error(err))
+		return nil
+	}
+	return &EndCardPreview{SceneID: sceneID, URL: url, Key: key}
 }

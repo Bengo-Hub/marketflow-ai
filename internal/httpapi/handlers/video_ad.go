@@ -336,6 +336,14 @@ type storyboardRequest struct {
 	// Delivery is the ad's voice delivery; "ugc" draws the stills as candid phone photos.
 	Delivery string `json:"delivery"`
 	reviewFacts
+	// The end card's words, contacts, colour and logo, composed over its still as a preview.
+	Headline string          `json:"headline"`
+	Subline  string          `json:"subline"`
+	Price    string          `json:"price"`
+	CTA      string          `json:"cta"`
+	Contacts []media.Contact `json:"contacts"`
+	Accent   string          `json:"accent"`
+	LogoURL  string          `json:"logo_url"`
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -370,6 +378,10 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
 		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place}
+	if accent, err := parseHexColor(req.Accent); err == nil && strings.TrimSpace(req.Headline+req.CTA) != "" {
+		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent}
+		sreq.LogoURL = req.LogoURL
+	}
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only
