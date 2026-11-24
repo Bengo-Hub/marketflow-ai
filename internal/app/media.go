@@ -168,8 +168,11 @@ func mediaPolicySource(resolver *providers.Resolver) media.PolicySource {
 // Flash (the platform's ai_llm/gemini row; free tier, reads images), Groq's Llama 4 Scout, then
 // Anthropic's Haiku. Change the setting, not this.
 var defaultReviewTargets = []llm.Target{
+	// Groq's Llama 4 Scout was retired (404, 2026-11-24) and Groq lists no vision model now. An
+	// older Gemini Flash is a separate capacity pool when the newest one answers 503 "high demand".
 	{Provider: "gemini", Model: "gemini-3.8-flash", MaxTokens: 600},
-	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct", MaxTokens: 600},
+	{Provider: "gemini", Model: "gemini-3.7-flash", MaxTokens: 600},
+	{Provider: "openrouter", Model: "google/gemma-4-31b-it:free", MaxTokens: 600},
 	{Provider: "anthropic", Model: "claude-haiku-4-5", MaxTokens: 600},
 }
 
