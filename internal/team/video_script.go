@@ -100,7 +100,9 @@ func adFacts(in VideoScriptRequest, marketingContext string) map[string]bool {
 func cleanReviews(list []string) []string {
 	var out []string
 	for _, r := range list {
-		if r = strings.TrimSpace(r); r != "" && len(r) <= 400 {
+		// 600 bytes fits marketflow-api's longest line: a 300-rune quote (whole sentences), the
+		// attribution and the rating note. A longer line is dropped, never cut mid-quote.
+		if r = strings.TrimSpace(r); r != "" && len(r) <= 600 {
 			out = append(out, r)
 		}
 		if len(out) == 5 {
@@ -374,7 +376,8 @@ func approachTask(lib *library.Library, tpl library.AdTemplate, reviews []string
 	b.WriteString(lib.AdTemplateBrief(tpl))
 	b.WriteString(lib.VoiceTagsText())
 	if list := cleanReviews(reviews); len(list) > 0 {
-		b.WriteString("Real customer reviews you may quote word for word, with the attribution given (never reword them into a stronger claim):\n")
+		b.WriteString("Real customer reviews you may quote word for word, with the attribution given (never reword them into a stronger claim). " +
+			"Mention stars only for a review marked \"rated N/5\", with that number; a review with no star rating given never gets stars:\n")
 		for _, r := range list {
 			b.WriteString("- ")
 			b.WriteString(r)
