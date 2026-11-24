@@ -83,6 +83,23 @@ func TestSettingsDropWritingAndInventedStreets(t *testing.T) {
 	if got := cleanProps("tablets, Codevertex logo sign, robotics kits, M-Pesa QR code, banner with the name, M-Pesa icon, smartphone showing a receipt, tablet displaying the site, receipt printer"); got != "tablets, robotics kits, receipt printer" {
 		t.Fatalf("props %q", got)
 	}
+	// Stickers, decals and branding carry words; a non-answer is never a prop (2026-11-24).
+	if got := cleanProps("laptops, Scratch coding stickers, robot decals, robotics kits, branded tote bags"); got != "laptops, robotics kits" {
+		t.Fatalf("props %q", got)
+	}
+	for _, empty := range []string{"none (focus on branding)", "None", "N/A", "nothing", "-"} {
+		if got := cleanProps(empty); got != "" {
+			t.Fatalf("%q kept as %q", empty, got)
+		}
+	}
+	if got := cleanProps("noodle bowls, nonna's recipe book"); got != "noodle bowls, nonna's recipe book" {
+		t.Fatalf("a real prop starting with no was dropped: %q", got)
+	}
+	n := SettingNote{Place: "a bright learning room", Vibe: "none (focus on branding)", Props: "Scratch coding stickers, laptops"}
+	n.clean()
+	if n.Vibe != "" || n.Props != "laptops" || strings.Contains(n.Line(), "branding") {
+		t.Fatalf("setting %+v line %q", n, n.Line())
+	}
 	b := &SettingBrief{HomeBase: SettingNote{Place: "Pioneer House", Neighbourhood: "Oginga-Odinga Road, Kisumu CBD"},
 		Settings: []SettingNote{{Place: "a classroom", Neighbourhood: "Oginga-Odinga Road, Kisumu CBD"}, {Place: "a family home", Neighbourhood: "Milimani, Kisumu"}}}
 	anchorAddress(b, PlaceFacts{Address: "Pioneer House, Oginga Street, Kisumu CBD"})

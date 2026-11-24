@@ -417,13 +417,17 @@ func mentionsPlace(line string, b *SettingBrief) bool {
 // textProp matches props that carry writing (signs, logos, icons, banners, QR codes, or anything a
 // screen or phone is showing or displaying): image models garble writing, and another business's logo must never appear, so a
 // setting never asks for one.
-var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display|screen|screens|monitor|monitors|preview|previews|invoice|invoices|call[- ]to[- ]action|cta|whatsapp|number|numbers|text|writing|words|lettering|placeholder|placeholders|contact info|contact information|contact details)\b`)
+var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display|screen|screens|monitor|monitors|preview|previews|invoice|invoices|call[- ]to[- ]action|cta|whatsapp|number|numbers|text|writing|words|lettering|placeholder|placeholders|contact info|contact information|contact details|sticker|stickers|decal|decals|name tag|name tags|nametag|nametags|badge|badges|placard|placards|plaque|plaques|slogan|slogans|branding|branded)\b`)
 
-// cleanProps drops the props that carry writing.
+// emptyProp matches a field the model filled with a non-answer ("none (focus on branding)",
+// "N/A", "nothing"): an image model reads it as a request, so it never reaches a setting.
+var emptyProp = regexp.MustCompile(`(?i)^(none|n/?a|nil|null|nothing|not applicable|no props?|-+)(\W|$)`)
+
+// cleanProps drops the props that carry writing and the non-answers.
 func cleanProps(props string) string {
 	var kept []string
 	for _, p := range strings.Split(props, ",") {
-		if p = strings.TrimSpace(p); p != "" && !textProp.MatchString(p) {
+		if p = strings.TrimSpace(p); p != "" && !textProp.MatchString(p) && !emptyProp.MatchString(p) {
 			kept = append(kept, p)
 		}
 	}
