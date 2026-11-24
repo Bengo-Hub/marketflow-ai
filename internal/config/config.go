@@ -36,6 +36,12 @@ type AppConfig struct {
 	TreasuryURL string `env:"TREASURY_API_URL" envDefault:"https://booksapi.codevertexafrica.com"`
 	// PlatformTenantSlug is the tenant whose (platform-level) rates are read.
 	PlatformTenantSlug string `env:"MF_PLATFORM_TENANT_SLUG" envDefault:"codevertex"`
+	// FXCacheTTL is how long treasury's rate is reused before it is read again; the last good
+	// rate is kept with no expiry for outages.
+	FXCacheTTL time.Duration `env:"MF_FX_CACHE_TTL" envDefault:"6h"`
+	// FXDefaultKESPerUSD is the configured last resort when treasury has never answered. It
+	// replaces the output registry's own fx_rate, which is no longer a source of rates.
+	FXDefaultKESPerUSD float64 `env:"MF_FX_DEFAULT_KES_PER_USD" envDefault:"129"`
 }
 
 type HTTPConfig struct {

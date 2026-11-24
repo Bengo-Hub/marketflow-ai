@@ -16,8 +16,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// cacheFor is how long a fetched rate is reused; treasury updates its rates daily.
-const cacheFor = 6 * time.Hour
+// defaultCacheFor is how long a fetched rate is reused when MF_FX_CACHE_TTL is unset; treasury
+// updates its rates daily.
+const defaultCacheFor = 6 * time.Hour
 
 // A KES per USD outside this range is a misconfiguration (for example no USD rate in treasury,
 // which returns the amount unchanged), never a real rate.
@@ -29,16 +30,42 @@ type Source struct {
 	rdb               *redis.Client
 	ns                string
 	http              *http.Client
+	cacheFor          time.Duration
+	// fallback is the configured KES per USD (MF_FX_DEFAULT_KES_PER_USD), used only when
+	// treasury has never answered; 0 means none.
+	fallback float64
 }
 
 func New(treasuryURL, serviceKey, platformTenant string, rdb *redis.Client, namespace string) *Source {
 	return &Source{base: strings.TrimRight(treasuryURL, "/"), key: serviceKey, tenant: platformTenant,
-		rdb: rdb, ns: namespace, http: &http.Client{Timeout: 5 * time.Second}}
+		rdb: rdb, ns: namespace, http: &http.Client{Timeout: 5 * time.Second}, cacheFor: defaultCacheFor}
 }
 
-// KESPerUSD is the current rate: cached, else fetched from treasury, else the last good rate.
-// ok is false when no rate has ever been read, and the caller keeps its own default.
+// WithPolicy sets the cache time (0 keeps 6 h) and the configured default KES per USD (ignored
+// outside the plausible range).
+func (s *Source) WithPolicy(cacheFor time.Duration, defaultKESPerUSD float64) *Source {
+	if cacheFor > 0 {
+		s.cacheFor = cacheFor
+	}
+	if defaultKESPerUSD >= minKESPerUSD && defaultKESPerUSD <= maxKESPerUSD {
+		s.fallback = defaultKESPerUSD
+	}
+	return s
+}
+
+// KESPerUSD is the current rate: cached, else fetched from treasury, else the last good rate,
+// else the configured default. ok is false only when none of those exists.
 func (s *Source) KESPerUSD(ctx context.Context) (float64, bool) {
+	if r, ok := s.treasuryRate(ctx); ok {
+		return r, true
+	}
+	if s != nil && s.fallback > 0 {
+		return s.fallback, true
+	}
+	return 0, false
+}
+
+func (s *Source) treasuryRate(ctx context.Context) (float64, bool) {
 	if s == nil || s.base == "" || s.key == "" {
 		return 0, false
 	}
@@ -49,7 +76,7 @@ func (s *Source) KESPerUSD(ctx context.Context) (float64, bool) {
 	if r, err := s.fetch(ctx); err == nil {
 		if s.rdb != nil {
 			v := strconv.FormatFloat(r, 'f', -1, 64)
-			_ = s.rdb.Set(ctx, fresh, v, cacheFor).Err()
+			_ = s.rdb.Set(ctx, fresh, v, s.cacheFor).Err()
 			_ = s.rdb.Set(ctx, last, v, 0).Err()
 		}
 		return r, true

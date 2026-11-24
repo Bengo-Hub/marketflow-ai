@@ -77,8 +77,9 @@ func typeSafeSource(resolver *providers.Resolver) decide.PrimarySource {
 type registrySource struct {
 	resolver *providers.Resolver
 	logger   *zap.Logger
-	// fx is treasury-api's USD to KES rate, the platform's one source of exchange rates; the
-	// registry's own FXRate is only the fallback when treasury has never answered.
+	// fx is treasury-api's USD to KES rate, the platform's one source of exchange rates (cached,
+	// else its last rate, else MF_FX_DEFAULT_KES_PER_USD). The registry's stored fx_rate is no
+	// longer a source; it is only the code default if fx has nothing at all.
 	fx *fxrate.Source
 	// bundles reads the AI credit bundles on sale from subscriptions-api (the owner of them);
 	// nil or a failed read keeps the registry's own list as the fallback.

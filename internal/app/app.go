@@ -92,7 +92,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// Output registry (credit prices, FX): the OS, the creative endpoints and the
 	// agent's ad-cost tool all price from it.
 	// Exchange rates come from treasury-api (centralised forex, refreshed daily there).
-	fxSource := fxrate.New(cfg.App.TreasuryURL, cfg.App.InternalServiceKey, cfg.App.PlatformTenantSlug, redisClient, cfg.Redis.Namespace)
+	fxSource := fxrate.New(cfg.App.TreasuryURL, cfg.App.InternalServiceKey, cfg.App.PlatformTenantSlug, redisClient, cfg.Redis.Namespace).
+		WithPolicy(cfg.App.FXCacheTTL, cfg.App.FXDefaultKESPerUSD)
 	// The AI credit bundles on sale come from subscriptions-api, which owns them.
 	registrySource := newRegistrySource(resolver, fxSource, logger).withBundles(cfg.Security.SubscriptionsURL)
 

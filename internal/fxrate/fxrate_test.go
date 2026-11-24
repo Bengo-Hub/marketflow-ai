@@ -41,7 +41,7 @@ func TestKESPerUSD(t *testing.T) {
 		t.Fatalf("a cached rate is reused: %v after %d calls", r, calls.Load())
 	}
 	// Treasury down after the cache expires: the last good rate is kept.
-	mr.FastForward(cacheFor + 1)
+	mr.FastForward(defaultCacheFor + 1)
 	rate = ""
 	if r, ok := s.KESPerUSD(ctx); !ok || r != 130.25 {
 		t.Fatalf("last good rate on an outage: %v %v", r, ok)
@@ -58,5 +58,25 @@ func TestKESPerUSDRejectsNonsense(t *testing.T) {
 	}
 	if _, ok := New("", "", "codevertex", nil, "mf").KESPerUSD(context.Background()); ok {
 		t.Fatal("no treasury configured, no rate")
+	}
+}
+
+// With treasury never answering, the configured default is used; an implausible default is not.
+func TestKESPerUSDConfiguredDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	ctx := context.Background()
+	if r, ok := New(srv.URL, "k", "codevertex", rdb, "mf").WithPolicy(0, 129).KESPerUSD(ctx); !ok || r != 129 {
+		t.Fatalf("configured default: %v %v", r, ok)
+	}
+	if _, ok := New(srv.URL, "k", "codevertex", rdb, "mf").WithPolicy(0, 5).KESPerUSD(ctx); ok {
+		t.Fatal("an implausible default is ignored")
+	}
+	if _, ok := New(srv.URL, "k", "codevertex", rdb, "mf").KESPerUSD(ctx); ok {
+		t.Fatal("no default configured and no rate ever read")
 	}
 }
