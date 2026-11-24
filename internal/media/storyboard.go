@@ -82,7 +82,10 @@ type StoryboardRequest struct {
 	Previous []Still
 	// Branding are the in-scene branding rules (branding.go); nil places no logo in the scenes.
 	Branding *BrandingRules
-	// brand is the prepared branding (PrepareBranding).
+	// Screens are the screenshot rules and Screenshots the tenant's own screens (screens.go).
+	Screens     *ScreenRules
+	Screenshots []Screenshot
+	// brand is the prepared placements (PrepareBranding).
 	brand *brandPlan
 }
 
@@ -127,6 +130,9 @@ type Still struct {
 	Logo     *PlacedLogo `json:"logo,omitempty"`
 	PlainURL string      `json:"plain_url,omitempty"`
 	PlainKey string      `json:"plain_key,omitempty"`
+	// Screen is the tenant's own screenshot placed on a device in the still (screens.go). The scene
+	// is rendered as a still, never animated by a clip route.
+	Screen *PlacedScreen `json:"screen,omitempty"`
 }
 
 // StoryboardResult is the approved-to-be storyboard.
@@ -185,9 +191,12 @@ func (s *Storyboards) Plan(req StoryboardRequest) (stills []Still, generated int
 			}
 			st.Prompt = StillPrompt(req.Format, req.Delivery, visual)
 			// A vouched still (no prompt) predates the planned banner, so it is drawn again.
-			if p, ok := previousStill(req.Previous, sc.ID, st.Prompt); ok && !(placed && p.Prompt == "") {
+			// So does one whose screenshot the business has since removed or replaced.
+			planned, _ := req.brand.placement(sc.ID)
+			if p, ok := previousStill(req.Previous, sc.ID, st.Prompt); ok && !(placed && p.Prompt == "") &&
+				(p.Screen == nil) == (planned.ScreenID == "") && (p.Screen == nil || p.Screen.ID == planned.ScreenID) {
 				st.URL, st.Key, st.Route, st.Reused = p.URL, p.Key, p.Route, true
-				st.Logo, st.PlainURL, st.PlainKey = p.Logo, p.PlainURL, p.PlainKey
+				st.Logo, st.PlainURL, st.PlainKey, st.Screen = p.Logo, p.PlainURL, p.PlainKey, p.Screen
 				break
 			}
 			generated++
@@ -283,8 +292,10 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 	}
 	// The self-review looks at the generated stills and the actor before the owner does.
 	s.reviewStills(ctx, req, res)
-	// The real logo goes on the planned surfaces of the reviewed stills (branding.go).
-	s.placeLogos(ctx, req, res)
+	// The real logo and screenshots go on the planned surfaces of the reviewed stills (branding.go).
+	if err := s.placeArt(ctx, req, res); err != nil {
+		return nil, err
+	}
 	// The end card is previewed after the review, so a redrawn end card still is the one shown.
 	res.EndCardPreview = s.endCardPreview(ctx, req, res)
 	return res, nil

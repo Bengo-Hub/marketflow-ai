@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,7 +144,12 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 				continue
 			}
 			if img, err := s.posts.download(ctx, st.URL); err == nil {
-				frames = append(frames, ReviewFrame{Label: st.SceneID, Image: img, Expect: reviewExpect(req.Scenes[sceneIndex(req.Scenes, st.SceneID, i)])})
+				expect := reviewExpect(req.Scenes[sceneIndex(req.Scenes, st.SceneID, i)])
+				if p, ok := req.brand.placement(st.SceneID); ok && p.Kind == PlaceScreen {
+					// The screenshot goes on after this review (placeArt), so the screen is blank on purpose.
+					expect = "a blank device screen, which is expected here. " + expect
+				}
+				frames = append(frames, ReviewFrame{Label: st.SceneID, Image: img, Expect: expect})
 			}
 		}
 		if len(frames) == 0 {
@@ -231,7 +237,11 @@ func (a *Ads) reviewVideo(ctx context.Context, req AdRequest, res *MediaResult, 
 			continue
 		}
 		if img, err := a.asm.frameAt(ctx, res.URL, mid); err == nil {
-			frames = append(frames, ReviewFrame{Label: s.ID, Image: img, Expect: reviewExpect(s)})
+			expect := reviewExpect(s)
+			if slices.Contains(req.StaticScenes, s.ID) {
+				expect = "voice-over scene with " + screenExpect(firstNonEmpty(sceneDevice(s), "device")) + ": " + sceneVisual(s)
+			}
+			frames = append(frames, ReviewFrame{Label: s.ID, Image: img, Expect: expect})
 		}
 	}
 	if img, err := a.asm.frameAt(ctx, res.URL, max(0, t-1)); err == nil {

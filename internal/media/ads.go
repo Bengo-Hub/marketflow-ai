@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +171,9 @@ type AdRequest struct {
 	// PlainStills are the stills without the in-scene logo, by scene id (branding.go): a clip whose
 	// logo smears is made again from the plain still.
 	PlainStills map[string]string
+	// StaticScenes are the scenes whose still carries the tenant's own screenshot (screens.go): they
+	// are shown with a push-in, because a clip route would redraw the screen's writing.
+	StaticScenes []string
 	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
 	Brand string
 	Place string
@@ -481,7 +485,8 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 			sp.Work, sp.source = WorkStill, f.URL
 		}
 		sp.FrameURL = sp.source
-		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) {
+		static := f.Source == FrameGenerated && slices.Contains(req.StaticScenes, s.ID)
+		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) && !static {
 			sp.Work = WorkClip
 			sp.AvoidText = showsWriting(s.Visual)
 		}

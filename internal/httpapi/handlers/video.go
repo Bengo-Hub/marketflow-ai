@@ -264,6 +264,8 @@ type adRequest struct {
 	Stills map[string]string `json:"stills"`
 	// PlainStills are the same stills without the in-scene logo (branding.go), the clip fallback.
 	PlainStills map[string]string `json:"plain_stills"`
+	// StaticScenes carry the tenant's own screenshot and are shown as stills (screens.go).
+	StaticScenes []string `json:"static_scenes"`
 	// SceneCache is the scenes of earlier versions of this ad, reused when unchanged.
 	SceneCache []media.SceneCache `json:"scene_cache"`
 	// MusicCache is the generated music of the version this one was revised from.

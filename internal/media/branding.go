@@ -69,11 +69,14 @@ func (b BrandingRules) wants(kind string) bool {
 }
 
 // Placement is one planned logo placement: the scene ("actor" for the presenter's still), its
-// kind and the blank surface the still is asked to include.
+// kind and the blank surface the still is asked to include. A screenshot placement (screens.go)
+// also names the device and which screenshot goes on it.
 type Placement struct {
-	SceneID string `json:"scene_id"`
-	Kind    string `json:"kind"`
-	Surface string `json:"surface"`
+	SceneID  string `json:"scene_id"`
+	Kind     string `json:"kind"`
+	Surface  string `json:"surface"`
+	Device   string `json:"device,omitempty"`
+	ScreenID string `json:"screen_id,omitempty"`
 }
 
 // PlacedLogo records a placement that was made, on the still it was made on.
@@ -199,10 +202,10 @@ func colourName(c color.RGBA) string {
 }
 
 // locatePrompt asks the vision model for the blank surface's corners.
-const locatePrompt = `You find one flat surface in a photo so a logo can be printed on it.
+const locatePrompt = `You find one flat surface in a photo so a picture can be put on it.
 Reply with one JSON object only: {"found":true|false,"corners":[[x,y],[x,y],[x,y],[x,y]]}
-The corners are the surface's printable face: top-left, top-right, bottom-right, bottom-left, as fractions of the image width and height (0 to 1).
-found is false when the surface is missing, mostly hidden, covered by a person, or already has writing or a logo on it.`
+The corners are the surface's flat face (a screen's lit area, without its frame): top-left, top-right, bottom-right, bottom-left, as fractions of the image width and height (0 to 1).
+found is false when the surface is missing, mostly hidden, covered by a person, or already has writing, a picture or a logo on it.`
 
 // Locate asks the vision model where the surface is. err is set when no model answered (worth a
 // retry); ok is false when the surface is not found, the answer
@@ -246,7 +249,7 @@ func parseQuad(reply string) ([4][2]float64, bool) {
 		q[i] = [2]float64{c[0], c[1]}
 	}
 	area, convex := quadArea(q)
-	return q, convex && area >= 0.004 && area <= 0.3
+	return q, convex && area >= 0.004 && area <= 0.45
 }
 
 // quadArea is the quad's area (shoelace) and whether it is convex with a consistent winding.
@@ -310,13 +313,8 @@ func placeOnSurface(dst *image.RGBA, logo image.Image, q [4][2]float64, maxWidth
 	if logo == nil {
 		return false
 	}
-	W, H := float64(dst.Bounds().Dx()), float64(dst.Bounds().Dy())
-	px := q
-	for i := range px {
-		px[i] = [2]float64{q[i][0] * W, q[i][1] * H}
-	}
-	sw := (math.Hypot(px[1][0]-px[0][0], px[1][1]-px[0][1]) + math.Hypot(px[2][0]-px[3][0], px[2][1]-px[3][1])) / 2
-	sh := (math.Hypot(px[3][0]-px[0][0], px[3][1]-px[0][1]) + math.Hypot(px[2][0]-px[1][0], px[2][1]-px[1][1])) / 2
+	W := float64(dst.Bounds().Dx())
+	px, sw, sh := quadPixels(dst, q)
 	lb := logo.Bounds()
 	if sw < 8 || sh < 8 || lb.Dx() <= 0 || lb.Dy() <= 0 {
 		return false
@@ -339,18 +337,46 @@ func placeOnSurface(dst *image.RGBA, logo image.Image, q [4][2]float64, maxWidth
 		v0 = 0.18
 	}
 	inner := [4][2]float64{bilerpQuad(px, u0, v0), bilerpQuad(px, u0+fu, v0), bilerpQuad(px, u0+fu, v0+fv), bilerpQuad(px, u0, v0+fv)}
+	return warp(dst, logo, inner, warpLook{opacity: 0.95, minShade: 0.7, maxShade: 1.15})
+}
+
+// warpLook is how a warped picture blends with the surface under it.
+type warpLook struct {
+	opacity            float64
+	minShade, maxShade float64
+	// keepFront leaves pixels that clearly differ from the surface's own colour as they are: things
+	// in front of it, such as a finger over a screen.
+	keepFront bool
+}
+
+// frontDistance is the colour distance (0 to 1) from the surface past which a pixel is in front.
+const frontDistance = 0.28
+
+// warp draws art over the quad inner (pixels of dst) in perspective, shaded by the surface's own
+// light. It is the one compositor for logos and screenshots.
+func warp(dst *image.RGBA, art image.Image, inner [4][2]float64, look warpLook) bool {
+	lb := art.Bounds()
 	inv := squareToQuad(inner).inverse()
-	// The surface's mean light, so the logo is shaded like the banner it is printed on.
-	minX, minY, maxX, maxY := W, H, 0.0, 0.0
+	// The surface's mean light, so the art is shaded like the surface it is on.
+	minX, minY, maxX, maxY := float64(dst.Bounds().Dx()), float64(dst.Bounds().Dy()), 0.0, 0.0
 	for _, p := range inner {
 		minX, minY, maxX, maxY = math.Min(minX, p[0]), math.Min(minY, p[1]), math.Max(maxX, p[0]), math.Max(maxY, p[1])
 	}
 	r := image.Rect(int(minX), int(minY), int(math.Ceil(maxX)), int(math.Ceil(maxY))).Intersect(dst.Bounds())
 	mean := 0.0
 	n := 0
+	var mr, mg, mb float64
 	for y := r.Min.Y; y < r.Max.Y; y += 2 {
 		for x := r.Min.X; x < r.Max.X; x += 2 {
-			mean += pixelLuma(dst.RGBAAt(x, y))
+			if look.keepFront {
+				// A tilted screen's bounding box also covers what is around it.
+				if u, v := inv.apply(float64(x)+0.5, float64(y)+0.5); u < 0 || u > 1 || v < 0 || v > 1 {
+					continue
+				}
+			}
+			c := dst.RGBAAt(x, y)
+			mean += pixelLuma(c)
+			mr, mg, mb = mr+float64(c.R), mg+float64(c.G), mb+float64(c.B)
 			n++
 		}
 	}
@@ -358,6 +384,7 @@ func placeOnSurface(dst *image.RGBA, logo image.Image, q [4][2]float64, maxWidth
 		return false
 	}
 	mean /= float64(n)
+	mr, mg, mb = mr/float64(n), mg/float64(n), mb/float64(n)
 	lw, lh := float64(lb.Dx()), float64(lb.Dy())
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		for x := r.Min.X; x < r.Max.X; x++ {
@@ -365,16 +392,22 @@ func placeOnSurface(dst *image.RGBA, logo image.Image, q [4][2]float64, maxWidth
 			if u < 0 || u >= 1 || v < 0 || v >= 1 {
 				continue
 			}
-			sr, sg, sb, sa := bilinearAt(logo, lb.Min.X, lb.Min.Y, u*lw, v*lh)
+			sr, sg, sb, sa := bilinearAt(art, lb.Min.X, lb.Min.Y, u*lw, v*lh)
 			if sa <= 0 {
 				continue
 			}
 			bg := dst.RGBAAt(x, y)
+			if look.keepFront {
+				d := math.Sqrt((math.Pow(float64(bg.R)-mr, 2)+math.Pow(float64(bg.G)-mg, 2)+math.Pow(float64(bg.B)-mb, 2))/3) / 255
+				if d > frontDistance {
+					continue
+				}
+			}
 			shade := 1.0
 			if mean > 0.02 {
-				shade = math.Min(1.15, math.Max(0.7, pixelLuma(bg)/mean))
+				shade = math.Min(look.maxShade, math.Max(look.minShade, pixelLuma(bg)/mean))
 			}
-			a := sa * 0.95
+			a := sa * look.opacity
 			mix := func(c, b float64) uint8 { return uint8(math.Max(0, math.Min(255, c*shade*a+b*(1-a)))) }
 			dst.SetRGBA(x, y, color.RGBA{mix(sr, float64(bg.R)), mix(sg, float64(bg.G)), mix(sb, float64(bg.B)), 255})
 		}
@@ -413,12 +446,29 @@ func pixelLuma(c color.RGBA) float64 {
 	return (0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)) / 255
 }
 
-// brandPlan is a storyboard's prepared branding: the rules, the trimmed logo and the placements
-// by scene id ("actor" for the presenter's still).
+// brandPlan is a storyboard's prepared placements by scene id ("actor" for the presenter's still):
+// the trimmed logo with its rules, and the tenant's screenshots by id (screens.go).
 type brandPlan struct {
 	rules      BrandingRules
 	logo       image.Image
+	screens    map[string]image.Image
 	placements map[string]Placement
+}
+
+// put places the placement's picture (the logo or a screenshot) on the surface found.
+func (b *brandPlan) put(canvas *image.RGBA, p Placement, quad [4][2]float64) bool {
+	if p.Kind == PlaceScreen {
+		return placeOnScreen(canvas, b.screens[p.ScreenID], quad)
+	}
+	return placeOnSurface(canvas, b.logo, quad, b.rules.MaxWidth)
+}
+
+// expect is what the reviewer compares the placed picture with.
+func (p Placement) expect() string {
+	if p.Kind == PlaceScreen {
+		return screenExpect(p.Device)
+	}
+	return "the business's own logo printed on " + p.Surface + ", sharp, straight and real-looking, with no other writing"
 }
 
 func (b *brandPlan) placement(id string) (Placement, bool) {
@@ -429,15 +479,34 @@ func (b *brandPlan) placement(id string) (Placement, bool) {
 	return p, ok
 }
 
-// PrepareBranding reads the logo and plans the placements before the stills are priced or drawn,
-// so the plan, the price and the drawing agree. Without rules, a logo or a readable logo file it
-// plans nothing.
+// PrepareBranding reads the logo and the screenshots and plans the placements before the stills
+// are priced or drawn, so the plan, the price and the drawing agree. Without rules and readable
+// files it plans nothing.
 func (s *Storyboards) PrepareBranding(ctx context.Context, req *StoryboardRequest) {
-	if req == nil || req.brand != nil || req.Branding == nil || !req.Branding.Enabled || req.LogoURL == "" || s == nil || s.posts == nil {
+	if req == nil || req.brand != nil || s == nil || s.posts == nil {
 		return
 	}
-	// Without the self-review no logo can be placed, so no scene asks for a blank surface.
+	// Without the self-review nothing can be placed, so no scene asks for a blank surface.
 	if _, _, on := reviewOn(ctx); !on {
+		return
+	}
+	frames := newFrameChooser(req.Photos, nil, req.PhotoInfo)
+	generated := map[string]bool{}
+	for _, sc := range req.Scenes {
+		if frames.choose(sc).Source == FrameGenerated {
+			generated[sc.ID] = true
+		}
+	}
+	isGenerated := func(id string) bool { return generated[id] }
+	bp := &brandPlan{placements: map[string]Placement{}}
+	s.prepareLogo(ctx, req, bp, isGenerated)
+	s.prepareScreens(ctx, req, bp, isGenerated)
+	req.brand = bp
+}
+
+// prepareLogo reads the logo and plans its placements onto the plan.
+func (s *Storyboards) prepareLogo(ctx context.Context, req *StoryboardRequest, bp *brandPlan, generated func(string) bool) {
+	if req.Branding == nil || !req.Branding.Enabled || req.LogoURL == "" {
 		return
 	}
 	logo, err := s.posts.download(ctx, req.LogoURL)
@@ -451,34 +520,28 @@ func (s *Storyboards) PrepareBranding(ctx context.Context, req *StoryboardReques
 	}
 	// The surface is the logo's own plate colour, tinted by the brand, so the logo reads on it.
 	colour := brandPlate(info, info.readableOn(neutralLight) >= info.readableOn(neutralDark), tints)
-	frames := newFrameChooser(req.Photos, nil, req.PhotoInfo)
-	generated := map[string]bool{}
-	for _, sc := range req.Scenes {
-		if frames.choose(sc).Source == FrameGenerated {
-			generated[sc.ID] = true
-		}
-	}
 	newActor := isPresenterKind(req.Kind) && (req.Actor == nil || req.Actor.URL == "")
-	bp := &brandPlan{rules: req.Branding.normal(), logo: info.img, placements: map[string]Placement{}}
-	for _, p := range planPlacements(req.Scenes, *req.Branding, newActor, func(id string) bool { return generated[id] }) {
+	bp.rules, bp.logo = req.Branding.normal(), info.img
+	for _, p := range planPlacements(req.Scenes, *req.Branding, newActor, generated) {
 		p.Surface = surfaceFor(p.Kind, colour)
 		bp.placements[p.SceneID] = p
 	}
-	req.brand = bp
 }
 
-// placeLogos puts the real logo on the planned surfaces of the drawn stills. Each placement needs
-// the vision model twice (to find the surface, then to pass the result); when it is off, busy or
-// unhappy, the plain still stays.
-func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res *StoryboardResult) {
+// placeArt puts the real logo and the real screenshots on the planned surfaces of the drawn
+// stills. Each placement needs the vision model twice (to find the surface, then to pass the
+// result); when it is off, busy or unhappy, a logo scene keeps its plain still and a screen scene
+// is drawn again with no screen in view. The only error is a blank screen that could not be
+// drawn away.
+func (s *Storyboards) placeArt(ctx context.Context, req StoryboardRequest, res *StoryboardResult) error {
 	if req.brand == nil || len(req.brand.placements) == 0 || res == nil {
-		return
+		return nil
 	}
 	r, _, on := reviewOn(ctx)
-	if !on {
-		return
-	}
 	place := func(name, url string, p Placement) (newURL, key string, logo *PlacedLogo) {
+		if !on {
+			return "", "", nil
+		}
 		img, err := s.posts.download(ctx, url)
 		if err != nil {
 			return "", "", nil
@@ -497,14 +560,14 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 		b := img.Bounds()
 		canvas := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 		draw.Draw(canvas, canvas.Bounds(), img, b.Min, draw.Src)
-		if !placeOnSurface(canvas, req.brand.logo, quad, req.brand.rules.MaxWidth) {
+		if !req.brand.put(canvas, p, quad) {
 			return "", "", nil
 		}
 		var v ReviewVerdict
 		err = retryVision(ctx, func() error {
 			var rerr error
 			v, rerr = r.Review(ctx, ReviewBrief{Kind: "storyboard", Brand: req.Brand, Place: req.Place}, []ReviewFrame{{Label: name, Image: canvas,
-				Expect: "the business's own logo printed on " + p.Surface + ", sharp, straight and real-looking, with no other writing"}})
+				Expect: p.expect()}})
 			return rerr
 		})
 		if err != nil {
@@ -542,7 +605,20 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 		if !ok || st.Source != StillGenerated || st.Reused || st.URL == "" {
 			continue
 		}
-		if u, k, l := place("sb-"+st.SceneID, st.URL, p); u != "" {
+		u, k, l := place("sb-"+st.SceneID, st.URL, p)
+		if p.Kind == PlaceScreen {
+			if u == "" {
+				if err := s.withoutScreen(ctx, req, res, st, p); err != nil {
+					return err
+				}
+				continue
+			}
+			// No plain twin: the scene is shown as a still, so a clip never smears the screenshot.
+			st.Screen = &PlacedScreen{ID: p.ScreenID, Device: p.Device, Surface: p.Surface, Quad: l.Quad}
+			st.URL, st.Key = u, k
+			continue
+		}
+		if u != "" {
 			st.PlainURL, st.PlainKey, st.Logo = st.URL, st.Key, l
 			st.URL, st.Key = u, k
 			continue
@@ -556,6 +632,7 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 			res.CostUSD += cost
 		}
 	}
+	return nil
 }
 
 // visionBackoff are the waits before the vision model is asked again when no target answered:
