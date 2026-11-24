@@ -139,7 +139,7 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 			}
 		}
 		for i, st := range res.Stills {
-			if st.Source != StillGenerated || st.URL == "" || len(frames) >= set.VideoFrames {
+			if st.Source != StillGenerated || st.Reused || st.URL == "" || len(frames) >= set.VideoFrames {
 				continue
 			}
 			if img, err := s.posts.download(ctx, st.URL); err == nil {
@@ -164,7 +164,7 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 		redrawn := 0
 		for i := range res.Stills {
 			st := &res.Stills[i]
-			if st.Source != StillGenerated || len(failing[st.SceneID]) == 0 {
+			if st.Source != StillGenerated || st.Reused || len(failing[st.SceneID]) == 0 {
 				continue
 			}
 			if spent+st.CostUSD > set.StillRetryUSD+1e-9 {
@@ -274,6 +274,10 @@ func (a *Ads) reviewAndRedo(ctx context.Context, req AdRequest, plan AdPlan, out
 		if ceiling > 0 && *cost+extra+price > ceiling+1e-9 {
 			rep.Skipped = "a new clip would take the ad over its cost ceiling"
 			continue
+		}
+		if plain := req.PlainStills[s.ID]; plain != "" && plain != plan.Scenes[i].source {
+			// The placed logo did not survive the motion: the plain still makes the new clip.
+			plan.Scenes[i].source = plain
 		}
 		before := outs[i].cache
 		if err := a.visualScene(ctx, req, plan.Scenes[i], s, dir, &outs[i]); err != nil {

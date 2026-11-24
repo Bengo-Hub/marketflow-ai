@@ -167,6 +167,9 @@ type AdRequest struct {
 	MaxVideoUSD float64
 	// LogoEveryScene lays the logo small in a corner over every scene (creative.logo_every_scene).
 	LogoEveryScene bool
+	// PlainStills are the stills without the in-scene logo, by scene id (branding.go): a clip whose
+	// logo smears is made again from the plain still.
+	PlainStills map[string]string
 	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
 	Brand string
 	Place string
@@ -1174,8 +1177,13 @@ func (a *Ads) visualScene(ctx context.Context, req AdRequest, sp ScenePlan, s Sc
 		if err != nil {
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}
+		prompt := sceneText(s)
+		if plain := req.PlainStills[s.ID]; plain != "" && plain != sp.source {
+			// The start frame carries the real logo on a banner (branding.go): little motion keeps it sharp.
+			prompt += ". Slow, steady camera with little movement; the banner and its logo stay still and sharp."
+		}
 		_, rt, _, err := a.clips.Animate(ctx, ClipRequest{TenantID: req.TenantID, VersionID: req.VersionID, SceneURL: frame,
-			Prompt: sceneText(s), Seconds: secs, Tier: sceneTier(req, sp), Format: req.Format, AvoidText: sp.AvoidText, Scenario: ScenarioAdClip}, path)
+			Prompt: prompt, Seconds: secs, Tier: sceneTier(req, sp), Format: req.Format, AvoidText: sp.AvoidText, Scenario: ScenarioAdClip}, path)
 		if err != nil {
 			return fmt.Errorf("media: clip scene %s: %w", sp.SceneID, err)
 		}

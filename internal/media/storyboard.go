@@ -76,6 +76,14 @@ type StoryboardRequest struct {
 	// still as a preview, so the plan the owner approves shows the end card that renders.
 	EndCard *Overlay
 	LogoURL string
+	// Previous are the stills of the storyboard this one replaces, sent only when the owner keeps
+	// unchanged scenes (owner, 2026-11-24): a generated still whose scene and exact prompt are the
+	// same is reused, so only the scenes that changed are drawn again.
+	Previous []Still
+	// Branding are the in-scene branding rules (branding.go); nil places no logo in the scenes.
+	Branding *BrandingRules
+	// brand is the prepared branding (PrepareBranding).
+	brand *brandPlan
 }
 
 // Actor is an ad's one presenter: the still every presenter scene is lip-synced from.
@@ -90,6 +98,11 @@ type Actor struct {
 	// Gender is the actor's look ("male", "female" or "" when the description does not say).
 	// Later scripts give the presenter's lines to the matching voice (owner, 2026-11-14).
 	Gender string `json:"gender,omitempty"`
+	// Logo, PlainURL and PlainKey: the presenter's still with the real logo on a banner behind
+	// them, and the still without it (branding.go).
+	Logo     *PlacedLogo `json:"logo,omitempty"`
+	PlainURL string      `json:"plain_url,omitempty"`
+	PlainKey string      `json:"plain_key,omitempty"`
 }
 
 // Still is one scene's storyboard frame.
@@ -106,6 +119,14 @@ type Still struct {
 	Origin string `json:"origin,omitempty"`
 	// Prompt is the exact prompt a generated still was drawn from.
 	Prompt string `json:"prompt,omitempty"`
+	// Reused marks a generated still kept from the previous storyboard because its prompt did not
+	// change (StoryboardRequest.Previous): it costs nothing and is not reviewed again.
+	Reused bool `json:"reused,omitempty"`
+	// Logo is the real logo placed on a surface in the still (branding.go); PlainURL and PlainKey
+	// are the still without it, the fallback when a clip would smear the logo.
+	Logo     *PlacedLogo `json:"logo,omitempty"`
+	PlainURL string      `json:"plain_url,omitempty"`
+	PlainKey string      `json:"plain_key,omitempty"`
 }
 
 // StoryboardResult is the approved-to-be storyboard.
@@ -155,7 +176,20 @@ func (s *Storyboards) Plan(req StoryboardRequest) (stills []Still, generated int
 		case FramePhoto:
 			st.URL, st.Photo, st.Origin = f.URL, f.Photo, f.Origin
 		case FrameGenerated:
-			st.Prompt = StillPrompt(req.Format, req.Delivery, sceneVisual(sc))
+			visual := sceneVisual(sc)
+			placed := false
+			if p, ok := req.brand.placement(sc.ID); ok {
+				placed = true
+				// Added after the picture-only filter, which would drop a banner (branding.go).
+				visual += ". In the scene: " + p.Surface
+			}
+			st.Prompt = StillPrompt(req.Format, req.Delivery, visual)
+			// A vouched still (no prompt) predates the planned banner, so it is drawn again.
+			if p, ok := previousStill(req.Previous, sc.ID, st.Prompt); ok && !(placed && p.Prompt == "") {
+				st.URL, st.Key, st.Route, st.Reused = p.URL, p.Key, p.Route, true
+				st.Logo, st.PlainURL, st.PlainKey = p.Logo, p.PlainURL, p.PlainKey
+				break
+			}
 			generated++
 		}
 		stills = append(stills, st)
@@ -177,6 +211,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 	if len(req.Scenes) == 0 || len(req.Scenes) > MaxAdScenes {
 		return nil, &UserError{Msg: fmt.Sprintf("a storyboard has 1 to %d scenes", MaxAdScenes)}
 	}
+	s.PrepareBranding(ctx, &req)
 	stills, _ := s.Plan(req)
 	res := &StoryboardResult{Stills: stills}
 
@@ -190,7 +225,11 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			}
 			// The actor's gender follows the presenter's speaker, so the lip-synced voice fits.
 			desc = actorWithGender(desc, presenterSpeaker(req.Scenes))
-			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPromptIn(req.Format, desc, presenterSetting(req.Scenes)))
+			setting := presenterSetting(req.Scenes)
+			if p, ok := req.brand.placement("actor"); ok {
+				setting = strings.TrimSpace(setting + "; " + p.Surface)
+			}
+			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPromptIn(req.Format, desc, setting))
 			if err != nil {
 				return nil, fmt.Errorf("media: actor still: %w", err)
 			}
@@ -215,6 +254,9 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			}
 			continue
 		case StillGenerated:
+			if st.Reused {
+				continue
+			}
 		default:
 			continue
 		}
@@ -241,6 +283,8 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 	}
 	// The self-review looks at the generated stills and the actor before the owner does.
 	s.reviewStills(ctx, req, res)
+	// The real logo goes on the planned surfaces of the reviewed stills (branding.go).
+	s.placeLogos(ctx, req, res)
 	// The end card is previewed after the review, so a redrawn end card still is the one shown.
 	res.EndCardPreview = s.endCardPreview(ctx, req, res)
 	return res, nil
@@ -561,4 +605,16 @@ func (s *Storyboards) ComposeEndCardPreview(ctx context.Context, req EndCardPrev
 		return nil, fmt.Errorf("media: end card preview not stored: %w", err)
 	}
 	return &EndCardPreview{SceneID: req.SceneID, URL: url, Key: key}, nil
+}
+
+// previousStill finds the previous storyboard's generated still for a scene drawn from exactly
+// this prompt. A previous still sent without its prompt is one marketflow-api compared itself
+// (the scene's shot, visual and setting are unchanged, as after a settings re-set) and is kept.
+func previousStill(prev []Still, sceneID, prompt string) (Still, bool) {
+	for _, p := range prev {
+		if p.SceneID == sceneID && p.Source == StillGenerated && p.URL != "" && (p.Prompt == "" || p.Prompt == prompt) {
+			return p, true
+		}
+	}
+	return Still{}, false
 }

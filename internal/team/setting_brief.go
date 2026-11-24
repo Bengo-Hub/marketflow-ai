@@ -37,6 +37,22 @@ type PlaceFacts struct {
 	Pictures []string `json:"pictures,omitempty"`
 	// Research is the team's market research notes for the offering, when there are any.
 	Research string `json:"research,omitempty"`
+	// BusinessType is the tenant's business type, for interiors that fit what it really does.
+	BusinessType string `json:"business_type,omitempty"`
+	// Area is the platform's landmark registry entry for the address (marketflow-api
+	// creative.landmarks); LookupNearby allows the cached web lookup (nearby.go).
+	Area         *PlaceArea `json:"area,omitempty"`
+	LookupNearby bool       `json:"lookup_nearby,omitempty"`
+	// Nearby is the web lookup's text, filled in here, never by the caller.
+	Nearby string `json:"-"`
+}
+
+// PlaceArea is the landmarks, look and street life of the area the business is in.
+type PlaceArea struct {
+	Name       string   `json:"name"`
+	Landmarks  []string `json:"landmarks,omitempty"`
+	Look       string   `json:"look,omitempty"`
+	StreetLife string   `json:"street_life,omitempty"`
 }
 
 // PlacePage is one website page as text.
@@ -242,8 +258,35 @@ func settingTask(in VideoScriptRequest) string {
 	if r := strings.TrimSpace(p.Research); r != "" {
 		fmt.Fprintf(&b, "- Research notes: %s\n", trimTo(r, 1000))
 	}
+	if t := strings.TrimSpace(p.BusinessType); t != "" {
+		fmt.Fprintf(&b, "- Business type: %s\n", trimTo(t, 60))
+	}
+	if a := p.Area; a != nil && len(a.Landmarks)+len(a.Look+a.StreetLife) > 0 {
+		fmt.Fprintf(&b, "- Area %q (the platform's checked landmarks):\n", trimTo(a.Name, 60))
+		for _, l := range a.Landmarks {
+			fmt.Fprintf(&b, "  - landmark: %s\n", trimTo(l, 160))
+		}
+		if a.Look != "" {
+			fmt.Fprintf(&b, "  - look: %s\n", trimTo(a.Look, 200))
+		}
+		if a.StreetLife != "" {
+			fmt.Fprintf(&b, "  - street life: %s\n", trimTo(a.StreetLife, 200))
+		}
+	}
+	if n := strings.TrimSpace(p.Nearby); n != "" {
+		fmt.Fprintf(&b, "- Web notes on what is near the address (may be incomplete; use only what fits the facts): %s\n", trimTo(n, nearbyChars))
+	}
+	b.WriteString(settingPlaceRule)
 	return b.String()
 }
+
+// settingPlaceRule is how the brief uses the area (owner, 2026-11-24): landmarks stay outside,
+// interiors come from what the business really does.
+const settingPlaceRule = `PLACE RULES:
+- Landmarks and street life are for exterior and establishing shots and background cues only (a skyline, a tower seen down the street, matatus, boda bodas, roadside kiosks, the lake), described so a camera could film them there today. Never put the business inside a landmark it is not in, and never say the business is in or next to one unless the address says so.
+- Interiors follow the business type, the offering pages and the business's own pictures. A kids' coding and robotics hub is a bright learning room with children at desks with laptops and robotics kits, whiteboards and learning posters with no readable text; a shop is its own counter and shelves. Never a corporate reception, a mall or a generic office unless the business is one.
+- Copy the address exactly as given, including its street name and spelling.
+`
 
 // settingBrief runs the Strategist's setting brief, falling back to the address alone. It returns
 // nil when there is nothing to place the ad in.
@@ -252,6 +295,7 @@ func (r *Runtime) settingBrief(ctx context.Context, in VideoScriptRequest, tc Te
 		return nil
 	}
 	fallback := briefFromFacts(in.Place)
+	in.Place.Nearby = r.nearbyNotes(ctx, in.TenantID, in.Place)
 	pb, ok := r.lib.Playbook("setting-brief")
 	if !ok {
 		return fallback
@@ -312,6 +356,7 @@ func applySettings(v *VideoScript, b *SettingBrief) {
 	if b.HomeBase.Place != "" {
 		byKey["home_base"] = b.HomeBase
 	}
+	turns := map[string]int{}
 	for i := range v.Scenes {
 		s := &v.Scenes[i]
 		if s.Shot == "owner_footage" {
@@ -330,12 +375,18 @@ func applySettings(v *VideoScript, b *SettingBrief) {
 			}
 		}
 		s.Setting = ""
+		// The settings that fit this kind take turns, so scenes of one kind do not all repeat
+		// the same place (owner, 2026-11-24: vary the scenes).
 		kind := sceneKind(s.Shot)
+		var fits []SettingNote
 		for _, n := range b.Settings {
 			if strings.Contains(n.Fits, kind) {
-				s.Setting = n.Line()
-				break
+				fits = append(fits, n)
 			}
+		}
+		if len(fits) > 0 {
+			s.Setting = fits[turns[kind]%len(fits)].Line()
+			turns[kind]++
 		}
 		if s.Setting == "" {
 			if b.HomeBase.Place != "" {
@@ -349,10 +400,10 @@ func applySettings(v *VideoScript, b *SettingBrief) {
 
 // mentionsPlace reports whether a setting line names the brief's town or neighbourhood.
 func mentionsPlace(line string, b *SettingBrief) bool {
-	l := strings.ToLower(line)
+	l := normPlace(line)
 	for _, n := range append([]SettingNote{b.HomeBase}, b.Settings...) {
 		for _, w := range strings.Split(n.Neighbourhood+","+n.Place, ",") {
-			if w = strings.ToLower(strings.TrimSpace(w)); len(w) > 3 && strings.Contains(l, w) {
+			if w = normPlace(w); len(w) > 3 && strings.Contains(l, w) {
 				return true
 			}
 		}
@@ -387,19 +438,68 @@ func anchorAddress(b *SettingBrief, p PlaceFacts) {
 		return
 	}
 	area := strings.TrimSpace(p.City)
-	if parts := strings.Split(addr, ","); area == "" && len(parts) > 1 {
-		area = strings.TrimSpace(parts[len(parts)-1])
+	if area == "" {
+		// The last part of the address that is not the country ("Kisumu CBD" in
+		// "Pioneer House, Suite 203A, Oginga-Odinga Road, Kisumu CBD, Kenya").
+		parts := strings.Split(addr, ",")
+		for i := len(parts) - 1; i > 0 && area == ""; i-- {
+			if part := strings.TrimSpace(parts[i]); part != "" && !isCountry(part, p.Country) {
+				area = part
+			}
+		}
 	}
 	b.HomeBase.Place = capField(addr)
 	b.HomeBase.Neighbourhood = ""
-	if area != "" && !strings.Contains(strings.ToLower(addr), strings.ToLower(area)) {
+	low := normPlace(addr)
+	if area != "" && !strings.Contains(low, normPlace(area)) {
 		b.HomeBase.Neighbourhood = area
 	}
-	low := strings.ToLower(addr)
 	for i := range b.Settings {
 		n := &b.Settings[i]
-		if streetWord.MatchString(n.Neighbourhood) && !strings.Contains(low, strings.ToLower(strings.TrimSpace(strings.Split(n.Neighbourhood, ",")[0]))) {
+		if streetWord.MatchString(n.Neighbourhood) && !strings.Contains(low, normPlace(strings.Split(n.Neighbourhood, ",")[0])) {
 			n.Neighbourhood = area
 		}
 	}
+}
+
+// normPlace compares place names the way people write them: case, hyphens and spacing aside, so
+// "Oginga-Odinga Road" from the account is the same street as "Oginga Odinga Road".
+func normPlace(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.ReplaceAll(s, "-", " "))), " ")
+}
+
+var countries = map[string]bool{"kenya": true, "uganda": true, "tanzania": true, "rwanda": true, "nigeria": true, "ghana": true, "south africa": true}
+
+func isCountry(part, country string) bool {
+	p := normPlace(part)
+	return countries[p] || (country != "" && p == normPlace(country))
+}
+
+// ResetSettings places an existing script's scenes again from a fresh setting brief (owner,
+// 2026-11-24): only the settings change; voiceovers, visuals, captions and shots stay. It returns
+// the scenes, the brief and how many scenes changed setting. With no place facts nothing changes.
+func (r *Runtime) ResetSettings(ctx context.Context, in VideoScriptRequest, scenes []Scene) ([]Scene, *SettingBrief, int) {
+	out := append([]Scene(nil), scenes...)
+	tc := TenantContext{}
+	if r.source != nil {
+		if loaded, err := r.source.Load(ctx, in.TenantID); err == nil {
+			tc = loaded
+		}
+	}
+	brief := r.settingBrief(ctx, in, tc)
+	if brief == nil {
+		return out, nil, 0
+	}
+	v := &VideoScript{Scenes: out}
+	for i := range v.Scenes {
+		v.Scenes[i].Setting = ""
+	}
+	applySettings(v, brief)
+	changed := 0
+	for i := range v.Scenes {
+		if v.Scenes[i].Setting != scenes[i].Setting {
+			changed++
+		}
+	}
+	return v.Scenes, brief, changed
 }

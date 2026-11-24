@@ -225,19 +225,19 @@ func (h *OSHandler) Script(w http.ResponseWriter, r *http.Request) {
 // adRequest is marketflow-api asking for a template video ad from an approved script.
 type adRequest struct {
 	// LogoEveryScene lays the logo small over every scene (creative.logo_every_scene); unset is on.
-	LogoEveryScene *bool `json:"logo_every_scene"`
-	TenantID    string              `json:"tenant_id"`
-	VersionID   string              `json:"version_id"`
-	Format      string              `json:"format"`
-	Tier        string              `json:"tier"`
-	Voice       string              `json:"voice"`    // a voice id or name; "" picks the best for the delivery
-	Delivery    string              `json:"delivery"` // ad (default) | ugc | kids | story | info
-	VoiceGender string              `json:"voice_gender"`
-	VoiceAccent string              `json:"voice_accent"` // e.g. african, kenyan, nigerian, british
-	Language    string              `json:"language"`
-	Scenes      []media.ScriptScene `json:"scenes"`
-	PhotoURLs   []string            `json:"photo_urls"`
-	FootageURLs []string            `json:"footage_urls"`
+	LogoEveryScene *bool               `json:"logo_every_scene"`
+	TenantID       string              `json:"tenant_id"`
+	VersionID      string              `json:"version_id"`
+	Format         string              `json:"format"`
+	Tier           string              `json:"tier"`
+	Voice          string              `json:"voice"`    // a voice id or name; "" picks the best for the delivery
+	Delivery       string              `json:"delivery"` // ad (default) | ugc | kids | story | info
+	VoiceGender    string              `json:"voice_gender"`
+	VoiceAccent    string              `json:"voice_accent"` // e.g. african, kenyan, nigerian, british
+	Language       string              `json:"language"`
+	Scenes         []media.ScriptScene `json:"scenes"`
+	PhotoURLs      []string            `json:"photo_urls"`
+	FootageURLs    []string            `json:"footage_urls"`
 	// PhotoInfo describes photo_urls by index (offering photo or brand-library picture).
 	PhotoInfo []media.PhotoInfo `json:"photo_info"`
 	Accent    string            `json:"accent"`
@@ -262,6 +262,8 @@ type adRequest struct {
 	Seed     int64  `json:"seed"`
 	// Stills are the approved storyboard frames by scene id.
 	Stills map[string]string `json:"stills"`
+	// PlainStills are the same stills without the in-scene logo (branding.go), the clip fallback.
+	PlainStills map[string]string `json:"plain_stills"`
 	// SceneCache is the scenes of earlier versions of this ad, reused when unchanged.
 	SceneCache []media.SceneCache `json:"scene_cache"`
 	// MusicCache is the generated music of the version this one was revised from.
@@ -461,4 +463,38 @@ func (h *OSHandler) refundKey(tenantID uuid.UUID, key string) {
 	if err := h.credits.Refund(ctx, tenantID, key); err != nil {
 		h.logger.Error("ai credit refund did not go through", zap.String("key", key), zap.Error(err))
 	}
+}
+
+// settingsRequest asks for an existing script's scenes to be placed again.
+type settingsRequest struct {
+	scriptRequest
+	Scenes []team.Scene `json:"scenes"`
+}
+
+// ScriptSettings handles POST /api/v1/internal/creative/script/settings (service key): a fresh
+// setting brief from the current place facts and landmarks, applied to the script's scenes
+// (owner, 2026-11-24). Only settings change, so only the stills of changed scenes need drawing
+// again. Not charged: it is one short Strategist step, and the voiceover is not rewritten.
+func (h *OSHandler) ScriptSettings(w http.ResponseWriter, r *http.Request) {
+	if h.runtime == nil {
+		writeError(w, http.StatusServiceUnavailable, "the team is not available")
+		return
+	}
+	var req settingsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	tenantID, ok := jobIDs(w, req.TenantID, req.VersionID)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(req.Offering) == "" || len(req.Scenes) == 0 || len(req.Scenes) > media.MaxAdScenes {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("offering and 1 to %d scenes are required", media.MaxAdScenes))
+		return
+	}
+	scenes, brief, changed := h.runtime.ResetSettings(r.Context(), team.VideoScriptRequest{TenantID: tenantID, Offering: req.Offering,
+		Facts: req.Facts, Format: req.Format, Objective: req.Objective, Audience: req.Audience, Language: req.Language,
+		Place: req.Place}, req.Scenes)
+	writeJSON(w, http.StatusOK, map[string]any{"scenes": scenes, "setting_brief": brief, "changed": changed})
 }

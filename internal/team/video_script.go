@@ -300,7 +300,10 @@ func shapeOf(format string) string {
 const settingRule = "\nPlace every scene in the SETTING BRIEF given above: set each scene's setting to the key of the setting it " +
 	"happens in (home_base or another key), and write its visual as one action in that place, with the people and props " +
 	"the brief names. The presenter, when there is one, is in the setting that fits a presenter, and the actor line " +
-	"describes a person who belongs there. Never move a scene to a studio, another town or another country.\n"
+	"describes a person who belongs there. Never move a scene to a studio, another town or another country. " +
+	"Vary the places: two scenes in a row share a setting only when the presenter carries on talking. When the brief names " +
+	"landmarks or street life, the opening or another outdoor scene shows one of them in the background (a tower down the " +
+	"street, matatus passing, the lake) so a local viewer knows the town at a glance; interiors stay inside the business's own kind of place.\n"
 
 // hookRule asks for hooks a buyer in this place would stop for (marketing laws: attention, relevance).
 const hookRule = " Each of the three hooks uses something specific and true from the facts, the setting brief or the brand " +

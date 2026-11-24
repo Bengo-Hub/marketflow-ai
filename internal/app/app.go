@@ -420,6 +420,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		Library: lib, Opt: optimizer, Router: modelRouter, Decider: decider,
 		Registry: registrySource.Get, Tools: agentTools, Source: osContext, Logger: logger,
 		TwoVoicePlaybooks: team.TwoVoicePlaybooksFromEnv(os.Getenv("MF_AD_TWO_VOICE_PLAYBOOKS")),
+		Nearby:            team.RedisNearbyCache(redisClient, cfg.Redis.Namespace),
 	})
 	osHandler := handlers.NewOSHandler(handlers.OSConfig{
 		Runtime: teamRuntime, Opt: optimizer, Library: lib, Source: osContext, Pipeline: pipeline,
@@ -680,6 +681,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/creative/poster", osHandler.Poster)
 		r.Post("/creative/clip", osHandler.Clip)
 		r.Post("/creative/script", osHandler.Script)
+		r.Post("/creative/script/settings", osHandler.ScriptSettings)
 		r.Post("/creative/ad", osHandler.Ad)
 		r.Post("/creative/ad/quote", osHandler.AdQuote)
 		r.Post("/creative/storyboard", osHandler.Storyboard)

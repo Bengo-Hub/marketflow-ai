@@ -177,7 +177,7 @@ playbooks:
 
   - key: setting-brief
     name: Setting brief for ad scenes
-    version: 1
+    version: 2
     source: {repo: marketflow, skill: setting-brief (owner 2026-11-20), license: proprietary}
     specialist: strategist
     model_class: standard
@@ -193,7 +193,10 @@ playbooks:
       - Write people and places as they are in that town today, modern and everyday, the way a local buyer sees their own life; no village or poverty cliches and no generic stock-photo office unless the business is an office.
       - When pictures of the business are listed, match their look (colours, light, interior style) in the look line, so generated scenes sit next to the real photos.
       - Name the setting each kind of scene should use (presenter, product, b-roll, end card) in fits.
+      - When the facts name the area's landmarks and street life, write one exterior or establishing setting that shows them as the camera would see them from the street near the address (a landmark tower in the background, matatus, boda bodas, roadside kiosks, the lake), so a local viewer knows the town.
+      - Write interiors from the business type, its pages and its own pictures. A learning hub for children is a bright learning room with children at desks with laptops and robotics kits and whiteboards; a shop is its own counter and shelves; never a corporate reception, a mall or a generic office unless the business is one.
     rules:
+      - Landmarks are backgrounds and exterior cues only; never place the business inside a landmark or claim it is next to one unless the address says so.
       - Use only places the facts support or that plainly fit the offering in the business's own town; mark nothing as the business's own premises unless the facts say so.
       - No text, signs, logos or brand names of other businesses in any setting.
       - Keep each line short enough to add to an image prompt (under 200 characters).

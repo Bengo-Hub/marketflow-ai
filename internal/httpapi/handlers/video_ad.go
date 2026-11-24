@@ -58,7 +58,7 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind, Tier: req.Tier,
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Footage: req.FootageURLs,
-		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
+		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, PlainStills: req.PlainStills, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}}
 	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
@@ -346,6 +346,10 @@ type storyboardRequest struct {
 	Contacts []media.Contact `json:"contacts"`
 	Accent   string          `json:"accent"`
 	LogoURL  string          `json:"logo_url"`
+	// PreviousStills keep the generated stills whose scene and prompt did not change (owner, 2026-11-24).
+	PreviousStills []media.Still `json:"previous_stills"`
+	// Branding are the in-scene branding rules (creative.branding); nil places no logo in scenes.
+	Branding *media.BrandingRules `json:"branding"`
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -379,11 +383,13 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 	}
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
-		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place}
+		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place, Previous: req.PreviousStills, Branding: req.Branding}
 	if accent, err := parseHexColor(req.Accent); err == nil && strings.TrimSpace(req.Headline+req.CTA) != "" {
 		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}
-		sreq.LogoURL = req.LogoURL
 	}
+	sreq.LogoURL = req.LogoURL
+	// The logo and its placements are read before pricing, so the plan, the price and the stills agree.
+	h.storyboards.PrepareBranding(r.Context(), &sreq)
 	price := func(reg registry.Registry) (int, error) {
 		if _, generated := h.storyboards.Plan(sreq); generated == 0 {
 			return 0, nil // the owner's photos and the kept actor only

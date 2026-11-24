@@ -243,3 +243,36 @@ func TestWatermarkCornerAvoidsBusyCorner(t *testing.T) {
 	// A nil logo and a broken image never panic.
 	drawLogo(image.NewRGBA(image.Rect(0, 0, 10, 10)), analyseLogo(nil), image.Rect(0, 0, 5, 5), PlateStyle{})
 }
+
+// A storyboard that keeps unchanged scenes reuses the previous still when the scene's exact
+// prompt is the same, and draws again only the scene whose setting changed.
+func TestStoryboardKeepsUnchangedStills(t *testing.T) {
+	s := &Storyboards{}
+	req := StoryboardRequest{Kind: AdTemplate, Format: "1920x1080", Scenes: []ScriptScene{
+		{ID: "s1", Shot: ShotBRoll, Visual: "a girl wires a robot", Setting: "a bright learning room, Kisumu CBD"},
+		{ID: "s2", Shot: ShotBRoll, Visual: "parents walk in", Setting: "Oginga Odinga Road, matatus passing"},
+	}}
+	first, generated := s.Plan(req)
+	if generated != 2 {
+		t.Fatalf("generated %d", generated)
+	}
+	prev := []Still{
+		{SceneID: "s1", Source: StillGenerated, URL: "https://x/s1.jpg", Key: "k1", Prompt: first[0].Prompt},
+		{SceneID: "s2", Source: StillGenerated, URL: "https://x/s2.jpg", Key: "k2", Prompt: first[1].Prompt},
+	}
+	req.Scenes[1].Setting = "the lakeside promenade, Kisumu"
+	req.Previous = prev
+	stills, generated := s.Plan(req)
+	if generated != 1 || !stills[0].Reused || stills[0].URL != "https://x/s1.jpg" || stills[1].Reused || stills[1].URL != "" {
+		t.Fatalf("stills %+v generated %d", stills, generated)
+	}
+}
+
+// A previous still sent without a prompt is one the caller vouched for and is kept.
+func TestStoryboardKeepsVouchedStills(t *testing.T) {
+	req := StoryboardRequest{Kind: AdTemplate, Format: "1920x1080", Scenes: []ScriptScene{{ID: "s1", Shot: ShotBRoll, Visual: "kids at laptops"}},
+		Previous: []Still{{SceneID: "s1", Source: StillGenerated, URL: "https://x/s1.jpg"}}}
+	if stills, generated := (&Storyboards{}).Plan(req); generated != 0 || !stills[0].Reused {
+		t.Fatalf("stills %+v generated %d", stills, generated)
+	}
+}

@@ -155,6 +155,8 @@ type Runtime struct {
 	logger   *zap.Logger
 	// twoVoice names the playbooks whose video scripts may be read by two voices (speakers.go).
 	twoVoice map[string]bool
+	// nearby caches the setting brief's web lookup of the landmarks near an address (nearby.go).
+	nearby NearbyCache
 }
 
 // Config configures a Runtime.
@@ -170,6 +172,8 @@ type Config struct {
 	// TwoVoicePlaybooks are the playbooks whose scripts may use two voices
 	// (MF_AD_TWO_VOICE_PLAYBOOKS); nil is DefaultTwoVoicePlaybooks, an empty list turns it off.
 	TwoVoicePlaybooks []string
+	// Nearby caches the nearby-landmarks lookup (Redis); nil turns the lookup off.
+	Nearby NearbyCache
 }
 
 // readOnlyTools are the only tools specialists may use. Mutations are next
@@ -205,7 +209,7 @@ func New(cfg Config) *Runtime {
 		twoVoice[k] = true
 	}
 	return &Runtime{lib: cfg.Library, opt: cfg.Opt, router: cfg.Router, decider: cfg.Decider, registry: reg,
-		tools: tools, source: cfg.Source, filter: compliance.NewFilter(), logger: logger.Named("team"), twoVoice: twoVoice}
+		tools: tools, source: cfg.Source, filter: compliance.NewFilter(), logger: logger.Named("team"), twoVoice: twoVoice, nearby: cfg.Nearby}
 }
 
 // mediaPlaybooks wait for an approved Creative Plan before any copy is written.
