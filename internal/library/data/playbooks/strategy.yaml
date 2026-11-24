@@ -196,6 +196,7 @@ playbooks:
       - When the facts name the area's landmarks and street life, write one exterior or establishing setting that shows them as the camera would see them from the street near the address (a landmark tower in the background, matatus, boda bodas, roadside kiosks, the lake), so a local viewer knows the town.
       - Write interiors from the business type, its pages and its own pictures. A learning hub for children is a bright learning room with children at desks with laptops and robotics kits and whiteboards; a shop is its own counter and shelves; never a corporate reception, a mall or a generic office unless the business is one.
     rules:
+      - Never write what a screen, tablet or phone shows, documents, invoices, calls to action, phone numbers or any words into a setting; name the device only (a POS terminal on the counter, laptops on desks).
       - Landmarks are backgrounds and exterior cues only; never place the business inside a landmark or claim it is next to one unless the address says so.
       - Use only places the facts support or that plainly fit the offering in the business's own town; mark nothing as the business's own premises unless the facts say so.
       - No text, signs, logos or brand names of other businesses in any setting.

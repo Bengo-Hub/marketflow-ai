@@ -106,8 +106,10 @@ func capField(s string) string {
 
 func (n *SettingNote) clean() {
 	n.Key = strings.ToLower(capField(n.Key))
-	n.Place, n.Neighbourhood, n.Vibe = capField(n.Place), capField(n.Neighbourhood), capField(n.Vibe)
-	n.People, n.Props, n.Fits = capField(n.People), cleanProps(capField(n.Props)), strings.ToLower(capField(n.Fits))
+	// Writing, screens with content, calls to action and numbers never reach a setting, in any field:
+	// the image model would paint them garbled (owner, 2026-11-24).
+	n.Place, n.Neighbourhood, n.Vibe = cleanProps(capField(n.Place)), capField(n.Neighbourhood), cleanProps(capField(n.Vibe))
+	n.People, n.Props, n.Fits = cleanProps(capField(n.People)), cleanProps(capField(n.Props)), strings.ToLower(capField(n.Fits))
 }
 
 // clean trims every field, keeps at most five settings with a place, and refuses a brief with
@@ -286,6 +288,7 @@ const settingPlaceRule = `PLACE RULES:
 - Landmarks and street life are for exterior and establishing shots and background cues only (a skyline, a tower seen down the street, matatus, boda bodas, roadside kiosks, the lake), described so a camera could film them there today. Never put the business inside a landmark it is not in, and never say the business is in or next to one unless the address says so.
 - Interiors follow the business type, the offering pages and the business's own pictures. A kids' coding and robotics hub is a bright learning room with children at desks with laptops and robotics kits, whiteboards and learning posters with no readable text; a shop is its own counter and shelves. Never a corporate reception, a mall or a generic office unless the business is one.
 - Copy the address exactly as given, including its street name and spelling.
+- Never describe what a screen, tablet or phone shows, documents, invoices, calls to action, phone numbers or any words; name the device only.
 `
 
 // settingBrief runs the Strategist's setting brief, falling back to the address alone. It returns
@@ -414,7 +417,7 @@ func mentionsPlace(line string, b *SettingBrief) bool {
 // textProp matches props that carry writing (signs, logos, icons, banners, QR codes, or anything a
 // screen or phone is showing or displaying): image models garble writing, and another business's logo must never appear, so a
 // setting never asks for one.
-var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display)\b`)
+var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display|screen|screens|monitor|monitors|preview|previews|invoice|invoices|call[- ]to[- ]action|cta|whatsapp|number|numbers|text|writing|words|lettering)\b`)
 
 // cleanProps drops the props that carry writing.
 func cleanProps(props string) string {

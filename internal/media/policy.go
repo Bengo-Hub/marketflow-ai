@@ -41,7 +41,14 @@ type RoutePolicy struct {
 	// MaxVideoUSD is the ceiling on one video ad's provider cost for every tenant and tier
 	// (setting "max_video_budget_usd"; owner 2026-11-20: configurable, USD 2 by default).
 	MaxVideoUSD float64 `json:"max_video_budget_usd"`
+	// StillTimeoutSeconds is how long one storyboard still may take on a route, queue included,
+	// before the next route is tried (setting "still_timeout_seconds", 30 to 600; owner 2026-11-24:
+	// fal queues ran past 60 s and failed whole storyboards).
+	StillTimeoutSeconds int `json:"still_timeout_seconds"`
 }
+
+// DefaultStillTimeoutSeconds is only the fallback while the platform sets none.
+const DefaultStillTimeoutSeconds = 180
 
 // DefaultMaxVideoBudgetUSD is only the fallback when the platform has not set
 // max_video_budget_usd (owner 2026-11-20); change the setting, not this.
@@ -69,9 +76,10 @@ func DefaultRoutePolicy() RoutePolicy {
 			ScenarioPoster + "/" + TierStandard:    {"fal/seedream-v5-lite"},
 			ScenarioPoster + "/" + TierPremium:     {"fal/nano-banana-pro"},
 		},
-		PremiumForExempt: true,
-		PremiumBudgetUSD: DefaultMaxVideoBudgetUSD,
-		MaxVideoUSD:      DefaultMaxVideoBudgetUSD,
+		PremiumForExempt:    true,
+		PremiumBudgetUSD:    DefaultMaxVideoBudgetUSD,
+		MaxVideoUSD:         DefaultMaxVideoBudgetUSD,
+		StillTimeoutSeconds: DefaultStillTimeoutSeconds,
 	}
 }
 
@@ -108,6 +116,9 @@ func PolicyFromSettings(s map[string]string) RoutePolicy {
 	}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(s["max_video_budget_usd"]), 64); err == nil && v > 0 {
 		p.MaxVideoUSD = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(s["still_timeout_seconds"])); err == nil && v >= 30 && v <= 600 {
+		p.StillTimeoutSeconds = v
 	}
 	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > p.MaxVideoUSD {
 		p.PremiumBudgetUSD = p.MaxVideoUSD

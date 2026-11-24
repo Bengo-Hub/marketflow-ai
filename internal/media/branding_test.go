@@ -191,3 +191,17 @@ func TestVouchedStillRedrawnForAPlacement(t *testing.T) {
 		t.Fatalf("stills %+v generated %d", stills, generated)
 	}
 }
+
+func TestStillTimeoutIsASetting(t *testing.T) {
+	if p := DefaultRoutePolicy(); p.StillTimeoutSeconds != 180 {
+		t.Fatalf("default %d", p.StillTimeoutSeconds)
+	}
+	if p := PolicyFromSettings(map[string]string{"still_timeout_seconds": "240"}); p.StillTimeoutSeconds != 240 {
+		t.Fatalf("set %d", p.StillTimeoutSeconds)
+	}
+	for _, bad := range []string{"5", "9000", "soon"} {
+		if p := PolicyFromSettings(map[string]string{"still_timeout_seconds": bad}); p.StillTimeoutSeconds != 180 {
+			t.Fatalf("%q gave %d", bad, p.StillTimeoutSeconds)
+		}
+	}
+}

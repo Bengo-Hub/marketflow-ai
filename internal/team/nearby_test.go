@@ -147,3 +147,26 @@ func TestResetSettingsWithoutPlaceKeepsTheScenes(t *testing.T) {
 		t.Fatalf("got %+v %v %d", got, brief, changed)
 	}
 }
+
+// Owner, 2026-11-24: settings leaked screens with content and calls to action. Every field drops them.
+func TestSettingsDropScreensCTAsAndNumbers(t *testing.T) {
+	b := &SettingBrief{Settings: []SettingNote{
+		{Place: "POS workstation, Kisumu CBD shop interior", Vibe: "focused close-up lighting on screen, calm", People: "hands of the owner",
+			Props: "tablet, split-payment screen, KRA eTIMS invoice preview, Book a demo call-to-action"},
+		{Place: "Digitika learning room", Props: "Scratch project screen, coding wall, laptops, robotics kits", People: "children, call-to-action text with WhatsApp number"},
+	}}
+	if err := b.clean(); err != nil {
+		t.Fatal(err)
+	}
+	line := strings.ToLower(b.Settings[0].Line() + " " + b.Settings[1].Line())
+	for _, bad := range []string{"split-payment", "invoice", "preview", "call-to-action", "whatsapp", "number", "screen"} {
+		if strings.Contains(line, bad) {
+			t.Fatalf("%q leaked: %s", bad, line)
+		}
+	}
+	for _, keep := range []string{"tablet", "laptops", "robotics kits", "coding wall", "pos workstation"} {
+		if !strings.Contains(line, keep) {
+			t.Fatalf("%q lost: %s", keep, line)
+		}
+	}
+}

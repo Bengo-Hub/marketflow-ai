@@ -307,7 +307,13 @@ func (s *Storyboards) still(ctx context.Context, req StoryboardRequest, name, pr
 		if ctx.Err() != nil {
 			break
 		}
-		actx, cancel := context.WithTimeout(ctx, rt.Timeout)
+		// The platform's still timeout (routing still_timeout_seconds) covers provider queues; the
+		// route's own timeout is the fallback.
+		timeout := rt.Timeout
+		if s := Policy(ctx).StillTimeoutSeconds; s > 0 {
+			timeout = time.Duration(s) * time.Second
+		}
+		actx, cancel := context.WithTimeout(ctx, timeout)
 		src, rerr := s.generate(actx, rt, req.Format, prompt)
 		var data []byte
 		if rerr == nil {
@@ -492,7 +498,7 @@ func seedFor(versionID, desc string) int64 {
 // overlayWord marks what only our overlay draws: icons, logos, buttons, contact details, calls to
 // action and any writing. An image model asked for them paints a fake WhatsApp icon or garbled
 // text into the scene (owner, 2026-11-23), so they never reach a picture or clip prompt.
-var overlayWord = regexp.MustCompile(`(?i)\b(icons?|logos?|buttons?|contacts?|contact details|whatsapp|qr|call to action|cta|phone numbers?|e-?mails?|websites?|web address|url|links?|signs?|signage|banners?|captions?|text|writing|lettering|headline|price tag|displaying|showing)\b`)
+var overlayWord = regexp.MustCompile(`(?i)\b(icons?|logos?|buttons?|contacts?|contact details|whatsapp|qr|call[- ]to[- ]action|cta|previews?|invoices?|numbers?|phone numbers?|e-?mails?|websites?|web address|url|links?|signs?|signage|banners?|captions?|text|writing|lettering|headline|price tag|displaying|showing)\b`)
 
 // clauseSplit cuts a prompt into its clauses, keeping the separators.
 var clauseSplit = regexp.MustCompile(`[^,;.]+[,;.]?`)
