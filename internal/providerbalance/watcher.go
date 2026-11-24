@@ -3,6 +3,7 @@ package providerbalance
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	sharedcache "github.com/Bengo-Hub/cache"
@@ -114,7 +115,7 @@ func (w *Watcher) ReadAll(ctx context.Context) error {
 		if w.Balances != nil {
 			w.Balances.Set(p, br)
 		}
-		w.alert(ctx, rd, r, mark)
+		w.alert(ctx, rd, r, mark, s)
 	}
 	if w.Redis != nil && len(readings) > 0 {
 		if b, err := json.Marshal(readings); err == nil {
@@ -145,7 +146,7 @@ func (w *Watcher) load(ctx context.Context) {
 }
 
 // alert raises billing.balance.low for the platform owner, once per provider, level and day.
-func (w *Watcher) alert(ctx context.Context, rd Reader, r Reading, mark float64) {
+func (w *Watcher) alert(ctx context.Context, rd Reader, r Reading, mark float64, s Settings) {
 	level, low := balancealert.LevelOf(r.Remaining, mark)
 	if !low {
 		return
@@ -153,7 +154,7 @@ func (w *Watcher) alert(ctx context.Context, rd Reader, r Reading, mark float64)
 	a := balancealert.Alert{
 		Scope: balancealert.ScopePlatform, Resource: rd.Provider(), ResourceLabel: rd.Label(), Level: level,
 		Remaining: r.Remaining, Unit: r.Unit, Threshold: mark, Period: r.At.UTC().Format("2006-01-02"),
-		BuyURL: rd.TopUpURL(), Estimate: r.Estimate, OccurredAt: r.At,
+		BuyURL: billingURL(s), Estimate: r.Estimate, OccurredAt: r.At,
 	}
 	pub := w.Publish
 	if pub == nil {
@@ -167,4 +168,16 @@ func (w *Watcher) alert(ctx context.Context, rd Reader, r Reading, mark float64)
 		w.log().Warn("provider balance low", zap.String("provider", rd.Provider()), zap.String("level", level),
 			zap.Float64("remaining", r.Remaining), zap.String("unit", r.Unit), zap.Bool("estimate", r.Estimate), zap.Bool("published", w.Publish != nil))
 	}
+}
+
+// billingURL is the provider's own billing page from its platform settings. marketflow-api owns
+// the provider to page mapping (billing_url on the provider card, with a default per provider)
+// and adds the default when it resolves the settings, so nothing here repeats it. An alert
+// without one still goes out; notifications-api then links the providers page.
+func billingURL(s Settings) string {
+	v := strings.TrimSpace(s["billing_url"])
+	if !strings.HasPrefix(v, "https://") {
+		return ""
+	}
+	return v
 }

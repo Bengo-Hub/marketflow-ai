@@ -57,7 +57,7 @@ func startBalanceWatch(cfg *config.Config, resolver *providers.Resolver, rdb *re
 }
 
 // providerSettings reads media/<provider> from the platform ProviderSettings (the
-// low-water marks and Higgsfield's funded amount and date).
+// low-water marks, Higgsfield's funded amount and date, and the billing_url alerts link).
 func providerSettings(resolver *providers.Resolver) providerbalance.SettingsSource {
 	return func(ctx context.Context, provider string) providerbalance.Settings {
 		if resolver == nil {

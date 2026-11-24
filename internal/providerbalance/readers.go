@@ -31,7 +31,8 @@ type Reading struct {
 	At       time.Time `json:"at"`
 }
 
-// Settings are the provider's ProviderSetting values (media/<provider>).
+// Settings are the provider's ProviderSetting values (media/<provider>), with billing_url
+// filled in by marketflow-api when the card has none.
 type Settings map[string]string
 
 // Reader reads one provider's balance. ok is false when the provider cannot be read yet
@@ -39,7 +40,6 @@ type Settings map[string]string
 type Reader interface {
 	Provider() string
 	Label() string
-	TopUpURL() string
 	Read(ctx context.Context, key string, s Settings) (r Reading, ok bool, err error)
 }
 
@@ -82,7 +82,6 @@ type falReader struct{}
 
 func (falReader) Provider() string { return "fal" }
 func (falReader) Label() string    { return "fal.ai" }
-func (falReader) TopUpURL() string { return "https://fal.ai/dashboard/billing" }
 
 func (falReader) Read(ctx context.Context, key string, _ Settings) (Reading, bool, error) {
 	var out struct {
@@ -106,7 +105,6 @@ type elevenLabsReader struct{}
 
 func (elevenLabsReader) Provider() string { return "elevenlabs" }
 func (elevenLabsReader) Label() string    { return "ElevenLabs" }
-func (elevenLabsReader) TopUpURL() string { return "https://elevenlabs.io/app/subscription" }
 
 func (elevenLabsReader) Read(ctx context.Context, key string, _ Settings) (Reading, bool, error) {
 	var out struct {
@@ -140,7 +138,6 @@ type higgsfieldReader struct{}
 
 func (higgsfieldReader) Provider() string { return "higgsfield" }
 func (higgsfieldReader) Label() string    { return "Higgsfield" }
-func (higgsfieldReader) TopUpURL() string { return "https://console.higgsfield.ai" }
 
 // usageWindow is the longest range /models/usage accepts.
 const usageWindow = 31 * 24 * time.Hour

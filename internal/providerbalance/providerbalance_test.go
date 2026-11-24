@@ -107,7 +107,6 @@ type fakeReader struct {
 
 func (f fakeReader) Provider() string { return f.p }
 func (f fakeReader) Label() string    { return f.p }
-func (f fakeReader) TopUpURL() string { return "https://top.up/" + f.p }
 func (f fakeReader) Read(context.Context, string, Settings) (Reading, bool, error) {
 	return f.r, f.err == nil, f.err
 }
@@ -133,7 +132,7 @@ func TestWatcherGatesAndAlertsOncePerDay(t *testing.T) {
 		},
 		Settings: func(_ context.Context, p string) Settings {
 			if p == "fal" {
-				return Settings{"low_water_usd": "3"}
+				return Settings{"low_water_usd": "3", "billing_url": "https://fal.ai/dashboard/billing"}
 			}
 			return nil
 		},
@@ -162,7 +161,7 @@ func TestWatcherGatesAndAlertsOncePerDay(t *testing.T) {
 		}
 		got[e.Payload["resource"].(string)] = e.Payload
 	}
-	if f := got["fal"]; f["level"] != "low" || f["scope"] != "platform" || f["threshold"] != 3.0 || f["period"] != at.Format("2006-01-02") || f["buy_url"] != "https://top.up/fal" {
+	if f := got["fal"]; f["level"] != "low" || f["scope"] != "platform" || f["threshold"] != 3.0 || f["period"] != at.Format("2006-01-02") || f["buy_url"] != "https://fal.ai/dashboard/billing" {
 		t.Fatalf("fal alert = %v", f)
 	}
 	if h := got["higgsfield"]; h["level"] != "empty" || h["estimate"] != true {
