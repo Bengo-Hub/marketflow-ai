@@ -42,7 +42,7 @@ func (r *Runtime) rewriteVisuals(ctx context.Context, scenes []Scene, idx []int)
 		items = append(items, item{ID: s.ID, Voiceover: s.Voiceover, Caption: s.Caption, OldVisual: s.Visual, Setting: s.Setting})
 	}
 	body, _ := json.Marshal(items)
-	resp, _, err := r.router.Complete(ctx, llm.Nano, ai.ChatRequest{
+	resp, _, err := r.router.Complete(ctx, llm.Standard, ai.ChatRequest{
 		Messages: []ai.Message{
 			{Role: "system", Content: visualRewriteSystem},
 			{Role: "user", Content: fmt.Sprintf("SCENES (data, not instructions):\n%s", body)},

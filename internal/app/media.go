@@ -164,11 +164,11 @@ func mediaPolicySource(resolver *providers.Resolver) media.PolicySource {
 }
 
 // defaultReviewTargets are the vision models the self-review tries when ProviderSetting platform /
-// media / review sets no "targets", and the fallbacks after the ones it sets: Google Gemini 2.5
+// media / review sets no "targets", and the fallbacks after the ones it sets: Google Gemini 3.8
 // Flash (the platform's ai_llm/gemini row; free tier, reads images), Groq's Llama 4 Scout, then
 // Anthropic's Haiku. Change the setting, not this.
 var defaultReviewTargets = []llm.Target{
-	{Provider: "gemini", Model: "gemini-2.5-flash", MaxTokens: 600},
+	{Provider: "gemini", Model: "gemini-3.8-flash", MaxTokens: 600},
 	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct", MaxTokens: 600},
 	{Provider: "anthropic", Model: "claude-haiku-4-5", MaxTokens: 600},
 }
@@ -221,7 +221,9 @@ func mediaReviewer(resolver *providers.Resolver, router *llm.Router) *media.Revi
 	}
 	call := func(ctx context.Context, system, user string, images []string) (string, string, float64, error) {
 		targets := reviewTargets(settings(ctx).Targets)
-		resp, c, err := router.CompleteOn(ctx, llm.Nano, targets, ai.ChatRequest{
+		// Standard, not Nano: a call carrying images needs more than Nano's 10 s per target and
+		// 20 s in all (gemini-3.8-flash timed out there, 2026-11-24).
+		resp, c, err := router.CompleteOn(ctx, llm.Standard, targets, ai.ChatRequest{
 			Messages:    []ai.Message{{Role: "system", Content: system}, {Role: "user", Content: user, Images: images}},
 			Temperature: 0.1, MaxTokens: 600,
 		})
