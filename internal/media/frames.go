@@ -188,14 +188,18 @@ func orientation(format string) string {
 	return "vertical"
 }
 
+// realPeople keeps generated people and places photographic instead of polished (owner, 2026-11-24:
+// the reference pictures showed real skin, working people and lived-in rooms).
+const realPeople = "Natural skin texture, ordinary clothes, hands in a natural position, real working surroundings with everyday clutter."
+
 // StillPrompt is the exact prompt a scene's generated still is drawn from: a candid phone photo
 // for a UGC ad, an advertising photo otherwise, in the ad's own shape.
 func StillPrompt(format, delivery, visual string) string {
 	visual = strings.TrimSpace(visual)
 	if delivery == DeliveryUGC {
-		return ugcStillPrompt(format, visual)
+		return ugcStillPrompt(format, visual) + " " + silentPeople + " " + realPeople
 	}
-	return scenePrompt(visual) + " " + capitalise(orientation(format)) + " frame."
+	return scenePrompt(visual) + " " + silentPeople + " " + realPeople + " " + capitalise(orientation(format)) + " frame."
 }
 
 // ActorPrompt is the exact prompt the presenter's actor still is drawn from, in the ad's shape:

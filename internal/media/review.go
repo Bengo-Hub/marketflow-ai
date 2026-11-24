@@ -38,6 +38,7 @@ const (
 	IssueWrongBrand   = "wrong_brand"   // another business's brand or logo
 	IssueIrrelevant   = "irrelevant"    // the scene does not show the offering or its use
 	IssueOffLocation  = "off_location"  // the place does not fit the business's town or setting
+	IssueTalkingFace  = "talking_face"  // someone faces the camera or talks in a scene a voice-over reads
 	IssueOther        = "other"
 )
 
@@ -209,8 +210,9 @@ For each picture, compare it with what it should show and report only real probl
 - wrong_brand: another company's logo or brand name is visible.
 - irrelevant: the scene does not show the offering, its use or its buyer as described.
 - off_location: the place does not fit the business's town or setting (for example a foreign city, a generic studio, snow, or a village where a modern town is expected).
+- talking_face: in a picture marked "voice-over scene", a person looks at the camera, poses for it or seems to speak (the words are spoken by a voice-over there, so it looks like a broken lip sync).
 Severity is high when the owner would reject the picture, low when it is a small blemish.
-Reply with one JSON object only: {"pass":true|false,"issues":[{"frame":"<label>","kind":"logo|legibility|text_artefact|wrong_brand|irrelevant|off_location|other","severity":"high|low","note":"<under 20 words>"}]}.
+Reply with one JSON object only: {"pass":true|false,"issues":[{"frame":"<label>","kind":"logo|legibility|text_artefact|wrong_brand|irrelevant|off_location|talking_face|other","severity":"high|low","note":"<under 20 words>"}]}.
 pass is false when any issue is high.`
 
 // Review runs one round over the frames. A failed call returns an error and no verdict.
@@ -282,7 +284,7 @@ func parseVerdict(reply string) (ReviewVerdict, error) {
 	kept := v.Issues[:0]
 	for _, is := range v.Issues {
 		switch is.Kind {
-		case IssueLogo, IssueLegibility, IssueTextArtefact, IssueWrongBrand, IssueIrrelevant, IssueOffLocation:
+		case IssueLogo, IssueLegibility, IssueTextArtefact, IssueWrongBrand, IssueIrrelevant, IssueOffLocation, IssueTalkingFace:
 		default:
 			is.Kind = IssueOther
 		}

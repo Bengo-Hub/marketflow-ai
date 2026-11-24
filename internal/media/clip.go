@@ -353,6 +353,9 @@ func showsWriting(visual string) bool {
 	return false
 }
 
+// silentPeople is the rule for people in every picture and clip that is not a lip-synced presenter.
+const silentPeople = "Anyone in view is busy with what they are doing, looking at their work or each other, mouth closed, not talking and not looking at the camera."
+
 // clipPrompt keeps the motion gentle and the frame free of text: our words go on top.
 func clipPrompt(p string) string {
 	if p == "" {
@@ -360,7 +363,9 @@ func clipPrompt(p string) string {
 	}
 	// Image-to-video models invent subtitles and signage even when told "no text" (2026-11-19
 	// audit: garbled captions in Hailuo clips), so the ban names each kind of writing.
-	return p + ". No text, no letters, no subtitles, no captions, no signs, no screen writing, no logos added. Keep the product unchanged."
+	// A clip is never lip-synced: a face talking or smiling at the camera under the voice-over looks
+	// like a broken presenter (owner, 2026-11-24), so people in it keep to what they are doing.
+	return p + ". " + silentPeople + " No text, no letters, no subtitles, no captions, no signs, no screen writing, no logos added. Keep the product unchanged."
 }
 
 // save downloads the provider's clip to path (bounded).

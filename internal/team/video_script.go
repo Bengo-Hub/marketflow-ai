@@ -341,6 +341,11 @@ func scriptTask(in VideoScriptRequest) string {
 	if in.Presenter {
 		b.WriteString("presenter is one AI presenter talking to camera: its voiceover is what the presenter says, at most 200 characters per presenter scene. " +
 			"Open with a presenter hook and use presenter for at most half of the scenes. The presenter explains and recommends; it never claims to have used the product or had a result itself. ")
+		// Only presenter scenes are lip-synced: the presenter anywhere else is a silent face under a
+		// voice-over (owner, 2026-11-24).
+		b.WriteString("Only presenter scenes show the presenter. Every other visual shows other people at work, hands, the customer, the product or the place, " +
+			"never the presenter and never anyone facing the camera or talking. " +
+			"Write every voiceover to be spoken aloud: short sentences, one idea per scene, everyday words, no lists and no brochure phrases. Each scene follows from the one before it. ")
 		b.WriteString("Give each scene a short visual line describing what is seen (for b_roll, the setting to film; never text on screen). ")
 		b.WriteString("end_card is the last scene, with the call to action.\n")
 		if d := strings.TrimSpace(in.ActorPrompt); d != "" {

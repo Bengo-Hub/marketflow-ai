@@ -143,7 +143,7 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 				continue
 			}
 			if img, err := s.posts.download(ctx, st.URL); err == nil {
-				frames = append(frames, ReviewFrame{Label: st.SceneID, Image: img, Expect: sceneVisual(req.Scenes[sceneIndex(req.Scenes, st.SceneID, i)])})
+				frames = append(frames, ReviewFrame{Label: st.SceneID, Image: img, Expect: reviewExpect(req.Scenes[sceneIndex(req.Scenes, st.SceneID, i)])})
 			}
 		}
 		if len(frames) == 0 {
@@ -231,7 +231,7 @@ func (a *Ads) reviewVideo(ctx context.Context, req AdRequest, res *MediaResult, 
 			continue
 		}
 		if img, err := a.asm.frameAt(ctx, res.URL, mid); err == nil {
-			frames = append(frames, ReviewFrame{Label: s.ID, Image: img, Expect: sceneVisual(s)})
+			frames = append(frames, ReviewFrame{Label: s.ID, Image: img, Expect: reviewExpect(s)})
 		}
 	}
 	if img, err := a.asm.frameAt(ctx, res.URL, max(0, t-1)); err == nil {
@@ -290,4 +290,17 @@ func (a *Ads) reviewAndRedo(ctx context.Context, req AdRequest, plan AdPlan, out
 		rep.Fixed = append(rep.Fixed, "clip "+s.ID+" made again")
 	}
 	return rep
+}
+
+// reviewExpect is what the reviewer compares a scene with. A b-roll scene is marked as read by a
+// voice-over, so a face talking to the camera in it is reported; a presenter scene and the owner's
+// own photos are not.
+func reviewExpect(s ScriptScene) string {
+	switch s.Shot {
+	case ShotBRoll:
+		return "voice-over scene: " + sceneVisual(s)
+	case ShotPresenter:
+		return "presenter talking to the camera: " + sceneVisual(s)
+	}
+	return sceneVisual(s)
 }
