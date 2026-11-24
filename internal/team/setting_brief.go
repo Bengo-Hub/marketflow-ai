@@ -417,7 +417,7 @@ func mentionsPlace(line string, b *SettingBrief) bool {
 // textProp matches props that carry writing (signs, logos, icons, banners, QR codes, or anything a
 // screen or phone is showing or displaying): image models garble writing, and another business's logo must never appear, so a
 // setting never asks for one.
-var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display|screen|screens|monitor|monitors|preview|previews|invoice|invoices|call[- ]to[- ]action|cta|whatsapp|number|numbers|text|writing|words|lettering)\b`)
+var textProp = regexp.MustCompile(`(?i)\b(sign|signs|signage|logo|logos|banner|banners|poster|posters|qr|brochure|brochures|flyer|flyers|label|labels|form|forms|certificate|certificates|mock-?up|menu board|price list|whiteboard text|screen showing|screens showing|contact number|phone number|icon|icons|showing|displaying|display|screen|screens|monitor|monitors|preview|previews|invoice|invoices|call[- ]to[- ]action|cta|whatsapp|number|numbers|text|writing|words|lettering|placeholder|placeholders|contact info|contact information|contact details)\b`)
 
 // cleanProps drops the props that carry writing.
 func cleanProps(props string) string {
@@ -498,11 +498,13 @@ func (r *Runtime) ResetSettings(ctx context.Context, in VideoScriptRequest, scen
 		v.Scenes[i].Setting = ""
 	}
 	applySettings(v, brief)
-	changed := 0
+	var moved []int
 	for i := range v.Scenes {
 		if v.Scenes[i].Setting != scenes[i].Setting {
-			changed++
+			moved = append(moved, i)
 		}
 	}
-	return v.Scenes, brief, changed
+	// What the camera sees follows the new place; the spoken words and captions stay as approved.
+	r.rewriteVisuals(ctx, v.Scenes, moved)
+	return v.Scenes, brief, len(moved)
 }

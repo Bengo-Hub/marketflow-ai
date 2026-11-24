@@ -164,11 +164,32 @@ func mediaPolicySource(resolver *providers.Resolver) media.PolicySource {
 }
 
 // defaultReviewTargets are the vision models the self-review tries when ProviderSetting platform /
-// media / review sets no "targets": Groq's Llama 4 Scout (cheap and fast, reads images), then
+// media / review sets no "targets", and the fallbacks after the ones it sets: Google Gemini 2.5
+// Flash (the platform's ai_llm/gemini row; free tier, reads images), Groq's Llama 4 Scout, then
 // Anthropic's Haiku. Change the setting, not this.
 var defaultReviewTargets = []llm.Target{
+	{Provider: "gemini", Model: "gemini-2.5-flash", MaxTokens: 600},
 	{Provider: "groq", Model: "meta-llama/llama-4-scout-17b-16e-instruct", MaxTokens: 600},
 	{Provider: "anthropic", Model: "claude-haiku-4-5", MaxTokens: 600},
+}
+
+// reviewTargets are the configured targets, then every default not already listed, so a free tier
+// that is rate limited or a provider without credit never leaves the review with nothing to try
+// (owner, 2026-11-24).
+func reviewTargets(raw string) []llm.Target {
+	var list []llm.Target
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &list)
+	}
+	seen := map[string]bool{}
+	var out []llm.Target
+	for _, t := range append(list, defaultReviewTargets...) {
+		if k := t.Provider + "/" + t.Model; t.Provider != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // mediaReviewer wires the self-review: its settings from ProviderSetting platform / media / review
@@ -199,13 +220,7 @@ func mediaReviewer(resolver *providers.Resolver, router *llm.Router) *media.Revi
 		return last
 	}
 	call := func(ctx context.Context, system, user string, images []string) (string, string, float64, error) {
-		targets := defaultReviewTargets
-		if raw := settings(ctx).Targets; raw != "" {
-			var list []llm.Target
-			if json.Unmarshal([]byte(raw), &list) == nil && len(list) > 0 {
-				targets = list
-			}
-		}
+		targets := reviewTargets(settings(ctx).Targets)
 		resp, c, err := router.CompleteOn(ctx, llm.Nano, targets, ai.ChatRequest{
 			Messages:    []ai.Message{{Role: "system", Content: system}, {Role: "user", Content: user, Images: images}},
 			Temperature: 0.1, MaxTokens: 600,

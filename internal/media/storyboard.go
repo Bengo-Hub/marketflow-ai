@@ -498,7 +498,7 @@ func seedFor(versionID, desc string) int64 {
 // overlayWord marks what only our overlay draws: icons, logos, buttons, contact details, calls to
 // action and any writing. An image model asked for them paints a fake WhatsApp icon or garbled
 // text into the scene (owner, 2026-11-23), so they never reach a picture or clip prompt.
-var overlayWord = regexp.MustCompile(`(?i)\b(icons?|logos?|buttons?|contacts?|contact details|whatsapp|qr|call[- ]to[- ]action|cta|previews?|invoices?|numbers?|phone numbers?|e-?mails?|websites?|web address|url|links?|signs?|signage|banners?|captions?|text|writing|lettering|headline|price tag|displaying|showing)\b`)
+var overlayWord = regexp.MustCompile(`(?i)\b(icons?|logos?|buttons?|contacts?|contact details|whatsapp|qr|call[- ]to[- ]action|cta|previews?|invoices?|numbers?|placeholders?|contact info|phone numbers?|e-?mails?|websites?|web address|url|links?|signs?|signage|banners?|captions?|text|writing|lettering|headline|price tag|displaying|showing)\b`)
 
 // clauseSplit cuts a prompt into its clauses, keeping the separators.
 var clauseSplit = regexp.MustCompile(`[^,;.]+[,;.]?`)

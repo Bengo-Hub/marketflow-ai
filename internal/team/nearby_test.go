@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bengobox/marketflow-ai/internal/agent"
+	"github.com/bengobox/marketflow-ai/internal/promptopt"
 )
 
 type fakeSearch struct {
@@ -153,13 +154,13 @@ func TestSettingsDropScreensCTAsAndNumbers(t *testing.T) {
 	b := &SettingBrief{Settings: []SettingNote{
 		{Place: "POS workstation, Kisumu CBD shop interior", Vibe: "focused close-up lighting on screen, calm", People: "hands of the owner",
 			Props: "tablet, split-payment screen, KRA eTIMS invoice preview, Book a demo call-to-action"},
-		{Place: "Digitika learning room", Props: "Scratch project screen, coding wall, laptops, robotics kits", People: "children, call-to-action text with WhatsApp number"},
+		{Place: "Digitika learning room", Props: "Scratch project screen, coding wall, laptops, robotics kits, contact info placeholder", People: "children, call-to-action text with WhatsApp number"},
 	}}
 	if err := b.clean(); err != nil {
 		t.Fatal(err)
 	}
 	line := strings.ToLower(b.Settings[0].Line() + " " + b.Settings[1].Line())
-	for _, bad := range []string{"split-payment", "invoice", "preview", "call-to-action", "whatsapp", "number", "screen"} {
+	for _, bad := range []string{"split-payment", "invoice", "preview", "call-to-action", "whatsapp", "number", "screen", "placeholder"} {
 		if strings.Contains(line, bad) {
 			t.Fatalf("%q leaked: %s", bad, line)
 		}
@@ -168,5 +169,35 @@ func TestSettingsDropScreensCTAsAndNumbers(t *testing.T) {
 		if !strings.Contains(line, keep) {
 			t.Fatalf("%q lost: %s", keep, line)
 		}
+	}
+}
+
+// A moved scene gets a visual for its new place; the spoken line and caption stay word for word,
+// and a scene that did not move keeps its visual.
+func TestRewriteVisualsKeepsTheWords(t *testing.T) {
+	rt, f := newRuntime(promptopt.TaskSpec{}, func(sys, user string) string {
+		if strings.Contains(sys, "rewrite what the camera sees") {
+			return `{"visuals":[{"id":"s2","visual":"A mother and her son walk past matatus on Oginga Odinga Road, talking about his coding class."},{"id":"s9","visual":"ignored"}]}`
+		}
+		return "{}"
+	}, nil)
+	scenes := []Scene{
+		{ID: "s1", Visual: "Kids build a robot.", Voiceover: "Hands-on robotics.", Setting: "a learning room"},
+		{ID: "s2", Visual: "A mother on the sofa at home watches her child code.", Voiceover: "Parents see the progress.", Caption: "Ages 6 to 16", Setting: "Oginga-Odinga Road, Kisumu CBD"},
+	}
+	rt.rewriteVisuals(context.Background(), scenes, []int{1})
+	if !strings.Contains(scenes[1].Visual, "Oginga Odinga Road") || scenes[1].Voiceover != "Parents see the progress." || scenes[1].Caption != "Ages 6 to 16" {
+		t.Fatalf("scene %+v", scenes[1])
+	}
+	if scenes[0].Visual != "Kids build a robot." {
+		t.Fatalf("an unmoved scene changed: %+v", scenes[0])
+	}
+	_ = f
+	// A model that fails leaves the visuals as they were.
+	rt, _ = newRuntime(promptopt.TaskSpec{}, func(string, string) string { return failReply }, nil)
+	before := scenes[1].Visual
+	rt.rewriteVisuals(context.Background(), scenes, []int{1})
+	if scenes[1].Visual != before {
+		t.Fatal("a failed rewrite changed the visual")
 	}
 }

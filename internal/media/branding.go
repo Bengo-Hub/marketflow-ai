@@ -11,6 +11,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // In-scene branding (owner, 2026-11-24): the tenant's real logo appears on a believable surface in
@@ -203,24 +204,25 @@ Reply with one JSON object only: {"found":true|false,"corners":[[x,y],[x,y],[x,y
 The corners are the surface's printable face: top-left, top-right, bottom-right, bottom-left, as fractions of the image width and height (0 to 1).
 found is false when the surface is missing, mostly hidden, covered by a person, or already has writing or a logo on it.`
 
-// Locate asks the vision model where the surface is. ok is false when it is not found, the answer
+// Locate asks the vision model where the surface is. err is set when no model answered (worth a
+// retry); ok is false when the surface is not found, the answer
 // is unreadable, or the quad is implausible (too small, too large, not convex).
-func (r *Reviewer) Locate(ctx context.Context, img image.Image, surface string) (quad [4][2]float64, cost float64, ok bool) {
+func (r *Reviewer) Locate(ctx context.Context, img image.Image, surface string) (quad [4][2]float64, cost float64, ok bool, err error) {
 	if r == nil || r.call == nil || img == nil {
-		return quad, 0, false
+		return quad, 0, false, nil
 	}
 	data, err := reviewJPEG(img)
 	if err != nil {
-		return quad, 0, false
+		return quad, 0, false, nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, reviewCallTimeout)
 	defer cancel()
 	reply, _, cost, err := r.call(cctx, locatePrompt, "The surface: "+surface, []string{"data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)})
 	if err != nil {
-		return quad, 0, false
+		return quad, 0, false, err
 	}
 	quad, ok = parseQuad(reply)
-	return quad, cost, ok
+	return quad, cost, ok, nil
 }
 
 // parseQuad reads the locate reply and checks the quad is plausible for a banner or panel.
@@ -434,6 +436,10 @@ func (s *Storyboards) PrepareBranding(ctx context.Context, req *StoryboardReques
 	if req == nil || req.brand != nil || req.Branding == nil || !req.Branding.Enabled || req.LogoURL == "" || s == nil || s.posts == nil {
 		return
 	}
+	// Without the self-review no logo can be placed, so no scene asks for a blank surface.
+	if _, _, on := reviewOn(ctx); !on {
+		return
+	}
 	logo, err := s.posts.download(ctx, req.LogoURL)
 	if err != nil {
 		return
@@ -477,8 +483,14 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 		if err != nil {
 			return "", "", nil
 		}
-		quad, cost, found := r.Locate(ctx, img, p.Surface)
-		res.CostUSD += cost
+		var quad [4][2]float64
+		found := false
+		_ = retryVision(ctx, func() error {
+			q, cost, ok, err := r.Locate(ctx, img, p.Surface)
+			res.CostUSD += cost
+			quad, found = q, ok
+			return err
+		})
 		if !found {
 			return "", "", nil
 		}
@@ -488,8 +500,13 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 		if !placeOnSurface(canvas, req.brand.logo, quad, req.brand.rules.MaxWidth) {
 			return "", "", nil
 		}
-		v, err := r.Review(ctx, ReviewBrief{Kind: "storyboard", Brand: req.Brand, Place: req.Place}, []ReviewFrame{{Label: name, Image: canvas,
-			Expect: "the business's own logo printed on " + p.Surface + ", sharp, straight and real-looking, with no other writing"}})
+		var v ReviewVerdict
+		err = retryVision(ctx, func() error {
+			var rerr error
+			v, rerr = r.Review(ctx, ReviewBrief{Kind: "storyboard", Brand: req.Brand, Place: req.Place}, []ReviewFrame{{Label: name, Image: canvas,
+				Expect: "the business's own logo printed on " + p.Surface + ", sharp, straight and real-looking, with no other writing"}})
+			return rerr
+		})
 		if err != nil {
 			return "", "", nil
 		}
@@ -528,6 +545,36 @@ func (s *Storyboards) placeLogos(ctx context.Context, req StoryboardRequest, res
 		if u, k, l := place("sb-"+st.SceneID, st.URL, p); u != "" {
 			st.PlainURL, st.PlainKey, st.Logo = st.URL, st.Key, l
 			st.URL, st.Key = u, k
+			continue
+		}
+		// No logo could go on it: an empty banner would look odd, so the scene is drawn once more
+		// without the surface (one still, about USD 0.035); if that fails too, the first one stays.
+		plain := strings.Replace(st.Prompt, ". In the scene: "+p.Surface, "", 1)
+		if url, key, route, cost, err := s.still(ctx, req, "sb-"+st.SceneID+"-nobrand", plain); err == nil {
+			st.URL, st.Key, st.Route, st.Prompt = url, key, route, plain
+			st.CostUSD += cost
+			res.CostUSD += cost
 		}
 	}
+}
+
+// visionBackoff are the waits before the vision model is asked again when no target answered:
+// free tiers return 429 or 503 for a short while (owner, 2026-11-24: retry before falling back).
+var visionBackoff = []time.Duration{20 * time.Second, 40 * time.Second}
+
+// retryVision runs call, and again after each backoff while it errors; it returns the last error.
+func retryVision(ctx context.Context, call func() error) error {
+	err := call()
+	for _, wait := range visionBackoff {
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		err = call()
+	}
+	return err
 }

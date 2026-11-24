@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -139,14 +141,14 @@ func TestStoryboardPlacesTheLogo(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := res.Stills[1]
-		if !strings.Contains(st.Prompt, "completely blank") || strings.Contains(res.Stills[0].Prompt, "banner") {
+		if strings.Contains(st.Prompt, "completely blank") != pass || strings.Contains(res.Stills[0].Prompt, "banner") {
 			t.Fatalf("prompts %q / %q", st.Prompt, res.Stills[0].Prompt)
 		}
 		if pass && (st.Logo == nil || st.PlainURL == "" || st.URL == st.PlainURL) {
 			t.Fatalf("placed still %+v", st)
 		}
-		if !pass && (st.Logo != nil || st.PlainURL != "") {
-			t.Fatalf("a failed review kept the placement %+v", st)
+		if !pass && (st.Logo != nil || st.PlainURL != "" || !strings.Contains(st.URL, "nobrand")) {
+			t.Fatalf("a failed placement must redraw the scene without the surface: %+v", st)
 		}
 	}
 }
@@ -203,5 +205,40 @@ func TestStillTimeoutIsASetting(t *testing.T) {
 		if p := PolicyFromSettings(map[string]string{"still_timeout_seconds": bad}); p.StillTimeoutSeconds != 180 {
 			t.Fatalf("%q gave %d", bad, p.StillTimeoutSeconds)
 		}
+	}
+}
+
+// Without the self-review no scene is asked for a blank surface.
+func TestNoSurfaceWithoutReviewer(t *testing.T) {
+	SetReviewer(nil)
+	f := newFakeProviders(t)
+	s := NewStoryboards(keysFor("higgsfield"), &memStore{}, NewPosters(keysFor("higgsfield"), &memStore{}, nil), nil)
+	rules := DefaultBrandingRules()
+	req := StoryboardRequest{Kind: AdTemplate, Format: "1920x1080", Scenes: brandScenes()[:2], LogoURL: f.srv.URL + "/scene.png", Branding: &rules}
+	s.PrepareBranding(context.Background(), &req)
+	if req.brand != nil {
+		t.Fatal("placements planned with no reviewer")
+	}
+}
+
+// The vision model is asked again after a short wait when no target answered.
+func TestRetryVision(t *testing.T) {
+	prev := visionBackoff
+	visionBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	defer func() { visionBackoff = prev }()
+	calls := 0
+	err := retryVision(context.Background(), func() error {
+		calls++
+		if calls < 3 {
+			return errors.New("429")
+		}
+		return nil
+	})
+	if err != nil || calls != 3 {
+		t.Fatalf("calls %d err %v", calls, err)
+	}
+	calls = 0
+	if err := retryVision(context.Background(), func() error { calls++; return errors.New("503") }); err == nil || calls != 3 {
+		t.Fatalf("gave up after %d calls, err %v", calls, err)
 	}
 }
