@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	boostQuotePath = "POST /api/v1/internal/ads/os-turn/boost-quote"
-	boostPath      = "POST /api/v1/internal/ads/os-turn/boost"
-	boostOTPPath   = "POST /api/v1/internal/ads/os-turn/boost-otp"
+	boostPath       = "POST /api/v1/internal/ads/os-turn/boost"
+	runAdsPlanPathT = "POST " + runAdsPlanPath
+	runAdsPathT     = "POST " + runAdsPath
+	runAdsOTPPathT  = "POST " + runAdsOTPPath
 )
 
 func (f *mediaFixture) callsTo(path string) []studioCall {
@@ -54,80 +55,90 @@ func (f *mediaFixture) postedAd(t *testing.T) (*osrun.Run, WhatsAppAskResponse) 
 	return run, f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnApprovePost)
 }
 
-const quoteOK = `{"quote":{"currency":"KES","budget":3000,"days":7,"shortfall":1000,"launch_credits":10,"ad_account_id":"act_42","account_name":"Boi Ads"},
-"objective":"whatsapp","ad_account":"Boi Ads","page":"Boi Page","ready":true}`
+const planOK = `{"text":"Ad plan for 7 days, total KES 21,000:\n\nMeta: KES 3,000 a day, boosted automatically","ready":true,"fingerprint":"fp-1"}`
 
-// Boost it fetches a quote only; Confirm boost launches exactly the quoted boost as the user, once.
-func TestBoostFromWhatsApp(t *testing.T) {
+// Run ads fetches the plan only; Confirm and run ads runs exactly that plan (its fingerprint) as
+// the user, once.
+func TestRunAdsFromWhatsApp(t *testing.T) {
 	f := newMediaFixture(t)
-	f.studio.replies[boostQuotePath] = studioReply{http.StatusOK, quoteOK}
-	f.studio.replies[boostPath] = studioReply{http.StatusCreated, `{"id":"camp-1","status":"launching","quote":{"shortfall":1000,"currency":"KES","ad_account_id":"act_42"}}`}
+	f.studio.replies[runAdsPlanPathT] = studioReply{http.StatusOK, planOK}
+	f.studio.replies[runAdsPathT] = studioReply{http.StatusCreated, `{"text":"Meta: Meta boost created.\n\nTikTok: follow the steps"}`}
 	run, posted := f.postedAd(t)
-	if !strings.Contains(posted.Reply, "Boi Page (facebook)") {
+	if !strings.Contains(posted.Reply, "Boi Page (facebook)") || !strings.Contains(posted.Reply, "ad plan") {
 		t.Fatalf("post reply: %+v", posted)
 	}
-	boost := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
-	if q := f.callsTo(boostQuotePath); len(q) != 1 || q[0].Body["version_id"] != "version-1" || q[0].Body["user_id"] != "user-1" || q[0].Key != "int-key" {
-		t.Fatalf("quote calls: %+v", q)
+	plan := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
+	if q := f.callsTo(runAdsPlanPathT); len(q) != 1 || q[0].Body["version_id"] != "version-1" || q[0].Body["user_id"] != "user-1" || q[0].Key != "int-key" {
+		t.Fatalf("plan calls: %+v", q)
 	}
-	if len(f.callsTo(boostPath)) != 0 {
-		t.Fatal("the Boost it tap must not launch anything")
+	if len(f.callsTo(runAdsPathT)) != 0 || len(f.callsTo(boostPath)) != 0 {
+		t.Fatal("the Run ads tap must not run anything")
 	}
-	if !strings.Contains(boost.Reply, "KES 3,000") || !strings.Contains(boost.Reply, "7 days") || !strings.Contains(boost.Reply, "KES 1,000 more") {
-		t.Fatalf("quote reply: %+v", boost)
+	if !strings.Contains(plan.Reply, "total KES 21,000") {
+		t.Fatalf("plan reply: %+v", plan)
 	}
-	confirm := buttonCode(t, boost, btnConfirmBoost)
+	confirm := buttonCode(t, plan, btnConfirmBoost)
 	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, confirm), btnConfirmBoost)
-	calls := f.callsTo(boostPath)
-	if len(calls) != 1 || calls[0].Body["budget"] != float64(3000) || calls[0].Body["days"] != float64(7) || calls[0].Body["user_id"] != "user-1" {
-		t.Fatalf("boost calls: %+v", calls)
+	calls := f.callsTo(runAdsPathT)
+	if len(calls) != 1 || calls[0].Body["fingerprint"] != "fp-1" || calls[0].Body["user_id"] != "user-1" {
+		t.Fatalf("run calls: %+v", calls)
 	}
-	if !strings.Contains(out.Reply, "paused until Meta approves") || !strings.Contains(out.Reply, "/boi/campaigns/camp-1") ||
-		!strings.Contains(out.Reply, "asset_id=42") {
-		t.Fatalf("launch reply: %+v", out)
+	if !strings.Contains(out.Reply, "Meta boost created") || !strings.Contains(out.Reply, "/boi/campaigns") {
+		t.Fatalf("run reply: %+v", out)
 	}
-	if again := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, confirm), btnConfirmBoost); len(f.callsTo(boostPath)) != 1 || !strings.Contains(again.Reply, "expired") {
-		t.Fatalf("a boost code works once: %+v", again)
+	if again := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, confirm), btnConfirmBoost); len(f.callsTo(runAdsPathT)) != 1 || !strings.Contains(again.Reply, "expired") {
+		t.Fatalf("a run code works once: %+v", again)
 	}
 }
 
-// Above the tenant's limit marketflow-api asks for its code; the next 6-digit reply launches the
-// boost with that code, and a wrong code keeps it waiting.
-func TestBoostNeedsCode(t *testing.T) {
+// Above the tenant's limit marketflow-api asks for its code; the next 6-digit reply runs the plan
+// with that code, and a wrong code keeps it waiting.
+func TestRunAdsNeedsCode(t *testing.T) {
 	f := newMediaFixture(t)
-	f.studio.replies[boostQuotePath] = studioReply{http.StatusOK, quoteOK}
-	f.studio.replies[boostPath] = studioReply{http.StatusPreconditionRequired, `{"error":"otp_required","code":"otp_required","threshold_kes":2000}`}
-	f.studio.replies[boostOTPPath] = studioReply{http.StatusOK, `{"otp_id":"otp-9","to_masked":"+2547****001"}`}
+	f.studio.replies[runAdsPlanPathT] = studioReply{http.StatusOK, planOK}
+	f.studio.replies[runAdsPathT] = studioReply{http.StatusPreconditionRequired, `{"error":"otp_required","code":"otp_required","threshold_kes":2000}`}
+	f.studio.replies[runAdsOTPPathT] = studioReply{http.StatusOK, `{"otp_id":"otp-9","to_masked":"+2547****001"}`}
 	run, posted := f.postedAd(t)
-	boost := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
-	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, boost, btnConfirmBoost)), btnConfirmBoost)
-	if len(f.callsTo(boostOTPPath)) != 1 || !strings.Contains(out.Reply, "+2547****001") {
+	plan := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
+	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, plan, btnConfirmBoost)), btnConfirmBoost)
+	if c := f.callsTo(runAdsOTPPathT); len(c) != 1 || c[0].Body["fingerprint"] != "fp-1" || !strings.Contains(out.Reply, "+2547****001") {
 		t.Fatalf("code request: %+v", out)
 	}
 
-	f.studio.replies[boostPath] = studioReply{http.StatusUnprocessableEntity, `{"error":"the code does not match","code":"otp_invalid"}`}
+	f.studio.replies[runAdsPathT] = studioReply{http.StatusUnprocessableEntity, `{"error":"the code does not match","code":"otp_invalid"}`}
 	if out := f.whatsApp(t, "111 111"); !strings.Contains(out.Reply, "does not match") {
 		t.Fatalf("wrong code: %+v", out)
 	}
-	f.studio.replies[boostPath] = studioReply{http.StatusCreated, `{"id":"camp-2","status":"launching","quote":{}}`}
+	f.studio.replies[runAdsPathT] = studioReply{http.StatusCreated, `{"text":"Google Ads: campaign created."}`}
 	out = f.whatsApp(t, "482 915")
-	calls := f.callsTo(boostPath)
+	calls := f.callsTo(runAdsPathT)
 	last := calls[len(calls)-1]
-	if last.Body["otp_id"] != "otp-9" || last.Body["otp_code"] != "482915" || !strings.Contains(out.Reply, "Boost created") {
-		t.Fatalf("launch with code: %+v %+v", last, out)
+	if last.Body["otp_id"] != "otp-9" || last.Body["otp_code"] != "482915" || !strings.Contains(out.Reply, "campaign created") {
+		t.Fatalf("run with code: %+v %+v", last, out)
 	}
-	if out := f.whatsApp(t, "482915"); strings.Contains(out.Reply, "Boost created") {
-		t.Fatalf("the wait ends once the boost went ahead: %+v", out)
+	if out := f.whatsApp(t, "482915"); strings.Contains(out.Reply, "campaign created") {
+		t.Fatalf("the wait ends once the plan ran: %+v", out)
 	}
 }
 
-// Paid ads switched off: the quote says so and nothing is offered to confirm.
-func TestBoostAdsDisabled(t *testing.T) {
+// A plan that cannot run yet is shown with what to fix, and nothing is offered to confirm; a plan
+// that changed before the confirm spends nothing.
+func TestRunAdsNotReadyAndChanged(t *testing.T) {
 	f := newMediaFixture(t)
-	f.studio.replies[boostQuotePath] = studioReply{http.StatusConflict, `{"error":"paid ads are not switched on yet","code":"ads_disabled"}`}
+	f.studio.replies[runAdsPlanPathT] = studioReply{http.StatusOK, `{"text":"Google Ads: To do first: Connect your Google Ads account","ready":false,"fingerprint":"fp-2"}`}
 	run, posted := f.postedAd(t)
 	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
-	if !strings.Contains(out.Reply, "not switched on") || out.Interactive != nil {
-		t.Fatalf("disabled: %+v", out)
+	if !strings.Contains(out.Reply, "Connect your Google Ads account") || out.Interactive != nil {
+		t.Fatalf("not ready: %+v", out)
+	}
+
+	g := newMediaFixture(t)
+	g.studio.replies[runAdsPlanPathT] = studioReply{http.StatusOK, planOK}
+	g.studio.replies[runAdsPathT] = studioReply{http.StatusConflict, `{"error":"the plan changed","code":"plan_changed"}`}
+	run, posted = g.postedAd(t)
+	plan := g.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
+	out = g.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, plan, btnConfirmBoost)), btnConfirmBoost)
+	if !strings.Contains(out.Reply, "changed since I sent it") || !strings.Contains(out.Reply, "nothing was spent") {
+		t.Fatalf("changed: %+v", out)
 	}
 }

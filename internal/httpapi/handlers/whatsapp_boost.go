@@ -21,9 +21,19 @@ import (
 // account, Page, the tenant's defaults) and runs the portal's own quote and boost checks; the
 // launch stays PAUSED until Meta's review and the funding.
 
+// Run ads (marketflow item 64, owner 2026-11-24): the Run ads tap now fetches the tenant's whole
+// ad plan (Meta, Google Ads, TikTok with budgets, days, total, funding and links) from
+// marketflow-api, and Confirm and run ads runs exactly that plan, bound by its fingerprint in the
+// approval code. A Confirm code issued before this change (no fingerprint) still launches the
+// Meta-only boost it quoted.
+
 const (
-	btnBoost        = "Boost it"
-	btnConfirmBoost = "Confirm boost"
+	btnBoost        = "Run ads"
+	btnConfirmBoost = "Confirm and run ads"
+	// The Run ads routes on marketflow-api.
+	runAdsPlanPath = "/api/v1/internal/ads/os-turn/run-ads-plan"
+	runAdsPath     = "/api/v1/internal/ads/os-turn/run-ads"
+	runAdsOTPPath  = "/api/v1/internal/ads/os-turn/run-ads-otp"
 	// boostOTPWait is how long a boost waits for marketflow-api's code (its code lasts 10 minutes).
 	boostOTPWait = 10 * time.Minute
 )
@@ -42,25 +52,6 @@ func (h *OSHandler) boostOffer(ctx context.Context, a *osrun.Approval) (code str
 	return code, true
 }
 
-// boostQuote is marketflow-api's quote for the default WhatsApp boost.
-type boostQuote struct {
-	Quote struct {
-		Currency      string   `json:"currency"`
-		Budget        int64    `json:"budget"`
-		Days          int      `json:"days"`
-		Shortfall     int64    `json:"shortfall"`
-		Funding       string   `json:"funding"`
-		LaunchCredits int      `json:"launch_credits"`
-		Blockers      []string `json:"blockers"`
-		AccountName   string   `json:"account_name"`
-		AccountID     string   `json:"ad_account_id"`
-	} `json:"quote"`
-	Objective string `json:"objective"`
-	AdAccount string `json:"ad_account"`
-	Page      string `json:"page"`
-	Ready     bool   `json:"ready"`
-}
-
 // boostRefusal is the reply for a refusal both boost steps share; ok is false for anything else.
 func boostRefusal(err error, studio string) (string, bool) {
 	var se *studioError
@@ -71,7 +62,11 @@ func boostRefusal(err error, studio string) (string, bool) {
 	case se.Code == "ads_disabled":
 		return "Paid boosts are not switched on for MarketFlow yet, so nothing was spent. Your post is still live.", true
 	case se.Code == "no_ad_account":
-		return "Connect your Meta ad account in MarketFlow first (Settings, Integrations), then tap Boost it again. Nothing was spent.", true
+		return "Connect your Meta ad account in MarketFlow first (Settings, Integrations), then tap " + btnBoost + " again. Nothing was spent.", true
+	case se.Code == "not_approved":
+		return "Approve the video first; ads run only for an approved video. Nothing was spent.", true
+	case se.Code == "run_ads_off":
+		return "Run ads is not available yet, so nothing was spent. Your post is still live.", true
 	case se.Code == "no_page":
 		return "Connect the Facebook Page the ad runs as in MarketFlow first (Settings, Integrations). Nothing was spent.", true
 	case se.Code == "no_video":
@@ -93,57 +88,48 @@ func money(v int64, currency string) string {
 	return s
 }
 
-func boostGoal(objective string) string {
-	if objective == "traffic" {
-		return "visits to your link"
-	}
-	return "WhatsApp messages to your business"
+// runAdsPlan is marketflow-api's default Run ads plan with its message.
+type runAdsPlan struct {
+	Text        string `json:"text"`
+	Ready       bool   `json:"ready"`
+	Fingerprint string `json:"fingerprint"`
 }
 
-// whatsAppBoostQuote answers Boost it: the quote, and a Confirm boost code for exactly that boost.
+// whatsAppBoostQuote answers Run ads: the tenant's ad plan, and a Confirm and run ads code bound
+// to exactly that plan.
 func (h *OSHandler) whatsAppBoostQuote(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, out *WhatsAppAskResponse) {
 	studio := link(req.PortalURL, req.TenantSlug, "/studio")
 	if h.studio == nil || a.VersionID == "" {
-		out.Reply = "I cannot boost that video from here. Boost it from the Studio: " + studio
+		out.Reply = "I cannot run ads for that video from here. Open Run ads in the Studio: " + studio
 		return
 	}
-	var q boostQuote
-	err := h.studio.internal(ctx, "/api/v1/internal/ads/os-turn/boost-quote", map[string]any{"tenant_id": tenantID.String(),
-		"user_id": a.UserID, "version_id": a.VersionID}, &q)
+	var p runAdsPlan
+	err := h.studio.internal(ctx, runAdsPlanPath, map[string]any{"tenant_id": tenantID.String(),
+		"user_id": a.UserID, "version_id": a.VersionID}, &p)
 	if err != nil {
 		if msg, ok := boostRefusal(err, studio); ok {
 			out.Reply = msg
 			return
 		}
-		h.logger.Warn("whatsapp boost quote failed", zap.String("run_id", a.RunID), zap.Error(err))
-		out.Reply = "I could not get a boost quote just now. Nothing was spent; try again in a minute or boost it from the Studio: " + studio
+		h.logger.Warn("whatsapp run ads plan failed", zap.String("run_id", a.RunID), zap.Error(err))
+		out.Reply = "I could not prepare the ad plan just now. Nothing was spent; try again in a minute or open Run ads in the Studio: " + studio
 		return
 	}
-	if !q.Ready {
-		out.Reply = "This boost cannot start yet: " + trimRunes(strings.Join(q.Quote.Blockers, "; "), 400) + ". Nothing was spent. Fix it in the Studio: " + studio
+	if !p.Ready || p.Fingerprint == "" {
+		out.Reply = trimRunes(p.Text, 3000) + "\n\nFix the points above, or change the plan, in the Studio: " + studio
 		return
 	}
 	code, err := h.codes.Issue(ctx, osrun.Approval{Action: osrun.ActionBoostLaunch, RunID: a.RunID, TenantID: a.TenantID,
-		UserID: a.UserID, Sender: a.Sender, VersionID: a.VersionID, BoostBudget: q.Quote.Budget, BoostDays: q.Quote.Days})
+		UserID: a.UserID, Sender: a.Sender, VersionID: a.VersionID, PlanFingerprint: p.Fingerprint})
 	if err != nil {
-		h.logger.Warn("boost launch code not issued", zap.String("run_id", a.RunID), zap.Error(err))
-		out.Reply = "I could not prepare the boost just now, so nothing was spent. Please try again in a minute."
+		h.logger.Warn("run ads code not issued", zap.String("run_id", a.RunID), zap.Error(err))
+		out.Reply = "I could not prepare the ad plan just now, so nothing was spent. Please try again in a minute."
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Boost for %d days with a budget of %s, aimed at %s.\nAd account: %s. Runs as: %s.",
-		q.Quote.Days, money(q.Quote.Budget, q.Quote.Currency), boostGoal(q.Objective), q.AdAccount, q.Page)
-	if q.Quote.Shortfall > 0 {
-		fmt.Fprintf(&b, "\nYour ad account needs %s more on Meta before the ad can run. You pay Meta directly (M-Pesa or card).", money(q.Quote.Shortfall, q.Quote.Currency))
-	}
-	if q.Quote.LaunchCredits > 0 {
-		fmt.Fprintf(&b, "\nMarketFlow's launch charge: %d credits.", q.Quote.LaunchCredits)
-	}
-	b.WriteString("\nThe ad starts paused and goes live once Meta approves it. To change the budget, days or audience, boost it from the Studio instead.")
-	text := b.String()
-	out.Reply = text + fmt.Sprintf("\n\nReply YES %s within %s to launch it. Studio: %s", code, minutes(h.codes.TTL()), studio)
+	text := trimRunes(p.Text, 900)
+	out.Reply = trimRunes(p.Text, 3000) + fmt.Sprintf("\n\nReply YES %s within %s to run it. Studio: %s", code, minutes(h.codes.TTL()), studio)
 	out.Interactive = &waInteractive{
-		Body: text + "\n\n" + approveLine(btnConfirmBoost, code, "launch it", q.Quote.LaunchCredits),
+		Body: text + "\n\n" + approveLine(btnConfirmBoost, code, "run this plan", 0),
 		Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, a.RunID, code), Title: btnConfirmBoost},
 			{ID: osrun.ReplyID(osrun.ReplyCancel, a.RunID, ""), Title: btnCancel}},
 	}
@@ -166,8 +152,12 @@ func metaBilling(adAccountID string) string {
 	return "https://business.facebook.com/billing_hub/payment_settings/?asset_id=" + strings.TrimPrefix(adAccountID, "act_")
 }
 
-// whatsAppBoostLaunch answers Confirm boost (and the code after it, when one was needed).
+// whatsAppBoostLaunch answers Confirm and run ads (and the code after it, when one was needed).
 func (h *OSHandler) whatsAppBoostLaunch(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, otpID, otpCode string, out *WhatsAppAskResponse) {
+	if a.PlanFingerprint != "" {
+		h.whatsAppRunAds(ctx, tenantID, req, a, otpID, otpCode, out)
+		return
+	}
 	studio := link(req.PortalURL, req.TenantSlug, "/studio")
 	if h.studio == nil || a.VersionID == "" || a.BoostBudget <= 0 || a.BoostDays <= 0 {
 		out.Reply = "I cannot launch that boost from here. Boost it from the Studio: " + studio
@@ -184,7 +174,7 @@ func (h *OSHandler) whatsAppBoostLaunch(ctx context.Context, tenantID uuid.UUID,
 	switch {
 	case err == nil:
 	case errors.As(err, &se) && se.Code == "otp_required":
-		h.askBoostOTP(ctx, tenantID, req, a, body, out)
+		h.askBoostOTP(ctx, tenantID, req, a, "/api/v1/internal/ads/os-turn/boost-otp", body, out)
 		return
 	case errors.As(err, &se) && se.Code == "otp_invalid":
 		out.Reply = "That confirmation code does not match, so nothing was spent. Check the code I sent and reply with it."
@@ -216,23 +206,67 @@ func (h *OSHandler) whatsAppBoostLaunch(ctx context.Context, tenantID uuid.UUID,
 	out.Reply = reply
 }
 
-// askBoostOTP asks marketflow-api to send the code a large boost needs and keeps the boost waiting.
-func (h *OSHandler) askBoostOTP(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, body map[string]any, out *WhatsAppAskResponse) {
+// whatsAppRunAds runs the plan the message showed (its fingerprint). marketflow-api refuses a plan
+// that changed since, and returns the first result when the plan already ran.
+func (h *OSHandler) whatsAppRunAds(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, otpID, otpCode string, out *WhatsAppAskResponse) {
+	studio := link(req.PortalURL, req.TenantSlug, "/studio")
+	if h.studio == nil || a.VersionID == "" {
+		out.Reply = "I cannot run that plan from here. Open Run ads in the Studio: " + studio
+		return
+	}
+	body := map[string]any{"tenant_id": tenantID.String(), "user_id": a.UserID, "version_id": a.VersionID,
+		"fingerprint": a.PlanFingerprint}
+	if otpID != "" {
+		body["otp_id"], body["otp_code"] = otpID, otpCode
+	}
+	var res struct {
+		Text string `json:"text"`
+	}
+	err := h.studio.internal(ctx, runAdsPath, body, &res)
+	var se *studioError
+	switch {
+	case err == nil:
+	case errors.As(err, &se) && se.Code == "otp_required":
+		h.askBoostOTP(ctx, tenantID, req, a, runAdsOTPPath, body, out)
+		return
+	case errors.As(err, &se) && se.Code == "otp_invalid":
+		out.Reply = "That confirmation code does not match, so nothing was spent. Check the code I sent and reply with it."
+		return
+	case errors.As(err, &se) && se.Code == "plan_changed":
+		h.codes.DropBoostOTP(ctx, tenantID.String(), a.UserID)
+		out.Reply = "The ad plan changed since I sent it (a budget, an account or the funding), so nothing was spent. Tap Run ads again for the new plan, or open it in the Studio: " + studio
+		return
+	default:
+		h.codes.DropBoostOTP(ctx, tenantID.String(), a.UserID)
+		if msg, ok := boostRefusal(err, studio); ok {
+			out.Reply = msg
+			return
+		}
+		h.logger.Warn("whatsapp run ads failed", zap.String("run_id", a.RunID), zap.Error(err))
+		out.Reply = "I could not run the ad plan just now. Nothing was spent; try again from the Studio: " + studio
+		return
+	}
+	h.codes.DropBoostOTP(ctx, tenantID.String(), a.UserID)
+	out.Reply = trimRunes(res.Text, 3000) + "\n\nFollow your campaigns here: " + link(req.PortalURL, req.TenantSlug, "/campaigns")
+}
+
+// askBoostOTP asks marketflow-api (path) to send the code a large plan needs and keeps it waiting.
+func (h *OSHandler) askBoostOTP(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, path string, body map[string]any, out *WhatsAppAskResponse) {
 	var sent struct {
 		OTPID    string `json:"otp_id"`
 		ToMasked string `json:"to_masked"`
 	}
 	delete(body, "otp_id")
 	delete(body, "otp_code")
-	err := h.studio.internal(ctx, "/api/v1/internal/ads/os-turn/boost-otp", body, &sent)
+	err := h.studio.internal(ctx, path, body, &sent)
 	var se *studioError
 	switch {
 	case err == nil && sent.OTPID != "":
 	case errors.As(err, &se) && se.Code == "otp_rate_limited":
-		out.Reply = "A confirmation code was just sent. Reply with it, or wait a moment and tap Confirm boost again. Nothing was spent."
+		out.Reply = "A confirmation code was just sent. Reply with it, or wait a moment and tap " + btnConfirmBoost + " again. Nothing was spent."
 		return
 	case errors.As(err, &se) && (se.Code == "no_verified_phone" || se.Status == http.StatusConflict):
-		out.Reply = "This boost needs a confirmation code sent to your verified WhatsApp number, and none is on your account. Verify it in MarketFlow, then try again. Nothing was spent."
+		out.Reply = "This needs a confirmation code sent to your verified WhatsApp number, and none is on your account. Verify it in MarketFlow, then try again. Nothing was spent."
 		return
 	default:
 		h.logger.Warn("boost confirmation code not sent", zap.String("run_id", a.RunID), zap.Error(err))
@@ -241,11 +275,11 @@ func (h *OSHandler) askBoostOTP(ctx context.Context, tenantID uuid.UUID, req wha
 	}
 	if err := h.codes.HoldBoostOTP(ctx, *a, sent.OTPID, boostOTPWait); err != nil {
 		h.logger.Warn("boost waiting for its code not kept", zap.String("run_id", a.RunID), zap.Error(err))
-		out.Reply = "I could not keep the boost waiting for its code, so nothing was spent. Please tap Confirm boost again."
+		out.Reply = "I could not keep the ads waiting for their code, so nothing was spent. Please tap " + btnConfirmBoost + " again."
 		return
 	}
 	out.Route = "otp"
-	out.Reply = fmt.Sprintf("This boost is above your confirmation limit, so I sent a 6-digit code to %s. Reply with it within %s to launch it. Nothing is spent until then.",
+	out.Reply = fmt.Sprintf("This is above your confirmation limit, so I sent a 6-digit code to %s. Reply with it within %s to go ahead. Nothing is spent until then.",
 		sent.ToMasked, minutes(boostOTPWait))
 }
 

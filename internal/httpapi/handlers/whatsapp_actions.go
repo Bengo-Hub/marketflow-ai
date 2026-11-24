@@ -196,9 +196,9 @@ func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req
 	out.Reply = posted + " Your posting calendar: " + calendar
 	// The paid boost is offered as its own step: the tap only fetches a quote (whatsapp_boost.go).
 	if code, ok := h.boostOffer(ctx, a); ok {
-		out.Reply += fmt.Sprintf("\n\nTo see what a paid boost of this ad costs, reply YES %s. Nothing is spent until you confirm the quote.", code)
+		out.Reply += fmt.Sprintf("\n\nTo see your ad plan for Meta, Google and TikTok (budgets, days, total and funding), reply YES %s. Nothing is spent until you confirm the plan.", code)
 		out.Interactive = &waInteractive{
-			Body:    posted + "\n\n" + approveLine(btnBoost, code, "see what a paid boost costs (nothing is spent until you confirm)", 0),
+			Body:    posted + "\n\n" + approveLine(btnBoost, code, "see your ad plan (nothing is spent until you confirm)", 0),
 			Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, a.RunID, code), Title: btnBoost}},
 		}
 	}
