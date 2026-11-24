@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/draw"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,8 @@ type StoryboardRequest struct {
 	// Screens are the screenshot rules and Screenshots the tenant's own screens (screens.go).
 	Screens     *ScreenRules
 	Screenshots []Screenshot
+	// Face is the consented person a new actor takes its look from (faces.go); nil for none.
+	Face *Face
 	// brand is the prepared placements (PrepareBranding).
 	brand *brandPlan
 }
@@ -101,6 +104,8 @@ type Actor struct {
 	// Gender is the actor's look ("male", "female" or "" when the description does not say).
 	// Later scripts give the presenter's lines to the matching voice (owner, 2026-11-14).
 	Gender string `json:"gender,omitempty"`
+	// FaceID is the consented person the actor was drawn from, or "" (faces.go).
+	FaceID string `json:"face_id,omitempty"`
 	// Logo, PlainURL and PlainKey: the presenter's still with the real logo on a banner behind
 	// them, and the still without it (branding.go).
 	Logo     *PlacedLogo `json:"logo,omitempty"`
@@ -163,7 +168,7 @@ func NewStoryboards(keys KeySource, store Store, posters *Posters, logger *zap.L
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Storyboards{router: NewRouter(StillRoutes), keys: keys, store: store, posts: posters, queue: newQueueClient(),
+	return &Storyboards{router: NewRouter(slices.Concat(StillRoutes, IdentityRoutes)), keys: keys, store: store, posts: posters, queue: newQueueClient(),
 		logger: logger.Named("media.storyboards"), endpoints: DefaultImageEndpoints()}
 }
 
@@ -238,12 +243,16 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			if p, ok := req.brand.placement("actor"); ok {
 				setting = strings.TrimSpace(setting + "; " + p.Surface)
 			}
-			url, key, route, cost, err := s.still(ctx, req, "actor", ActorPromptIn(req.Format, desc, setting))
+			face := ""
+			if req.Face != nil {
+				face = req.Face.ID
+			}
+			url, key, route, cost, faceID, err := s.actorStill(ctx, req, "actor", desc, setting, face)
 			if err != nil {
 				return nil, fmt.Errorf("media: actor still: %w", err)
 			}
 			res.Actor = &Actor{URL: url, Key: key, Prompt: desc, Seed: seedFor(req.VersionID, desc), Route: route,
-				Gender: ActorGender(desc)}
+				Gender: ActorGender(desc), FaceID: faceID}
 			res.CostUSD += cost
 		}
 	}
@@ -313,6 +322,14 @@ func (s *Storyboards) still(ctx context.Context, req StoryboardRequest, name, pr
 		// No premium still route can take it: the standard ones do.
 		routes = s.router.OrderPreferred(CapStill, TierStandard, 0, ok, prefer(ctx, ScenarioStill, TierStandard))
 	}
+	return s.draw(ctx, req, name, routes, func(ctx context.Context, rt Route) (string, error) {
+		return s.generate(ctx, rt, req.Format, prompt)
+	})
+}
+
+// draw tries routes in order, each making one image with gen, and stores the first that works.
+func (s *Storyboards) draw(ctx context.Context, req StoryboardRequest, name string, routes []Route,
+	gen func(ctx context.Context, rt Route) (string, error)) (url, key, route string, cost float64, err error) {
 	var lastErr error
 	for _, rt := range routes {
 		if ctx.Err() != nil {
@@ -325,7 +342,7 @@ func (s *Storyboards) still(ctx context.Context, req StoryboardRequest, name, pr
 			timeout = time.Duration(s) * time.Second
 		}
 		actx, cancel := context.WithTimeout(ctx, timeout)
-		src, rerr := s.generate(actx, rt, req.Format, prompt)
+		src, rerr := gen(actx, rt)
 		var data []byte
 		if rerr == nil {
 			img, derr := s.posts.download(actx, src)
@@ -371,6 +388,11 @@ func (s *Storyboards) generate(ctx context.Context, rt Route, format, prompt str
 	default:
 		return "", fmt.Errorf("media: no builder for route %s", rt.Key)
 	}
+	return s.runImage(ctx, rt, job, input)
+}
+
+// runImage runs an image job and returns its first picture's link.
+func (s *Storyboards) runImage(ctx context.Context, rt Route, job queueJob, input map[string]any) (string, error) {
 	var out imagesOut
 	if err := s.queue.run(ctx, job, input, &out); err != nil {
 		return "", err

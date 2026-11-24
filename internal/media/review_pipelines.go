@@ -136,7 +136,7 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 		var frames []ReviewFrame
 		if res.Actor != nil && res.Actor.URL != "" && res.Actor.Route != "" {
 			if img, err := s.posts.download(ctx, res.Actor.URL); err == nil {
-				frames = append(frames, ReviewFrame{Label: "actor", Image: img, Expect: res.Actor.Prompt})
+				frames = append(frames, ReviewFrame{Label: "actor", Image: img, Expect: actorExpect(res.Actor)})
 			}
 		}
 		for i, st := range res.Stills {
@@ -188,10 +188,13 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 			redrawn++
 			rep.Fixed = append(rep.Fixed, "still "+st.SceneID+" drawn again")
 		}
-		if res.Actor != nil && len(failing["actor"]) > 0 && res.Actor.Route != "" {
-			prompt := ActorPromptIn(req.Format, res.Actor.Prompt, presenterSetting(req.Scenes))
-			if url, key, route, cost, err := s.still(ctx, req, fmt.Sprintf("actor-r%d", round+1), prompt); err == nil && spent+cost <= set.StillRetryUSD+1e-9 {
-				res.Actor.URL, res.Actor.Key, res.Actor.Route = url, key, route
+		// An actor drawn from a consented face costs more than the usual retry budget, so it is only
+		// drawn again when the budget covers it.
+		affordable := res.Actor == nil || res.Actor.FaceID == "" || spent+IdentityRoutes[0].PriceUSD <= set.StillRetryUSD+1e-9
+		if res.Actor != nil && len(failing["actor"]) > 0 && res.Actor.Route != "" && affordable {
+			setting := presenterSetting(req.Scenes)
+			if url, key, route, cost, face, err := s.actorStill(ctx, req, fmt.Sprintf("actor-r%d", round+1), res.Actor.Prompt, setting, res.Actor.FaceID); err == nil && spent+cost <= set.StillRetryUSD+1e-9 {
+				res.Actor.URL, res.Actor.Key, res.Actor.Route, res.Actor.FaceID = url, key, route, face
 				spent += cost
 				res.CostUSD += cost
 				redrawn++

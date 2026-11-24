@@ -45,6 +45,9 @@ type RoutePolicy struct {
 	// before the next route is tried (setting "still_timeout_seconds", 30 to 600; owner 2026-11-24:
 	// fal queues ran past 60 s and failed whole storyboards).
 	StillTimeoutSeconds int `json:"still_timeout_seconds"`
+	// IdentityRoutes are the routes that may draw an actor from a consented person's picture, in
+	// order (setting "identity_routes", a JSON list; [] turns brand faces' route off; faces.go).
+	IdentityRoutes []string `json:"identity_routes"`
 }
 
 // DefaultStillTimeoutSeconds is only the fallback while the platform sets none.
@@ -80,6 +83,9 @@ func DefaultRoutePolicy() RoutePolicy {
 		PremiumBudgetUSD:    DefaultMaxVideoBudgetUSD,
 		MaxVideoUSD:         DefaultMaxVideoBudgetUSD,
 		StillTimeoutSeconds: DefaultStillTimeoutSeconds,
+		// fal's page for this edit route says it keeps "resemblance and consistency for up to 5
+		// people across edits" (read 2026-11-25).
+		IdentityRoutes: []string{"fal/nano-banana-pro"},
 	}
 }
 
@@ -120,10 +126,20 @@ func PolicyFromSettings(s map[string]string) RoutePolicy {
 	if v, err := strconv.Atoi(strings.TrimSpace(s["still_timeout_seconds"])); err == nil && v >= 30 && v <= 600 {
 		p.StillTimeoutSeconds = v
 	}
+	routeList(s["identity_routes"], &p.IdentityRoutes)
 	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > p.MaxVideoUSD {
 		p.PremiumBudgetUSD = p.MaxVideoUSD
 	}
 	return p
+}
+
+// routeList reads a JSON list of route keys over dst; an empty list is kept, an unset or unreadable
+// value keeps the default.
+func routeList(raw string, dst *[]string) {
+	var list []string
+	if raw = strings.TrimSpace(raw); raw != "" && json.Unmarshal([]byte(raw), &list) == nil && list != nil {
+		*dst = list
+	}
 }
 
 // preferredKeys is the routes a scenario and tier try first.

@@ -353,6 +353,9 @@ type storyboardRequest struct {
 	// Screens and Screenshots are the tenant's own screens for device scenes (creative.screens).
 	Screens     *media.ScreenRules `json:"screens"`
 	Screenshots []media.Screenshot `json:"screenshots"`
+	// Face is the consented person a new actor takes its look from; marketflow-api sends it only
+	// while the consent is live.
+	Face *media.Face `json:"face"`
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -387,7 +390,7 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
 		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place, Previous: req.PreviousStills, Branding: req.Branding,
-		Screens: req.Screens, Screenshots: req.Screenshots}
+		Screens: req.Screens, Screenshots: req.Screenshots, Face: req.Face}
 	if accent, err := parseHexColor(req.Accent); err == nil && strings.TrimSpace(req.Headline+req.CTA) != "" {
 		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}
 	}
