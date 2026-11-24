@@ -10,6 +10,7 @@ import (
 
 	"github.com/bengobox/marketflow-ai/internal/app"
 	"github.com/bengobox/marketflow-ai/internal/config"
+	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -64,6 +65,14 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	logger.Info("shutdown signal received")
+
+	// Running video jobs finish before Redis and the HTTP callback close (a deploy used to kill an
+	// owner's render mid-way, 2026-11-24). The pod's grace period is set above this bound.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), media.DrainTimeout)
+	if left := application.DrainJobs(drainCtx); left > 0 {
+		logger.Warn("video jobs still running at shutdown", zap.Int("jobs", left))
+	}
+	drainCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 	defer shutdownCancel()

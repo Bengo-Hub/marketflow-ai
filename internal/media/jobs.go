@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -130,6 +131,8 @@ const (
 	jobBudget    = 30 * time.Minute
 	jobStaleness = 35 * time.Minute // a "running" job older than this was lost
 	jobBeatEvery = 30 * time.Second
+	// DrainTimeout bounds the wait for running jobs on shutdown: the job budget and a minute.
+	DrainTimeout = jobBudget + time.Minute
 	jobBeatStale = 2 * time.Minute // four missed heartbeats: the pod stopped
 	maxJobs      = 3                // per pod: each holds a temp dir and an ffmpeg run
 )
@@ -139,6 +142,9 @@ type Jobs struct {
 	redis  *redis.Client
 	ns     string
 	slots  chan struct{}
+	// draining is set on shutdown: no new job starts here (marketflow-api re-queues it to
+	// another pod) while the running ones finish.
+	draining atomic.Bool
 	notify func(versionID string, job Job)
 	logger *zap.Logger
 	nowFn  func() time.Time
@@ -204,6 +210,9 @@ func (j *Jobs) Get(ctx context.Context, versionID string) (Job, bool, error) {
 // Reserve claims a slot before the caller charges, so a busy pod refuses
 // without taking credits. Release it with the returned func if Start is not called.
 func (j *Jobs) Reserve() (release func(), err error) {
+	if j.draining.Load() {
+		return nil, ErrJobsBusy
+	}
 	select {
 	case j.slots <- struct{}{}:
 		return func() { <-j.slots }, nil
@@ -343,4 +352,27 @@ func (j *Jobs) put(ctx context.Context, versionID string, s storedJob) error {
 		return err
 	}
 	return j.redis.Set(ctx, j.key(versionID), b, jobTTL).Err()
+}
+
+// Drain stops new jobs on this pod and waits until its running jobs finish or ctx ends. A deploy
+// sends SIGTERM; with the pod's grace period above the job budget, an owner's render completes
+// instead of dying with the old pod (2026-11-24). It reports how many jobs were still running.
+func (j *Jobs) Drain(ctx context.Context) int {
+	if j == nil {
+		return 0
+	}
+	j.draining.Store(true)
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		n := len(j.slots)
+		if n == 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return n
+		case <-t.C:
+		}
+	}
 }

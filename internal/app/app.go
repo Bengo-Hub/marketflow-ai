@@ -55,6 +55,8 @@ type App struct {
 	db         *sql.DB
 	redis      *redis.Client
 	httpServer *http.Server
+	// mediaJobs runs video jobs; Drain lets them finish on shutdown (nil without Redis).
+	mediaJobs *media.Jobs
 	// stopBackground ends the provider balance watcher and its NATS connection.
 	stopBackground func()
 }
@@ -462,6 +464,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// Provider balances feed every media pipeline's route choice and the platform
 	// owner's low-balance alerts, so the watcher runs whatever the storage state.
 	stopBackground := startBalanceWatch(cfg, resolver, redisClient, logger)
+	var mediaJobs *media.Jobs
 	switch {
 	case err != nil:
 		logger.Warn("object storage unavailable; posters disabled", zap.Error(err))
@@ -518,8 +521,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		storyboards := media.NewStoryboards(mediaKeySource(resolver), store, posters, logger).WithEndpoints(imageEndpoints)
 		// A settled job is pushed to marketflow-api's job callback; its renderer
 		// polls only when a callback is overdue.
-		osHandler.SetVideo(media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
-			WithNotify(media.NewJobCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)), clips, ads, storyboards)
+		mediaJobs = media.NewJobs(redisClient, cfg.Redis.Namespace, logger).
+			WithNotify(media.NewJobCallback(cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger))
+		osHandler.SetVideo(mediaJobs, clips, ads, storyboards)
 	}
 	// Higgsfield pushes finished jobs to this service (signed); polling is the fallback.
 	hfSecrets := higgsfieldWebhookSecrets(resolver)
@@ -715,6 +719,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		redis:          redisClient,
 		httpServer:     server,
 		stopBackground: stopBackground,
+		mediaJobs:      mediaJobs,
 	}
 	return app, nil
 }
@@ -738,4 +743,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 		shutdownErr = err
 	}
 	return shutdownErr
+}
+
+// DrainJobs stops new video jobs and waits for the running ones (bounded by ctx). Call it before
+// Shutdown: the jobs need Redis and the HTTP callback, which Shutdown closes.
+func (a *App) DrainJobs(ctx context.Context) int {
+	return a.mediaJobs.Drain(ctx)
 }

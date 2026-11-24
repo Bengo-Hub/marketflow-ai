@@ -69,3 +69,35 @@ func TestHeartbeatKeepsALongJobAlive(t *testing.T) {
 		t.Fatalf("finished job %+v", job)
 	}
 }
+
+// Drain refuses new jobs and waits for the running one (a deploy no longer kills a render).
+func TestDrainWaitsForRunningJobsAndRefusesNewOnes(t *testing.T) {
+	mr := miniredis.RunT(t)
+	j := NewJobs(redis.NewClient(&redis.Options{Addr: mr.Addr()}), "test", zap.NewNop())
+	release, err := j.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := make(chan struct{})
+	if err := j.Start("v4", 0, 1, "", release, nil, func(ctx context.Context) (*MediaResult, error) {
+		<-block
+		return &MediaResult{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan int)
+	go func() { drained <- j.Drain(context.Background()) }()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := j.Reserve(); err != ErrJobsBusy {
+		t.Fatalf("a draining pod took a new job: %v", err)
+	}
+	close(block)
+	if left := <-drained; left != 0 {
+		t.Fatalf("%d jobs left", left)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if n := (*Jobs)(nil).Drain(ctx); n != 0 {
+		t.Fatalf("nil runner drained %d", n)
+	}
+}
