@@ -90,6 +90,21 @@ type Job struct {
 type storedJob struct {
 	Job
 	ChargeKey string `json:"charge_key"`
+	// Beat is the last heartbeat of a running job (every jobBeatEvery). A job whose pod stopped
+	// (a deploy, an OOM kill) stops beating, so it is known lost in minutes, not at jobStaleness.
+	Beat time.Time `json:"beat,omitempty"`
+}
+
+// lost reports a running job whose pod stopped: no heartbeat for jobBeatStale, or, for a job
+// saved before heartbeats existed, older than jobStaleness.
+func (s storedJob) lost(now time.Time) bool {
+	if s.Status != JobRunning {
+		return false
+	}
+	if !s.Beat.IsZero() {
+		return now.Sub(s.Beat) > jobBeatStale
+	}
+	return now.Sub(s.StartedAt) > jobStaleness
 }
 
 // NextCharge returns the attempt and charge key a new start of this version
@@ -114,6 +129,8 @@ const (
 	// fallback route behind each one.
 	jobBudget    = 30 * time.Minute
 	jobStaleness = 35 * time.Minute // a "running" job older than this was lost
+	jobBeatEvery = 30 * time.Second
+	jobBeatStale = 2 * time.Minute // four missed heartbeats: the pod stopped
 	maxJobs      = 3                // per pod: each holds a temp dir and an ffmpeg run
 )
 
@@ -178,7 +195,7 @@ func (j *Jobs) Get(ctx context.Context, versionID string) (Job, bool, error) {
 		return Job{}, false, err
 	}
 	s.Job.ChargeKey = s.ChargeKey
-	if s.Status == JobRunning && j.nowFn().Sub(s.StartedAt) > jobStaleness {
+	if s.lost(j.nowFn()) {
 		s.Status, s.Error = JobFailed, "the video job stopped; it will be retried"
 	}
 	return s.Job, true, nil
@@ -200,7 +217,8 @@ func (j *Jobs) Reserve() (release func(), err error) {
 func (j *Jobs) Start(versionID string, credits, attempt int, chargeKey string, release func(), onFail func(chargeKey string),
 	work func(ctx context.Context) (*MediaResult, error)) error {
 	_, kind := JobVersion(versionID)
-	state := storedJob{Job: Job{Kind: kind, Status: JobRunning, CreditsCharged: credits, StartedAt: j.nowFn().UTC(), Attempt: attempt}, ChargeKey: chargeKey}
+	now := j.nowFn().UTC()
+	state := storedJob{Job: Job{Kind: kind, Status: JobRunning, CreditsCharged: credits, StartedAt: now, Attempt: attempt}, ChargeKey: chargeKey, Beat: now}
 	if err := j.put(context.Background(), versionID, state); err != nil {
 		release()
 		return err
@@ -209,7 +227,29 @@ func (j *Jobs) Start(versionID string, credits, attempt int, chargeKey string, r
 		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), jobBudget)
 		defer cancel()
+		// The heartbeat stops before the final state is saved, so it never overwrites it.
+		beatDone := make(chan struct{})
+		beatStopped := make(chan struct{})
+		go func() {
+			defer close(beatStopped)
+			t := time.NewTicker(jobBeatEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-beatDone:
+					return
+				case <-t.C:
+					beat := state
+					beat.Beat = j.nowFn().UTC()
+					if err := j.put(context.Background(), versionID, beat); err != nil {
+						j.logger.Warn("media job heartbeat not saved", zap.String("version_id", versionID), zap.Error(err))
+					}
+				}
+			}
+		}()
 		res, err := work(ctx)
+		close(beatDone)
+		<-beatStopped
 		if err != nil {
 			j.logger.Warn("media job failed", zap.String("version_id", versionID), zap.Error(err))
 			if onFail != nil && chargeKey != "" {
@@ -254,7 +294,7 @@ func (j *Jobs) RefundLost(ctx context.Context, jobID string, refund func(chargeK
 	switch {
 	case s.Status == JobDone, s.Refunded, s.ChargeKey == "":
 		return s.Job, true, nil
-	case s.Status == JobRunning && j.nowFn().Sub(s.StartedAt) <= jobStaleness:
+	case s.Status == JobRunning && !s.lost(j.nowFn()):
 		return s.Job, false, nil
 	}
 	if err := refund(s.ChargeKey); err != nil {
