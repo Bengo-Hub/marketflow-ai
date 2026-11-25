@@ -56,6 +56,10 @@ func (f *mediaFixture) finishedAd(t *testing.T) (*osrun.Run, string) {
 	run := f.approvedRun(t, osrun.ChannelWhatsApp)
 	run.BriefID, run.VersionID = "brief-1", "version-1"
 	_ = f.runs.Update(ctx, run)
+	if _, ok := f.studio.replies["POST "+postPlanPath]; !ok {
+		f.studio.replies["POST "+postPlanPath] = studioReply{http.StatusOK,
+			`{"text":"Post to:\n- Boi Page (Facebook), Mon 23 Nov 18:00\nMade with AI label: on","caption":"Shea butter\n\nWhatsApp: +254700000001\n\nhttps://mf.example/f/shea","fingerprint":"post-1"}`}
+	}
 	rec := post(f.h.WhatsAppNotify, map[string]any{"tenant_id": f.tenant.String(), "run_id": run.RunID, "version_id": "version-1",
 		"event": "render_done", "links": []string{"https://media.example/ad.mp4"}})
 	var msg whatsAppNotifyResponse
@@ -90,7 +94,7 @@ func TestApproveAndPostFromWhatsApp(t *testing.T) {
 	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnApprovePost)
 	calls := f.publishCalls()
 	if len(calls) != 1 || calls[0].Key != "int-key" || calls[0].Body["version_id"] != "version-1" || calls[0].Body["user_id"] != "user-1" ||
-		calls[0].Body["tenant_id"] != f.tenant.String() || calls[0].Body["sender"] != "+254700000001" {
+		calls[0].Body["tenant_id"] != f.tenant.String() || calls[0].Body["sender"] != "+254700000001" || calls[0].Body["fingerprint"] != "post-1" {
 		t.Fatalf("publish calls: %+v", calls)
 	}
 	if !strings.Contains(out.Reply, "Boi Page (facebook), @boi (instagram)") || !strings.Contains(out.Reply, "Not posted to Boi TikTok") ||
@@ -99,6 +103,87 @@ func TestApproveAndPostFromWhatsApp(t *testing.T) {
 	}
 	if out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnApprovePost); len(f.publishCalls()) != 1 || !strings.Contains(out.Reply, "expired") {
 		t.Fatalf("a publish code works once: %+v", out)
+	}
+}
+
+// finishedMessage is the finished ad's message with a ready ad plan.
+func (f *mediaFixture) finishedMessage(t *testing.T) (*osrun.Run, whatsAppNotifyResponse) {
+	t.Helper()
+	f.studio.replies[runAdsPlanPathT] = studioReply{http.StatusOK,
+		`{"text":"long","summary":"Ads: 7 days, total USD 70, cap USD 100\n- Meta (Africa Ads): USD 10 a day, for WhatsApp messages. Funding: Add USD 70 on Meta https://billing.example","ready":true,"fingerprint":"ads-1","platforms":["meta"]}`}
+	f.studio.replies["POST "+postPlanPath] = studioReply{http.StatusOK, `{"text":"Post to:\n- Boi Page (Facebook), now","caption":"Shea butter","fingerprint":"post-1"}`}
+	f.studio.replies["POST "+publishPath] = studioReply{http.StatusOK, `{"posted":[{"platform":"facebook","display_name":"Boi Page"}],"skipped":[]}`}
+	f.studio.replies[runAdsPathT] = studioReply{http.StatusCreated, `{"text":"Meta: boost created."}`}
+	run := f.approvedRun(t, osrun.ChannelWhatsApp)
+	rec := post(f.h.WhatsAppNotify, map[string]any{"tenant_id": f.tenant.String(), "run_id": run.RunID, "version_id": "version-1",
+		"event": "render_done", "links": []string{"https://media.example/ad.mp4"}})
+	var msg whatsAppNotifyResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &msg)
+	if msg.Interactive == nil || len(msg.Interactive.Buttons) != 3 {
+		t.Fatalf("message: %+v", msg)
+	}
+	return run, msg
+}
+
+// One message shows the post and the ad plan (caption, places, budgets, cap, goal, funding); its
+// Post and run ads posts and runs exactly those two plans, on the platforms shown.
+func TestPostAndRunAdsInOneApproval(t *testing.T) {
+	f := newMediaFixture(t)
+	run, msg := f.finishedMessage(t)
+	for _, want := range []string{"Shea butter", "Boi Page (Facebook), now", "total USD 70, cap USD 100", "for WhatsApp messages", "Add USD 70 on Meta https://billing.example"} {
+		if !strings.Contains(msg.Text, want) || !strings.Contains(msg.Interactive.Media[0].Caption+msg.Interactive.Body, want) {
+			t.Fatalf("%q missing: %+v", want, msg)
+		}
+	}
+	if len(f.callsTo(runAdsPathT)) != 0 || len(f.publishCalls()) != 0 {
+		t.Fatal("showing the message must do nothing")
+	}
+	if c := f.callsTo(runAdsPlanPathT); len(c) != 1 || c[0].Body["draft"] != true {
+		t.Fatalf("plan calls %+v", c)
+	}
+	code := buttonCode(t, WhatsAppAskResponse{Interactive: msg.Interactive}, btnPostRun)
+	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnPostRun)
+	if len(f.publishCalls()) != 1 || !strings.Contains(out.Reply, "Starting your ads") || len(f.callsTo(runAdsPathT)) != 0 {
+		t.Fatalf("post first, ads after the reply: %+v", out)
+	}
+	for _, fn := range f.queued {
+		fn()
+	}
+	calls := f.callsTo(runAdsPathT)
+	if len(calls) != 1 || calls[0].Body["fingerprint"] != "ads-1" || calls[0].Body["platforms"].([]any)[0] != "meta" {
+		t.Fatalf("run calls %+v", calls)
+	}
+}
+
+// Post only, tapped or typed, never spends.
+func TestPostOnlyNeverRunsAds(t *testing.T) {
+	for _, typed := range []bool{true, false} {
+		f := newMediaFixture(t)
+		run, msg := f.finishedMessage(t)
+		code := buttonCode(t, WhatsAppAskResponse{Interactive: msg.Interactive}, btnPostOnly)
+		if typed {
+			f.whatsApp(t, "POST "+code)
+		} else {
+			f.tap(t, osrun.ReplyID(osrun.ReplyPost, run.RunID, code), btnPostOnly)
+		}
+		for _, fn := range f.queued {
+			fn()
+		}
+		if len(f.publishCalls()) != 1 || len(f.callsTo(runAdsPathT)) != 0 {
+			t.Fatalf("typed %v: posts %d runs %d", typed, len(f.publishCalls()), len(f.callsTo(runAdsPathT)))
+		}
+	}
+}
+
+// A post that changed since is shown again with a new code; nothing is posted or spent.
+func TestPostPlanChangedAsksAgain(t *testing.T) {
+	f := newMediaFixture(t)
+	run, msg := f.finishedMessage(t)
+	f.studio.replies["POST "+publishPath] = studioReply{http.StatusConflict, `{"error":"changed","code":"plan_changed"}`}
+	code := buttonCode(t, WhatsAppAskResponse{Interactive: msg.Interactive}, btnPostRun)
+	out := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnPostRun)
+	if !strings.Contains(out.Reply, "changed since") || !strings.Contains(out.Reply, "Reply YES ") || len(f.queued) != 0 || strings.Contains(out.Reply, "YES "+code) {
+		t.Fatalf("again: %+v", out)
 	}
 }
 
@@ -131,7 +216,7 @@ func TestChangeOnFinishedAd(t *testing.T) {
 	f := newMediaFixture(t)
 	run, code := f.finishedAd(t)
 	out := f.tap(t, osrun.ReplyID(osrun.ReplyChange, run.RunID, ""), btnChange)
-	if out.Interactive == nil || len(out.Interactive.Buttons) != 1 || out.Interactive.Buttons[0].ID != osrun.ReplyID(osrun.ReplyYes, run.RunID, code) ||
+	if out.Interactive == nil || len(out.Interactive.Buttons) != 1 || out.Interactive.Buttons[0].ID != osrun.ReplyID(osrun.ReplyPost, run.RunID, code) ||
 		!strings.Contains(out.Reply, "reply POST "+code) {
 		t.Fatalf("change: %+v", out)
 	}

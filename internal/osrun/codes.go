@@ -20,8 +20,8 @@ import (
 const (
 	ActionApprove = "approve"
 	ActionRender  = "render"
-	// ActionPublish approves the finished ad and posts it to the business's connected accounts
-	// (organic only; a boost is its own step below).
+	// ActionPublish approves the finished ad and posts it to the business's connected accounts. With
+	// an ad plan on it, YES (or Post and run ads) also runs that plan; POST (or Post only) never does.
 	ActionPublish = "publish"
 	// ActionBoost (the Boost it tap under a posted ad) asks marketflow-api for the quote of the
 	// default boost; nothing is spent. ActionBoostLaunch (the Confirm boost tap under that quote)
@@ -47,7 +47,12 @@ type Approval struct {
 	Credits int `json:"credits,omitempty"`
 	// PlanFingerprint is the generation plan a render code approves (the plan the message showed);
 	// Studio refuses the render when the plan changed since.
+	// A publish code carries the ad plan its message showed ("" for a post only message).
 	PlanFingerprint string `json:"plan_fingerprint,omitempty"`
+	// PostFingerprint is the post a publish code approves and AdPlatforms the platforms its ad plan
+	// showed; marketflow-api refuses a post or an ad plan that changed since.
+	PostFingerprint string   `json:"post_fingerprint,omitempty"`
+	AdPlatforms     []string `json:"ad_platforms,omitempty"`
 	// Tier is the media tier an approval of a cheaper option makes instead of the run's own.
 	Tier string `json:"tier,omitempty"`
 	// Option names the cheaper option a code approves, for the messages ("" for the plan).
@@ -244,6 +249,11 @@ func (c *Codes) Cancel(ctx context.Context, tenantID, userID string) {
 // punctuation between, or the code alone after the word. "POST 1234" (and Swahili "chapisha")
 // is the typed form of Approve and post on a finished ad; the code decides what it does.
 var yesReply = regexp.MustCompile(`(?i)^\s*(yes|ndio|ndiyo|post|chapisha)[\s,.:;!-]*(\d*)\s*[.!]*\s*$`)
+
+var postReply = regexp.MustCompile(`(?i)^\s*(post|chapisha)\b`)
+
+// PostOnly reports a typed POST (or Swahili "chapisha"): post the ad, never spend on it.
+func PostOnly(text string) bool { return postReply.MatchString(text) }
 
 // ParseYes reads an approval reply. yes is true for a reply that is only the yes word and
 // maybe a number; code is the number when it has exactly 4 digits.

@@ -66,7 +66,7 @@ func (h *OSHandler) redeemApproval(ctx context.Context, r *http.Request, tenantI
 			if p.Action == osrun.ActionPublish {
 				out.Reply += fmt.Sprintf(" To post the current video, reply POST %s.", p.Code)
 				out.Interactive = &waInteractive{Body: fmt.Sprintf("That button has expired. Tap %s, or reply POST %s, to approve the current video and post it.", btnApprovePost, p.Code),
-					Buttons: publishButtons(p.RunID, p.Code)}
+					Buttons: publishButtons(p.RunID, p.Code, false)}
 			} else if p.Action == osrun.ActionRender {
 				out.Reply += fmt.Sprintf(" To make the current video, reply YES %s.", p.Code)
 				out.Interactive = &waInteractive{Body: "That button has expired. " + approveLine(btnMakeVideo, p.Code, "make the current video", p.Credits),
@@ -88,6 +88,10 @@ func (h *OSHandler) redeemApproval(ctx context.Context, r *http.Request, tenantI
 		h.logger.Warn("approval code check failed", zap.String("tenant_id", tenantID.String()), zap.Error(err))
 		out.Reply = "I could not check that code just now, so nothing was spent. Please try again in a minute."
 		return out
+	}
+	// Post only: the ad plan its message also showed is not part of this approval.
+	if a.Action == osrun.ActionPublish && (req.postOnly || (req.ReplyID == "" && osrun.PostOnly(req.Text))) {
+		a.PlanFingerprint, a.AdPlatforms = "", nil
 	}
 	// Above the spend threshold a one-time code comes first (whatsapp_actions.go).
 	h.afterApproval(ctx, r, tenantID, req, a, &out)
@@ -437,7 +441,7 @@ func (h *OSHandler) WhatsAppNotify(w http.ResponseWriter, r *http.Request) {
 		}
 		// Approve and post from WhatsApp (Sprint 17): the video, then Approve and post and Change,
 		// bound to a publish code like the plan's Approve.
-		text, offer, ok := h.publishOffer(ctx, run, req.VersionID, req.Links[0], studio)
+		text, offer, ok := h.publishOffer(ctx, tenantID, run, req.VersionID, req.Links[0], studio)
 		if !ok {
 			text = fmt.Sprintf("Your video ad is ready: %s\n\nApprove it, post it or change a scene in the Studio: %s", req.Links[0], studio)
 			offer = &waInteractive{Media: []waMedia{{Type: "video", Link: req.Links[0],
@@ -522,7 +526,7 @@ func (h *OSHandler) tapTenant(ctx context.Context, req approvalTenantRequest, re
 	case rep.Kind == osrun.ReplyField:
 		tid, _ := h.codes.ClarifyTenant(ctx, req.TenantIDs, req.UserID)
 		return tid
-	case rep.Kind == osrun.ReplyYes:
+	case rep.Kind == osrun.ReplyYes || rep.Kind == osrun.ReplyPost:
 		tid, _ := h.codes.Find(ctx, req.TenantIDs, req.UserID, req.Sender, rep.Code)
 		return tid
 	case rep.Kind == osrun.ReplyBuy:

@@ -211,6 +211,7 @@ func TestWhatsAppNotifyInteractive(t *testing.T) {
 		t.Fatalf("storyboard interactive: %+v", ia)
 	}
 
+	f.studio.replies["POST "+postPlanPath] = studioReply{http.StatusOK, `{"text":"Post to:\n- Boi Page (Facebook), now","caption":"Soap","fingerprint":"post-1"}`}
 	rec = post(f.h.WhatsAppNotify, map[string]any{"tenant_id": f.tenant.String(), "run_id": run.RunID, "version_id": "version-1",
 		"event": "render_done", "links": []string{"https://media.example/ad.mp4"}})
 	msg = whatsAppNotifyResponse{}

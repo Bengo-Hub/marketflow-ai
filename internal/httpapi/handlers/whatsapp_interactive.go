@@ -144,7 +144,8 @@ func (h *OSHandler) replyTap(ctx context.Context, r *http.Request, tenantID uuid
 		req.Text = cl.Text + "\n" + answer
 		req.SessionActive = true
 		return WhatsAppAskResponse{}, false
-	case osrun.ReplyYes:
+	case osrun.ReplyYes, osrun.ReplyPost:
+		req.postOnly = rep.Kind == osrun.ReplyPost
 		out = h.redeemApproval(ctx, r, tenantID, *req, rep.Code, rep.RunID)
 		return out, true
 	case osrun.ReplyAlt:
@@ -233,7 +234,7 @@ func (h *OSHandler) replyTap(ctx context.Context, r *http.Request, tenantID uuid
 			out.Reply += fmt.Sprintf("\n\nTo post the current video as it is, reply POST %s.", pending.Code)
 			out.Interactive = &waInteractive{
 				Body:    text + "\n\nTo post the current video as it is: " + fmt.Sprintf("tap %s, or reply POST %s.", btnApprovePost, pending.Code),
-				Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyYes, rep.RunID, pending.Code), Title: btnApprovePost}},
+				Buttons: []waBtn{{ID: osrun.ReplyID(osrun.ReplyPost, rep.RunID, pending.Code), Title: btnApprovePost}},
 			}
 		} else if sameRun {
 			out.Reply += fmt.Sprintf("\n\nWhen you are happy with it, reply YES %s to make the video.", pending.Code)

@@ -52,7 +52,7 @@ func (f *mediaFixture) postedAd(t *testing.T) (*osrun.Run, WhatsAppAskResponse) 
 	f.studio.replies["POST /api/v1/internal/creative/os-turn/publish"] = studioReply{http.StatusOK,
 		`{"posted":[{"platform":"facebook","display_name":"Boi Page"}],"skipped":[]}`}
 	run, code := f.finishedAd(t)
-	return run, f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, code), btnApprovePost)
+	return run, f.tap(t, osrun.ReplyID(osrun.ReplyPost, run.RunID, code), btnApprovePost)
 }
 
 const planOK = `{"text":"Ad plan for 7 days, total KES 21,000:\n\nMeta: KES 3,000 a day, boosted automatically","ready":true,"fingerprint":"fp-1"}`
@@ -68,7 +68,8 @@ func TestRunAdsFromWhatsApp(t *testing.T) {
 		t.Fatalf("post reply: %+v", posted)
 	}
 	plan := f.tap(t, osrun.ReplyID(osrun.ReplyYes, run.RunID, buttonCode(t, posted, btnBoost)), btnBoost)
-	if q := f.callsTo(runAdsPlanPathT); len(q) != 1 || q[0].Body["version_id"] != "version-1" || q[0].Body["user_id"] != "user-1" || q[0].Key != "int-key" {
+	// One draft plan with the finished ad's message, one for the Run ads tap.
+	if q := f.callsTo(runAdsPlanPathT); len(q) != 2 || q[1].Body["draft"] != nil || q[1].Body["version_id"] != "version-1" || q[1].Body["user_id"] != "user-1" || q[1].Key != "int-key" {
 		t.Fatalf("plan calls: %+v", q)
 	}
 	if len(f.callsTo(runAdsPathT)) != 0 || len(f.callsTo(boostPath)) != 0 {

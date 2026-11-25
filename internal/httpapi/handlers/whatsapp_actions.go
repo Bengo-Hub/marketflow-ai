@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -25,6 +27,8 @@ import (
 // Button titles (Meta allows 20 characters).
 const (
 	btnApprovePost = "Approve and post"
+	btnPostRun     = "Post and run ads"
+	btnPostOnly    = "Post only"
 	btnBuyPrefix   = "Buy "
 )
 
@@ -111,32 +115,119 @@ func (h *OSHandler) otpReplyMsg(ctx context.Context, r *http.Request, tenantID u
 
 // ── Approve and post the finished ad ────────────────────────────────────────
 
-// publishOffer is the message about a finished ad: the video, then Approve and post and Change.
-// It issues the publish code; ok is false when no code could be issued.
-func (h *OSHandler) publishOffer(ctx context.Context, run *osrun.Run, versionID, videoLink, studio string) (text string, ia *waInteractive, ok bool) {
-	code, err := h.codes.Issue(ctx, osrun.Approval{Action: osrun.ActionPublish, RunID: run.RunID, TenantID: run.TenantID,
-		UserID: run.UserID, Sender: run.Sender, VersionID: versionID})
+// postPlan is marketflow-api's post plan for a finished ad with its message.
+type postPlan struct {
+	Text        string `json:"text"`
+	Caption     string `json:"caption"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+const (
+	postPlanPath = "/api/v1/internal/creative/os-turn/post-plan"
+	publishPath  = "/api/v1/internal/creative/os-turn/publish"
+	// planTimeout bounds reading a plan (marketflow-api asks Meta and Google), and runTimeout
+	// running one.
+	planTimeout = 55 * time.Second
+	runTimeout  = 6 * time.Minute
+)
+
+// publishOffer is the one message that approves a finished ad (owner, 2026-11-25): the video with
+// its caption, where and when it posts, the AI label and, when the ad plan is ready, the budgets,
+// days, cap, goal and any funding warning. Every value comes from marketflow-api, the same rule the
+// Studio's dialogs use, and the code is bound to exactly this post and this ad plan. ok is false
+// when no code could be issued; the message then only points to the Studio.
+func (h *OSHandler) publishOffer(ctx context.Context, tenantID uuid.UUID, run *osrun.Run, versionID, videoLink, studio string) (text string, ia *waInteractive, ok bool) {
+	media := func(caption string) []waMedia {
+		return []waMedia{{Type: "video", Link: videoLink, Caption: trimRunes(caption, maxMediaCaption)}}
+	}
+	if h.studio == nil {
+		return "", nil, false
+	}
+	ids := map[string]any{"tenant_id": tenantID.String(), "user_id": run.UserID, "version_id": versionID}
+	var post postPlan
+	var ads runAdsPlan
+	var perr, aerr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		perr = h.studio.internalFor(ctx, planTimeout, postPlanPath, ids, &post)
+	}()
+	go func() {
+		defer wg.Done()
+		aerr = h.studio.internalFor(ctx, planTimeout, runAdsPlanPath, map[string]any{"tenant_id": tenantID.String(), "user_id": run.UserID,
+			"version_id": versionID, "draft": true}, &ads)
+	}()
+	wg.Wait()
+	if perr != nil || post.Fingerprint == "" {
+		// Nothing can be posted from here: say why, approve nothing.
+		var se *studioError
+		if errors.As(perr, &se) && se.Status < 500 && se.Message != "" {
+			text = fmt.Sprintf("Your video ad is ready: %s\n\nIt cannot be posted from here: %s. Open the Studio: %s", videoLink, trimRunes(se.Message, 300), studio)
+			return text, &waInteractive{Media: media("Your video ad is ready."), Body: "It cannot be posted from here: " + trimRunes(se.Message, 300) + ". Open the Studio: " + studio}, true
+		}
+		h.logger.Warn("post plan not read", zap.String("run_id", run.RunID), zap.Error(perr))
+		return "", nil, false
+	}
+	if aerr != nil {
+		h.logger.Info("ad plan not shown with the finished ad", zap.String("run_id", run.RunID), zap.Error(aerr))
+	}
+	// The plan is a button only when it can run and its whole summary fits the message.
+	summary := post.Text
+	if ads.Summary != "" {
+		summary += "\n\n" + ads.Summary
+	}
+	a := osrun.Approval{Action: osrun.ActionPublish, RunID: run.RunID, TenantID: run.TenantID, UserID: run.UserID, Sender: run.Sender,
+		VersionID: versionID, PostFingerprint: post.Fingerprint}
+	withAds := aerr == nil && ads.Ready && ads.Fingerprint != "" && ads.Summary != "" && len([]rune(summary)) <= maxApprovalSummary
+	if withAds {
+		a.PlanFingerprint, a.AdPlatforms = ads.Fingerprint, ads.Platforms
+	}
+	code, err := h.codes.Issue(ctx, a)
 	if err != nil {
 		h.logger.Warn("publish code not issued", zap.String("run_id", run.RunID), zap.Error(err))
 		return "", nil, false
 	}
-	text = fmt.Sprintf("Your video ad is ready: %s\n\nReply POST %s to approve it and post it to your connected accounts (no paid ads). The code works for %s. To change a scene, open the Studio: %s",
-		videoLink, code, minutes(h.codes.TTL()), studio)
-	ia = &waInteractive{
-		Media: []waMedia{{Type: "video", Link: videoLink, Caption: "Your video ad is ready."}},
-		Body: fmt.Sprintf("Tap %s, or reply POST %s, to approve it and post it to your connected accounts (no paid ads). To change a scene, tap %s.",
-			btnApprovePost, code, btnChange),
-		Buttons: publishButtons(run.RunID, code),
+	how := fmt.Sprintf("Reply POST %s to approve it and post it (no paid ads).", code)
+	tap := fmt.Sprintf("Tap %s, or reply POST %s, to post it without ads.", btnApprovePost, code)
+	if withAds {
+		how = fmt.Sprintf("Reply YES %s to approve it, post it and run these ads. "+how, code)
+		tap = fmt.Sprintf("Tap %s, or reply YES %s, to post it and run these ads. Reply POST %s to only post.", btnPostRun, code, code)
 	}
+	text = fmt.Sprintf("Your video ad is ready: %s\n\nCaption:\n%s\n\n%s\n\n%s The code works for %s. To change anything, open the Studio: %s",
+		videoLink, trimRunes(post.Caption, 2200), trimRunes(summary, 1300), how, minutes(h.codes.TTL()), studio)
+	body := summary
+	if !withAds && len([]rune(body)) > maxApprovalSummary {
+		body = post.Text
+	}
+	caption := "Your video ad is ready. Caption:\n" + post.Caption
+	// An approval covers exactly what its message showed: what does not fit the buttons message goes
+	// as text, with the whole caption and the typed codes.
+	if len([]rune(caption)) > maxMediaCaption || len([]rune(body)) > maxApprovalSummary {
+		return text, nil, true
+	}
+	ia =&waInteractive{Media: media(caption), Body: body + "\n\n" + tap, Buttons: publishButtons(run.RunID, code, withAds)}
 	return text, ia, true
 }
 
-// publishButtons are the finished ad's Approve and post and Change.
-func publishButtons(runID, code string) []waBtn {
-	return []waBtn{
-		{ID: osrun.ReplyID(osrun.ReplyYes, runID, code), Title: btnApprovePost},
-		{ID: osrun.ReplyID(osrun.ReplyChange, runID, ""), Title: btnChange},
+// Meta's limits: 1,024 characters for a media caption and for a message with buttons; the rest of
+// the body tells how to approve.
+const (
+	maxMediaCaption    = 1000
+	maxApprovalSummary = 860
+)
+
+// publishButtons are the finished ad's buttons: Post and run ads when its ad plan is shown, Approve
+// and post (never ads), and Change.
+func publishButtons(runID, code string, withAds bool) []waBtn {
+	out := []waBtn{}
+	if withAds {
+		out = append(out, waBtn{ID: osrun.ReplyID(osrun.ReplyYes, runID, code), Title: btnPostRun},
+			waBtn{ID: osrun.ReplyID(osrun.ReplyPost, runID, code), Title: btnPostOnly})
+	} else {
+		out = append(out, waBtn{ID: osrun.ReplyID(osrun.ReplyPost, runID, code), Title: btnApprovePost})
 	}
+	return append(out, waBtn{ID: osrun.ReplyID(osrun.ReplyChange, runID, ""), Title: btnChange})
 }
 
 // publishResult is marketflow-api's answer to a WhatsApp approve and post.
@@ -162,10 +253,13 @@ func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req
 		out.Reply = "I cannot post that video from here. Open the Studio to approve and post it: " + studio
 		return
 	}
-	res, err := h.studio.publishFromWhatsApp(ctx, tenantID, a.VersionID, a.UserID, a.RunID, a.Sender)
+	res, err := h.studio.publishFromWhatsApp(ctx, tenantID, a)
 	var se *studioError
 	switch {
 	case err == nil:
+	case errors.As(err, &se) && se.Code == "plan_changed":
+		h.offerAgain(ctx, tenantID, req, a, out)
+		return
 	case errors.As(err, &se) && se.Code == "no_accounts":
 		out.Reply = "Approved. You have no connected account that can take the post yet, so nothing was posted. Connect Facebook, Instagram, TikTok or YouTube in MarketFlow, then post it from the Studio: " + studio
 		return
@@ -194,6 +288,19 @@ func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req
 	}
 	posted := b.String()
 	out.Reply = posted + " Your posting calendar: " + calendar
+	// The ad plan the same message showed and approved: it runs in the background (creating the
+	// campaigns takes longer than a reply), with marketflow-api's own gates (its fingerprint, the
+	// code above the tenant's limit, the caps), and the result comes back as its own message.
+	if a.PlanFingerprint != "" {
+		out.Reply += "\n\nStarting your ads now; I'll tell you here what happened."
+		approval := *a
+		h.inBackground(func(bg context.Context) {
+			var res WhatsAppAskResponse
+			h.whatsAppRunAds(bg, tenantID, req, &approval, "", "", &res)
+			h.tellFailure(bg, tenantID, approval.RunID, approval.VersionID, res.Reply)
+		})
+		return
+	}
 	// The paid boost is offered as its own step: the tap only fetches a quote (whatsapp_boost.go).
 	if code, ok := h.boostOffer(ctx, a); ok {
 		out.Reply += fmt.Sprintf("\n\nTo see your ad plan for Meta, Google and TikTok (budgets, days, total and funding), reply YES %s. Nothing is spent until you confirm the plan.", code)
@@ -204,13 +311,31 @@ func (h *OSHandler) whatsAppPublish(ctx context.Context, tenantID uuid.UUID, req
 	}
 }
 
-// publishFromWhatsApp asks marketflow-api to approve the version and post it organically to every
-// connected account that can take it, as the user who approved it on WhatsApp.
-func (c *studioClient) publishFromWhatsApp(ctx context.Context, tenantID uuid.UUID, versionID, userID, runID, sender string) (*publishResult, error) {
+// offerAgain shows the finished ad's message again, as it is now: what was approved has changed
+// (an account, a time, the caption), so nothing was posted or spent.
+func (h *OSHandler) offerAgain(ctx context.Context, tenantID uuid.UUID, req whatsAppAskRequest, a *osrun.Approval, out *WhatsAppAskResponse) {
+	studio := link(req.PortalURL, req.TenantSlug, "/studio")
+	const changed = "Something changed since I sent that message, so nothing was posted or spent. "
+	run := &osrun.Run{RunID: a.RunID, TenantID: a.TenantID, UserID: a.UserID, Sender: a.Sender}
+	text, _, ok := h.publishOffer(ctx, tenantID, run, a.VersionID, studio, studio)
+	if !ok {
+		out.Reply = changed + "Open the Studio to check and post it: " + studio
+		return
+	}
+	// The whole caption and plan go as text with the typed codes: the buttons message has no room
+	// for the caption, which is part of what is approved.
+	out.Reply = changed + "Here it is now.\n\n" + text
+}
+
+// publishFromWhatsApp asks marketflow-api to approve the version and post it exactly as the plan the
+// message showed, as the user who approved it on WhatsApp.
+func (c *studioClient) publishFromWhatsApp(ctx context.Context, tenantID uuid.UUID, a *osrun.Approval) (*publishResult, error) {
 	var out publishResult
-	err := c.internal(ctx, "/api/v1/internal/creative/os-turn/publish", map[string]string{"tenant_id": tenantID.String(),
-		"version_id": versionID, "user_id": userID, "run_id": runID, "sender": sender}, &out)
-	if err != nil {
+	body := map[string]string{"tenant_id": tenantID.String(), "version_id": a.VersionID, "user_id": a.UserID, "run_id": a.RunID, "sender": a.Sender}
+	if a.PostFingerprint != "" {
+		body["fingerprint"] = a.PostFingerprint
+	}
+	if err := c.internalFor(ctx, planTimeout, publishPath, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -219,6 +344,15 @@ func (c *studioClient) publishFromWhatsApp(ctx context.Context, tenantID uuid.UU
 // internal posts to a marketflow-api /internal route with the internal service key and reads a
 // refusal like a Studio one.
 func (c *studioClient) internal(ctx context.Context, path string, body, out any) error {
+	return c.internalFor(ctx, 0, path, body, out)
+}
+
+// internalFor is internal with its own time limit (0 keeps the client's).
+func (c *studioClient) internalFor(ctx context.Context, limit time.Duration, path string, body, out any) error {
+	hc := c.http
+	if limit > 0 {
+		hc = &http.Client{Transport: c.http.Transport, Timeout: limit}
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -229,7 +363,7 @@ func (c *studioClient) internal(ctx context.Context, path string, body, out any)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.eventsKey)
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("studio %s: %w", path, err)
 	}

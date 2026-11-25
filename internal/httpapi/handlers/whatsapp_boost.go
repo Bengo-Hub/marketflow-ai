@@ -90,9 +90,12 @@ func money(v int64, currency string) string {
 
 // runAdsPlan is marketflow-api's default Run ads plan with its message.
 type runAdsPlan struct {
-	Text        string `json:"text"`
-	Ready       bool   `json:"ready"`
-	Fingerprint string `json:"fingerprint"`
+	Text string `json:"text"`
+	// Summary is the plan in a few lines, for a message with buttons.
+	Summary     string   `json:"summary"`
+	Ready       bool     `json:"ready"`
+	Fingerprint string   `json:"fingerprint"`
+	Platforms   []string `json:"platforms"`
 }
 
 // whatsAppBoostQuote answers Run ads: the tenant's ad plan, and a Confirm and run ads code bound
@@ -104,7 +107,7 @@ func (h *OSHandler) whatsAppBoostQuote(ctx context.Context, tenantID uuid.UUID, 
 		return
 	}
 	var p runAdsPlan
-	err := h.studio.internal(ctx, runAdsPlanPath, map[string]any{"tenant_id": tenantID.String(),
+	err := h.studio.internalFor(ctx, planTimeout, runAdsPlanPath, map[string]any{"tenant_id": tenantID.String(),
 		"user_id": a.UserID, "version_id": a.VersionID}, &p)
 	if err != nil {
 		if msg, ok := boostRefusal(err, studio); ok {
@@ -120,13 +123,18 @@ func (h *OSHandler) whatsAppBoostQuote(ctx context.Context, tenantID uuid.UUID, 
 		return
 	}
 	code, err := h.codes.Issue(ctx, osrun.Approval{Action: osrun.ActionBoostLaunch, RunID: a.RunID, TenantID: a.TenantID,
-		UserID: a.UserID, Sender: a.Sender, VersionID: a.VersionID, PlanFingerprint: p.Fingerprint})
+		UserID: a.UserID, Sender: a.Sender, VersionID: a.VersionID, PlanFingerprint: p.Fingerprint,
+		AdPlatforms: p.Platforms})
 	if err != nil {
 		h.logger.Warn("run ads code not issued", zap.String("run_id", a.RunID), zap.Error(err))
 		out.Reply = "I could not prepare the ad plan just now, so nothing was spent. Please try again in a minute."
 		return
 	}
-	text := trimRunes(p.Text, 900)
+	text := p.Text
+	if len([]rune(text)) > 900 && p.Summary != "" {
+		text = p.Summary // every amount, account and goal in fewer words
+	}
+	text = trimRunes(text, 900)
 	out.Reply = trimRunes(p.Text, 3000) + fmt.Sprintf("\n\nReply YES %s within %s to run it. Studio: %s", code, minutes(h.codes.TTL()), studio)
 	out.Interactive = &waInteractive{
 		Body: text + "\n\n" + approveLine(btnConfirmBoost, code, "run this plan", 0),
@@ -216,13 +224,16 @@ func (h *OSHandler) whatsAppRunAds(ctx context.Context, tenantID uuid.UUID, req 
 	}
 	body := map[string]any{"tenant_id": tenantID.String(), "user_id": a.UserID, "version_id": a.VersionID,
 		"fingerprint": a.PlanFingerprint}
+	if len(a.AdPlatforms) > 0 {
+		body["platforms"] = a.AdPlatforms
+	}
 	if otpID != "" {
 		body["otp_id"], body["otp_code"] = otpID, otpCode
 	}
 	var res struct {
 		Text string `json:"text"`
 	}
-	err := h.studio.internal(ctx, runAdsPath, body, &res)
+	err := h.studio.internalFor(ctx, runTimeout, runAdsPath, body, &res)
 	var se *studioError
 	switch {
 	case err == nil:
@@ -258,7 +269,7 @@ func (h *OSHandler) askBoostOTP(ctx context.Context, tenantID uuid.UUID, req wha
 	}
 	delete(body, "otp_id")
 	delete(body, "otp_code")
-	err := h.studio.internal(ctx, path, body, &sent)
+	err := h.studio.internalFor(ctx, planTimeout, path, body, &sent)
 	var se *studioError
 	switch {
 	case err == nil && sent.OTPID != "":

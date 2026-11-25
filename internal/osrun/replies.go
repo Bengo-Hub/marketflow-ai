@@ -23,6 +23,7 @@ import (
 // Reply kinds.
 const (
 	ReplyYes     = "yes"     // approve: the quote's Approve, the storyboard's Make the video
+	ReplyPost    = "post"    // the finished ad's post without ads; its id carries the code like yes
 	ReplyCheaper = "cheaper" // the quote's Cheaper option
 	ReplyCancel  = "cancel"  // the quote's Cancel
 	ReplyChange  = "change"  // the storyboard's Change
@@ -54,10 +55,10 @@ type Reply struct {
 	Row   int
 }
 
-// ReplyID builds a button id. code is only used by ReplyYes.
+// ReplyID builds a button id. code is only used by ReplyYes and ReplyPost.
 func ReplyID(kind, runID, code string) string {
 	id := replyPrefix + kind + ":" + runID
-	if kind == ReplyYes && code != "" {
+	if (kind == ReplyYes || kind == ReplyPost) && code != "" {
 		id += ":" + code
 	}
 	return id
@@ -85,14 +86,14 @@ func ParseReply(id string) (Reply, bool) {
 			return Reply{}, false
 		}
 		return Reply{Kind: ReplyField, Field: parts[1], Row: n}, true
-	case ReplyYes:
+	case ReplyYes, ReplyPost:
 		if len(parts) != 3 || parts[1] == "" || len(parts[2]) != 4 {
 			return Reply{}, false
 		}
 		if _, err := strconv.Atoi(parts[2]); err != nil {
 			return Reply{}, false
 		}
-		return Reply{Kind: ReplyYes, RunID: parts[1], Code: parts[2]}, true
+		return Reply{Kind: parts[0], RunID: parts[1], Code: parts[2]}, true
 	case ReplyAlt:
 		if len(parts) != 3 || parts[1] == "" {
 			return Reply{}, false

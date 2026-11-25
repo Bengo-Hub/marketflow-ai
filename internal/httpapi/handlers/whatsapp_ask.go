@@ -69,6 +69,8 @@ type whatsAppAskRequest struct {
 	ReplyID string `json:"reply_id,omitempty"`
 	// SessionActive is true when the sender talked to the assistant in the last 30 minutes.
 	SessionActive bool `json:"session_active"`
+	// postOnly is a tapped Post only or a typed POST: the ad is posted and its ad plan never runs.
+	postOnly bool
 }
 
 // WhatsAppAskResponse is what marketflow-api's worker gets back. Reply is the text to send on
