@@ -151,6 +151,8 @@ type StoryboardResult struct {
 	Actor   *Actor  `json:"actor,omitempty"`
 	Stills  []Still `json:"stills"`
 	CostUSD float64 `json:"cost_usd"`
+	// FaceDrawn: a new actor was drawn from the request's face.
+	FaceDrawn bool `json:"-"`
 	// Review is what the self-review found and redrew (review.go).
 	Review *ReviewReport `json:"review,omitempty"`
 	// EndCardPreview is the end card as it will render: its still with our overlay drawn on it.
@@ -263,6 +265,7 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			res.Actor = &Actor{URL: url, Key: key, Prompt: desc, Seed: seedFor(req.VersionID, desc), Route: route,
 				Gender: ActorGender(desc), FaceID: faceID}
 			res.CostUSD += cost
+			res.FaceDrawn = faceID != ""
 		}
 	}
 

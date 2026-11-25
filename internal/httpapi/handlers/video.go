@@ -411,7 +411,7 @@ func (h *OSHandler) startJob(w http.ResponseWriter, r *http.Request, tenantID uu
 	if again {
 		// A storyboard made again (a new script, a redrawn actor) is a new attempt with its own charge.
 		attempt = max(prev.Attempt, 1) + 1
-		key = fmt.Sprintf("render:%s:%d", versionID, attempt)
+		key = restartKey(versionID, prev.Attempt)
 	}
 	chargeKey, credits := "", 0
 	if charge && h.credits != nil {
@@ -443,6 +443,11 @@ func (h *OSHandler) startJob(w http.ResponseWriter, r *http.Request, tenantID uu
 		return
 	}
 	writeJSON(w, http.StatusAccepted, media.Job{Status: media.JobRunning, CreditsCharged: credits, Attempt: attempt})
+}
+
+// restartKey is the charge key of a finished job made again.
+func restartKey(jobID string, prevAttempt int) string {
+	return fmt.Sprintf("render:%s:%d", jobID, max(prevAttempt, 1)+1)
 }
 
 // jobIDs parses the tenant and version ids every video request carries.

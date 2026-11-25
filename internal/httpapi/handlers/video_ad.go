@@ -177,14 +177,19 @@ func madeExtraCredits(quoted int, quotedUSD, madeUSD float64) int {
 // The balance was checked for them before they were made (Ad), so a refusal here is rare; it
 // is logged and the ad is kept.
 func (h *OSHandler) chargeAudioExtras(tenantID uuid.UUID, versionID, renderKey string, units int) int {
+	return h.chargeExtras(tenantID, versionID, renderKey, "Video ad sound and music", units)
+}
+
+// chargeExtras charges what a job made on top of its own price, under the job's second charge key.
+func (h *OSHandler) chargeExtras(tenantID uuid.UUID, versionID, renderKey, label string, units int) int {
 	if units <= 0 || h.credits == nil || renderKey == "" {
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	dec, err := h.spend(ctx, tenantID, int64(units), media.AudioChargeKey(renderKey), "Video ad sound and music")
+	dec, err := h.spend(ctx, tenantID, int64(units), media.AudioChargeKey(renderKey), label)
 	if err != nil || !dec.Allowed {
-		h.logger.Warn("video ad sound and music not charged", zap.String("version_id", versionID), zap.Int("credits", units), zap.Error(err))
+		h.logger.Warn("extras not charged", zap.String("label", label), zap.String("version_id", versionID), zap.Int("credits", units), zap.Error(err))
 		return 0
 	}
 	if dec.Exempt {
@@ -407,13 +412,39 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 		}
 		return reg.Credits(registry.Storyboard)
 	}
-	h.startJob(w, r, tenantID, media.StoryboardJobID(req.VersionID), req.Charge, price, "Storyboard",
+	// A presenter drawn from a consented face is charged on top, once drawn (owner, 2026-11-25): a
+	// face that is not drawn costs nothing. The balance must cover both before anything is made.
+	faceCredits := 0
+	if req.Charge && h.credits != nil && sreq.DrawsFace(r.Context()) {
+		reg := h.registry(r.Context())
+		base, err := price(reg)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "video price is not configured")
+			return
+		}
+		faceCredits = reg.CostCredits(media.IdentityRoutes[0].PriceUSD)
+		if bal := h.balance(r.Context(), tenantID); bal >= 0 && bal < base+faceCredits {
+			writeError(w, http.StatusPaymentRequired, "not enough AI credits for this storyboard with a brand face")
+			return
+		}
+	}
+	jobKey := media.StoryboardJobID(req.VersionID)
+	prev, found, _ := h.jobs.Get(r.Context(), jobKey)
+	_, chargeKey := media.NextCharge(jobKey, prev, found)
+	if found && prev.Status == media.JobDone {
+		chargeKey = restartKey(jobKey, prev.Attempt)
+	}
+	h.startJob(w, r, tenantID, jobKey, req.Charge, price, "Storyboard",
 		func(ctx context.Context) (*media.MediaResult, error) {
 			sb, err := h.storyboards.Make(ctx, sreq)
 			if err != nil {
 				return nil, err
 			}
-			return &media.MediaResult{Storyboard: sb, CostUSD: sb.CostUSD}, nil
+			res := &media.MediaResult{Storyboard: sb, CostUSD: sb.CostUSD}
+			if sb.FaceDrawn && sb.Actor != nil && sb.Actor.FaceID != "" {
+				res.AudioCredits = h.chargeExtras(tenantID, req.VersionID, chargeKey, "Brand face", faceCredits)
+			}
+			return res, nil
 		}, true) // a storyboard asked for again is made again (new script or actor)
 }
 

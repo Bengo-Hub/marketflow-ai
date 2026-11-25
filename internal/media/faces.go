@@ -31,6 +31,12 @@ type Face struct {
 	URL string `json:"url"`
 }
 
+// DrawsFace reports whether the storyboard will try to draw a new actor from a consented face.
+func (r StoryboardRequest) DrawsFace(ctx context.Context) bool {
+	return isPresenterKind(r.Kind) && r.Actor == nil && r.Face != nil && r.Face.ID != "" && httpLink(r.Face.URL) &&
+		len(Policy(ctx).IdentityRoutes) > 0
+}
+
 // facePrompt asks for the same person in the presenter's framing, as they really look.
 func facePrompt(format, setting string) string {
 	return ActorPromptIn(format, "the same adult as in the reference photo, in smart casual clothes", setting) +

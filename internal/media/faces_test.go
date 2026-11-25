@@ -23,6 +23,10 @@ func TestActorFromFace(t *testing.T) {
 		}
 		res, err := s.Make(context.Background(), StoryboardRequest{TenantID: [16]byte{1}, VersionID: "v1", Format: "1920x1080", Kind: AdPresenter,
 			Scenes: scenes, ActorPrompt: "a shop owner", Face: &Face{ID: "face-1", URL: "https://x/owner.jpg?sig=1"}})
+		draws := StoryboardRequest{Kind: AdPresenter, Face: &Face{ID: "face-1", URL: "https://x/a.jpg"}}.DrawsFace(context.Background())
+		if draws == (name == "off") {
+			t.Fatalf("%s: draws %v", name, draws)
+		}
 		SetPolicySource(nil)
 		if err != nil {
 			t.Fatal(name, err)
@@ -32,6 +36,10 @@ func TestActorFromFace(t *testing.T) {
 			if path != "fal-ai/nano-banana-pro/edit" && strings.Contains(fmt.Sprint(in), "owner.jpg") {
 				t.Fatalf("%s: the face went to %s", name, path)
 			}
+		}
+		// Only a drawn face is charged.
+		if res.FaceDrawn != (name == "on") {
+			t.Fatalf("%s: face drawn %v", name, res.FaceDrawn)
 		}
 		switch name {
 		case "on":

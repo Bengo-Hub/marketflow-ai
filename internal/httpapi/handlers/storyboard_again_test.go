@@ -61,6 +61,10 @@ func TestStoryboardIsMadeAgain(t *testing.T) {
 	if rec.Code != http.StatusAccepted || j.Attempt != 2 {
 		t.Fatalf("made again = %d attempt %d", rec.Code, j.Attempt)
 	}
+	// The extra charge of the new attempt uses that attempt's own key, refunded with it.
+	if k := restartKey(id, 1); k != "render:"+id+":2" {
+		t.Fatal(k)
+	}
 	waitDone()
 	if made != 2 {
 		t.Fatalf("made %d times", made)
