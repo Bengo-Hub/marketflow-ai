@@ -48,6 +48,9 @@ type RoutePolicy struct {
 	// IdentityRoutes are the routes that may draw an actor from a consented person's picture, in
 	// order (setting "identity_routes", a JSON list; [] turns brand faces' route off; faces.go).
 	IdentityRoutes []string `json:"identity_routes"`
+	// TextRoutes are the routes that render a few words well enough for a local cue (setting
+	// "text_routes", a JSON list; [] draws no cues; cues.go).
+	TextRoutes []string `json:"text_routes"`
 }
 
 // DefaultStillTimeoutSeconds is only the fallback while the platform sets none.
@@ -86,6 +89,9 @@ func DefaultRoutePolicy() RoutePolicy {
 		// fal's page for this edit route says it keeps "resemblance and consistency for up to 5
 		// people across edits" (read 2026-11-25).
 		IdentityRoutes: []string{"fal/nano-banana-pro"},
+		// The same page names "enhanced text rendering"; the pages of the cheaper still routes claim
+		// none, so they are not on the list until a test shows otherwise.
+		TextRoutes: []string{"fal/nano-banana-pro"},
 	}
 }
 
@@ -127,6 +133,7 @@ func PolicyFromSettings(s map[string]string) RoutePolicy {
 		p.StillTimeoutSeconds = v
 	}
 	routeList(s["identity_routes"], &p.IdentityRoutes)
+	routeList(s["text_routes"], &p.TextRoutes)
 	if p.PremiumBudgetUSD <= 0 || p.PremiumBudgetUSD > p.MaxVideoUSD {
 		p.PremiumBudgetUSD = p.MaxVideoUSD
 	}

@@ -88,6 +88,8 @@ type StoryboardRequest struct {
 	Screenshots []Screenshot
 	// Face is the consented person a new actor takes its look from (faces.go); nil for none.
 	Face *Face
+	// Cues are the local cue rules (cues.go); nil draws no cue.
+	Cues *CueRules
 	// brand is the prepared placements (PrepareBranding).
 	brand *brandPlan
 }
@@ -138,6 +140,10 @@ type Still struct {
 	// Screen is the tenant's own screenshot placed on a device in the still (screens.go). The scene
 	// is rendered as a still, never animated by a clip route.
 	Screen *PlacedScreen `json:"screen,omitempty"`
+	// Cue is the short writing the still carries (cues.go); the scene is rendered as a still too,
+	// because a clip route would smear it. plainPrompt is the prompt without it.
+	Cue         string `json:"cue,omitempty"`
+	plainPrompt string
 }
 
 // StoryboardResult is the approved-to-be storyboard.
@@ -168,7 +174,7 @@ func NewStoryboards(keys KeySource, store Store, posters *Posters, logger *zap.L
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Storyboards{router: NewRouter(slices.Concat(StillRoutes, IdentityRoutes)), keys: keys, store: store, posts: posters, queue: newQueueClient(),
+	return &Storyboards{router: NewRouter(slices.Concat(StillRoutes, IdentityRoutes, TextStillRoutes)), keys: keys, store: store, posts: posters, queue: newQueueClient(),
 		logger: logger.Named("media.storyboards"), endpoints: DefaultImageEndpoints()}
 }
 
@@ -195,11 +201,14 @@ func (s *Storyboards) Plan(req StoryboardRequest) (stills []Still, generated int
 				visual += ". In the scene: " + p.Surface
 			}
 			st.Prompt = StillPrompt(req.Format, req.Delivery, visual)
+			if c, ok := req.brand.cue(sc.ID); ok {
+				st.plainPrompt, st.Prompt, st.Cue = st.Prompt, withCue(st.Prompt, c), strings.TrimSpace(c.Text)
+			}
 			// A vouched still (no prompt) predates the planned banner, so it is drawn again.
 			// So does one whose screenshot the business has since removed or replaced.
 			planned, _ := req.brand.placement(sc.ID)
 			if p, ok := previousStill(req.Previous, sc.ID, st.Prompt); ok && !(placed && p.Prompt == "") &&
-				(p.Screen == nil) == (planned.ScreenID == "") && (p.Screen == nil || p.Screen.ID == planned.ScreenID) {
+				(p.Prompt != "" || p.Cue == st.Cue) && (p.Screen == nil) == (planned.ScreenID == "") && (p.Screen == nil || p.Screen.ID == planned.ScreenID) {
 				st.URL, st.Key, st.Route, st.Reused = p.URL, p.Key, p.Route, true
 				st.Logo, st.PlainURL, st.PlainKey, st.Screen = p.Logo, p.PlainURL, p.PlainKey, p.Screen
 				break
@@ -278,13 +287,12 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 		default:
 			continue
 		}
-		prompt := st.Prompt
 		wg.Add(1)
-		go func(st *Still, prompt string) {
+		go func(st *Still) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			url, key, route, cost, err := s.still(ctx, req, "sb-"+st.SceneID, prompt)
+			url, key, route, cost, err := s.sceneStill(ctx, req, "sb-"+st.SceneID, st)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -293,14 +301,16 @@ func (s *Storyboards) Make(ctx context.Context, req StoryboardRequest) (*Storybo
 			}
 			st.URL, st.Key, st.Route, st.CostUSD = url, key, route, cost
 			res.CostUSD += cost
-		}(st, prompt)
+		}(st)
 	}
 	wg.Wait()
 	if len(errs) > 0 {
 		return nil, errs[0]
 	}
 	// The self-review looks at the generated stills and the actor before the owner does.
-	s.reviewStills(ctx, req, res)
+	if err := s.settleCues(ctx, req, res, s.reviewStills(ctx, req, res)); err != nil {
+		return nil, err
+	}
 	// The real logo and screenshots go on the planned surfaces of the reviewed stills (branding.go).
 	if err := s.placeArt(ctx, req, res); err != nil {
 		return nil, err
@@ -385,6 +395,9 @@ func (s *Storyboards) generate(ctx context.Context, rt Route, format, prompt str
 	case "fal/seedream-v5-lite":
 		job = falJob(key, s.endpoints.SeedreamText)
 		input = map[string]any{"prompt": prompt, "image_size": seedreamSize(format), "num_images": 1}
+	case "fal/nano-banana-pro":
+		job = falJob(key, s.endpoints.NanoBananaPro)
+		input = map[string]any{"prompt": prompt, "aspect_ratio": aspectFor(format), "resolution": "2K", "output_format": "jpeg", "num_images": 1}
 	default:
 		return "", fmt.Errorf("media: no builder for route %s", rt.Key)
 	}

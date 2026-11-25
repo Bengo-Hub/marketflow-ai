@@ -123,10 +123,13 @@ func (p *Posters) reviewPoster(ctx context.Context, rt Route, req PosterRequest,
 
 // reviewStills reviews the storyboard's generated stills and the actor, and redraws the failing
 // ones while the retry budget allows. Photo frames are the business's own and are not redrawn.
-func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, res *StoryboardResult) {
+// It reports which scenes the last round looked at and found nothing high against.
+func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, res *StoryboardResult) (passed func(sceneID string) bool) {
+	seen, bad := map[string]bool{}, map[string][]ReviewIssue{}
+	passed = func(id string) bool { return seen[id] && len(bad[id]) == 0 }
 	r, set, on := reviewOn(ctx)
 	if !on {
-		return
+		return passed
 	}
 	rep := &ReviewReport{}
 	res.Review = rep
@@ -149,12 +152,16 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 					// The screenshot goes on after this review (placeArt), so the screen is blank on purpose.
 					expect = "a blank device screen, which is expected here. " + expect
 				}
+				if st.Cue != "" {
+					expect = cueExpect(st.Cue) + expect
+				}
 				frames = append(frames, ReviewFrame{Label: st.SceneID, Image: img, Expect: expect})
 			}
 		}
 		if len(frames) == 0 {
-			return
+			return passed
 		}
+		clear(seen)
 		v, err := r.Review(ctx, brief, frames)
 		rep.Rounds++
 		if err != nil {
@@ -164,14 +171,18 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 		}
 		rep.Model, rep.CostUSD, rep.Issues, rep.Passed = v.Model, rep.CostUSD+v.CostUSD, v.Issues, v.Pass
 		failing := highIssues(v)
+		bad = failing
+		for _, f := range frames {
+			seen[f.Label] = true
+		}
 		if v.Pass || round >= set.MaxRetries || len(failing) == 0 || !timeFor(ctx, minRetryTime) {
 			break
 		}
 		redrawn := 0
 		for i := range res.Stills {
 			st := &res.Stills[i]
-			if st.Source != StillGenerated || st.Reused || len(failing[st.SceneID]) == 0 {
-				continue
+			if st.Source != StillGenerated || st.Reused || len(failing[st.SceneID]) == 0 || st.Cue != "" {
+				continue // a cue that failed is drawn without it after the review (settleCues)
 			}
 			if spent+st.CostUSD > set.StillRetryUSD+1e-9 {
 				rep.Skipped = "the retry budget is used up"
@@ -211,6 +222,7 @@ func (s *Storyboards) reviewStills(ctx context.Context, req StoryboardRequest, r
 		}
 	}
 	rep.CostUSD += spent
+	return passed
 }
 
 // sceneIndex finds a scene by id, else falls back to i.
@@ -243,6 +255,9 @@ func (a *Ads) reviewVideo(ctx context.Context, req AdRequest, res *MediaResult, 
 			expect := reviewExpect(s)
 			if slices.Contains(req.StaticScenes, s.ID) {
 				expect = "voice-over scene with " + screenExpect(firstNonEmpty(sceneDevice(s), "device")) + ": " + sceneVisual(s)
+			}
+			if text := req.CueWords[s.ID]; text != "" {
+				expect = cueExpect(text) + reviewExpect(s)
 			}
 			frames = append(frames, ReviewFrame{Label: s.ID, Image: img, Expect: expect})
 		}

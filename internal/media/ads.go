@@ -174,6 +174,8 @@ type AdRequest struct {
 	// StaticScenes are the scenes whose still carries the tenant's own screenshot (screens.go): they
 	// are shown with a push-in, because a clip route would redraw the screen's writing.
 	StaticScenes []string
+	// CueWords is the short writing a still carries, by scene id (cues.go); such a scene is static too.
+	CueWords map[string]string
 	// Brand and Place tell the self-review whose ad it is and where the business is (review.go).
 	Brand string
 	Place string
@@ -485,7 +487,7 @@ func (a *Ads) Plan(ctx context.Context, req AdRequest) (AdPlan, error) {
 			sp.Work, sp.source = WorkStill, f.URL
 		}
 		sp.FrameURL = sp.source
-		static := f.Source == FrameGenerated && slices.Contains(req.StaticScenes, s.ID)
+		static := f.Source == FrameGenerated && (slices.Contains(req.StaticScenes, s.ID) || req.CueWords[s.ID] != "")
 		if isPresenterKind(req.Kind) && (s.Shot == ShotProduct || s.Shot == ShotBRoll) && !static {
 			sp.Work = WorkClip
 			sp.AvoidText = showsWriting(s.Visual)

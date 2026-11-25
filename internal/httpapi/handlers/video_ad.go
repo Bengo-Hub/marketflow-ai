@@ -55,10 +55,11 @@ func (h *OSHandler) adInput(w http.ResponseWriter, r *http.Request) (adRequest, 
 			cache[c.Hash] = c
 		}
 	}
+	req.Scenes = media.NeutralScenes(req.Scenes, req.Cues, req.PhotoURLs, req.FootageURLs, req.PhotoInfo)
 	areq := media.AdRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind, Tier: req.Tier,
 		Voice: req.Voice, Delivery: req.Delivery, Prefs: media.VoicePrefs{Gender: req.VoiceGender, Accent: req.VoiceAccent},
 		Language: req.Language, Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Footage: req.FootageURLs,
-		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, PlainStills: req.PlainStills, StaticScenes: req.StaticScenes, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
+		ActorURL: req.ActorURL, Seed: req.Seed, Stills: req.Stills, PlainStills: req.PlainStills, StaticScenes: req.StaticScenes, CueWords: req.CueWords, Cache: cache, Music: req.MusicCache, LogoURL: req.LogoURL, MusicURL: req.MusicURL,
 		Audio: h.audioLevel(r.Context(), tenantID), Mood: req.Mood, NoAILabel: req.noAILabel(),
 		EndCard: media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}}
 	areq.AutoPremium, areq.PremiumBudgetUSD = h.premiumDefault(r.Context(), tenantID)
@@ -356,6 +357,8 @@ type storyboardRequest struct {
 	// Face is the consented person a new actor takes its look from; marketflow-api sends it only
 	// while the consent is live.
 	Face *media.Face `json:"face"`
+	// Cues are the local cue rules (creative.local_cues).
+	Cues *media.CueRules `json:"local_cues"`
 }
 
 // Storyboard handles POST /api/v1/internal/creative/storyboard (service key): starts the
@@ -390,7 +393,8 @@ func (h *OSHandler) Storyboard(w http.ResponseWriter, r *http.Request) {
 	sreq := media.StoryboardRequest{TenantID: tenantID, VersionID: req.VersionID, Format: req.Format, Kind: req.Kind,
 		Scenes: req.Scenes, Photos: req.PhotoURLs, PhotoInfo: req.PhotoInfo, Actor: req.Actor, ActorPrompt: req.ActorPrompt, Delivery: req.Delivery,
 		Tier: h.premiumTier(r.Context(), tenantID, media.TierStandard), Brand: req.Brand, Place: req.Place, Previous: req.PreviousStills, Branding: req.Branding,
-		Screens: req.Screens, Screenshots: req.Screenshots, Face: req.Face}
+		Screens: req.Screens, Screenshots: req.Screenshots, Face: req.Face, Cues: req.Cues}
+	sreq.Scenes = media.NeutralScenes(sreq.Scenes, req.Cues, req.PhotoURLs, nil, req.PhotoInfo)
 	if accent, err := parseHexColor(req.Accent); err == nil && strings.TrimSpace(req.Headline+req.CTA) != "" {
 		sreq.EndCard = &media.Overlay{Headline: req.Headline, Subline: req.Subline, Price: req.Price, CTA: req.CTA, Contacts: req.Contacts, Accent: accent, Plate: req.LogoPlate}
 	}

@@ -266,6 +266,10 @@ type adRequest struct {
 	PlainStills map[string]string `json:"plain_stills"`
 	// StaticScenes carry the tenant's own screenshot and are shown as stills (screens.go).
 	StaticScenes []string `json:"static_scenes"`
+	// CueWords is the short writing a still carries, by scene id, and Cues the local cue rules
+	// (creative.local_cues; cues.go).
+	CueWords map[string]string `json:"cue_words"`
+	Cues     *media.CueRules   `json:"local_cues"`
 	// SceneCache is the scenes of earlier versions of this ad, reused when unchanged.
 	SceneCache []media.SceneCache `json:"scene_cache"`
 	// MusicCache is the generated music of the version this one was revised from.

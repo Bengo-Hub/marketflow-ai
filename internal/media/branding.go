@@ -453,6 +453,17 @@ type brandPlan struct {
 	logo       image.Image
 	screens    map[string]image.Image
 	placements map[string]Placement
+	// cues are the scenes that carry a short local cue (cues.go).
+	cues map[string]LocalCue
+}
+
+// cue is the local cue planned for a scene.
+func (b *brandPlan) cue(id string) (LocalCue, bool) {
+	if b == nil {
+		return LocalCue{}, false
+	}
+	c, ok := b.cues[id]
+	return c, ok
 }
 
 // put places the placement's picture (the logo or a screenshot) on the surface found.
@@ -501,6 +512,7 @@ func (s *Storyboards) PrepareBranding(ctx context.Context, req *StoryboardReques
 	bp := &brandPlan{placements: map[string]Placement{}}
 	s.prepareLogo(ctx, req, bp, isGenerated)
 	s.prepareScreens(ctx, req, bp, isGenerated)
+	s.prepareCues(ctx, req, bp, isGenerated)
 	req.brand = bp
 }
 
