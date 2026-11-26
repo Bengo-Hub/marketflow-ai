@@ -151,6 +151,9 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 
 	U := layoutUnit(W, H)
 	margin := U * 6 / 100
+	if pageOf(o.Contacts) != "" && !pageFits(W, H, o) {
+		o = o.withoutPage()
+	}
 	if o.Logo != nil {
 		// One logo helper for posters, motion posters, end cards and scene logos (logo_plate.go).
 		info := analyseLogo(o.Logo)
@@ -158,10 +161,31 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 		placeLogo(canvas, info, logoCorner(canvas, o, margin, U), margin, U, o.Plate)
 	}
 
+	drawWords(canvas, bold, reg, o)
+	return nil
+}
+
+// pageFits reports whether the words with the lead page stay below the logo's row at the top.
+func pageFits(W, H int, o Overlay) bool {
+	bold, reg, err := fonts()
+	if err != nil {
+		return false
+	}
+	scratch := image.NewRGBA(image.Rect(0, 0, W, H))
+	return drawWords(scratch, bold, reg, o) >= layoutUnit(W, H)*6/100+H/9
+}
+
+// drawWords lays the words out bottom-up: the lead page, the contacts, the call to action as words,
+// then price, subline and headline above it. Nothing is drawn as a button. It returns the top.
+func drawWords(canvas *image.RGBA, bold, reg *opentype.Font, o Overlay) int {
+	W, H := canvas.Bounds().Dx(), canvas.Bounds().Dy()
+	U := layoutUnit(W, H)
+	margin := U * 6 / 100
 	textW := W - 2*margin
-	// Lay out bottom-up: the contacts, the call to action as words, then price, subline and
-	// headline above it. Nothing is drawn as a button.
 	y := H - margin
+	if page := pageOf(o.Contacts); page != "" {
+		y = drawPage(canvas, reg, page, margin, y, textW, U, o.Accent)
+	}
 	if list := CleanContacts(o.Contacts); len(list) > 0 {
 		y = drawContacts(canvas, reg, list, margin, y, textW, U, o.Accent)
 		y -= H * 2 / 100
@@ -179,9 +203,9 @@ func drawOverlay(canvas *image.RGBA, o Overlay) error {
 		y -= H * 1 / 100
 	}
 	if head := strings.TrimSpace(o.Headline); head != "" {
-		drawBlock(canvas, bold, head, margin, y, textW, float64(U)/13, 3, color.White)
+		y = drawBlock(canvas, bold, head, margin, y, textW, float64(U)/13, 3, color.White)
 	}
-	return nil
+	return y
 }
 
 // EncodeJPEG encodes a poster for the feed (quality 88 keeps text sharp).

@@ -27,6 +27,7 @@ func overlayWords(o Overlay) string {
 	for _, c := range CleanContacts(o.Contacts) {
 		parts = append(parts, c.Value)
 	}
+	parts = append(parts, pageOf(o.Contacts))
 	return strings.Join(nonEmpty(parts), " | ")
 }
 
@@ -265,7 +266,11 @@ func (a *Ads) reviewVideo(ctx context.Context, req AdRequest, res *MediaResult, 
 	if img, err := a.asm.frameAt(ctx, res.URL, max(0, t-1)); err == nil {
 		frames = append(frames, ReviewFrame{Label: "end_card", Image: img, Expect: "the end card: the logo, the closing words and the contact details"})
 	}
-	v, err := r.Review(ctx, ReviewBrief{Kind: "video", Brand: req.Brand, Place: req.Place, Words: overlayWords(req.EndCard)}, frames)
+	card := req.EndCard
+	if size, ok := Formats[req.Format]; ok && !pageFits(size.X, size.Y, card) {
+		card = card.withoutPage() // it is not drawn either
+	}
+	v, err := r.Review(ctx, ReviewBrief{Kind: "video", Brand: req.Brand, Place: req.Place, Words: overlayWords(card)}, frames)
 	rep.Rounds = 1
 	if err != nil {
 		rep.Skipped = "the reviewer did not answer"

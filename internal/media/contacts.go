@@ -25,6 +25,9 @@ const (
 	ContactWeb      = "web"
 	ContactEmail    = "email"
 	ContactLink     = "link"
+	// ContactPage is the ad's lead page, on end cards only: one line of its own under the others
+	// (drawPage), whole or not at all.
+	ContactPage = "page"
 )
 
 // Contact is one real way to reach the business, drawn as an icon and its value.
@@ -65,6 +68,67 @@ func CleanContacts(list []Contact) []Contact {
 		}
 	}
 	return out
+}
+
+// pageOf is the lead page to draw, "" for none: it is left out when a contact already shows it.
+func pageOf(list []Contact) string {
+	trim := func(v string) string { return strings.ToLower(strings.TrimPrefix(v, "www.")) }
+	for _, c := range list {
+		if strings.ToLower(strings.TrimSpace(c.Kind)) != ContactPage {
+			continue
+		}
+		c.Kind = ContactWeb // cleaned like a web address
+		clean := CleanContacts([]Contact{c})
+		if len(clean) == 0 {
+			return ""
+		}
+		for _, o := range CleanContacts(list) {
+			if trim(o.Value) == trim(clean[0].Value) {
+				return ""
+			}
+		}
+		return clean[0].Value
+	}
+	return ""
+}
+
+// withoutPage is the overlay without its lead page.
+func (o Overlay) withoutPage() Overlay {
+	var keep []Contact
+	for _, c := range o.Contacts {
+		if strings.ToLower(strings.TrimSpace(c.Kind)) != ContactPage {
+			keep = append(keep, c)
+		}
+	}
+	o.Contacts = keep
+	return o
+}
+
+// minPageScale is how far the lead page's letters may shrink to fit in one line.
+const minPageScale = 0.7
+
+// drawPage draws the lead page on one line ending at bottom, smaller when it is long. An address cut
+// short would lead nowhere, so one that does not fit is not drawn; it returns the top.
+func drawPage(dst *image.RGBA, f *opentype.Font, page string, x, bottom, width, unit int, accent color.RGBA) int {
+	full := float64(unit) / 26
+	for size := full; size >= full*minPageScale; size *= 0.95 {
+		fc, err := face(f, size)
+		if err != nil {
+			return bottom
+		}
+		icon, gap, pad := int(size*1.35), int(size*0.45), int(size*0.55)
+		w := icon + gap + font.MeasureString(fc, page).Ceil()
+		if w > width {
+			continue
+		}
+		top := bottom - icon
+		fillRounded(dst, image.Rect(x-pad, top-pad/2, x+w+pad, bottom+pad/2), pad, color.RGBA{0, 0, 0, 0xb4})
+		drawContactIcon(dst, ContactPage, image.Rect(x, top, x+icon, bottom), accent)
+		d := &font.Drawer{Dst: dst, Src: image.NewUniform(color.White), Face: fc, Dot: fixed.P(x+icon+gap, top+icon/2+int(size*0.36))}
+		d.DrawString(page)
+		return top - pad
+	}
+	return bottom
 }
 
 // drawContacts lays the contacts out bottom-up from bottom, wrapping to a new line when the next
