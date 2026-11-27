@@ -1,7 +1,7 @@
-github.com/Bengo-Hub/auth-client v0.15.1 h1:lz3vQSew1gR+kJn5716muvKaauTgQkF8FnKpmdQuDps=
-github.com/Bengo-Hub/auth-client v0.15.1/go.mod h1:i+YzG6wPeBk/KXh+FSOdA1GPEhbcNB7E4FD2LB+tlqk=
-github.com/Bengo-Hub/cache v0.5.7 h1:lqB2kBiEdIOPzfzc0UiE9yq7SKfacXTQJRRY1RFA4xo=
-github.com/Bengo-Hub/cache v0.5.7/go.mod h1:E84NxTCaQD5/Z+9aFlFrg02E+EQaAfYP4UmzxRHgp2A=
+github.com/Bengo-Hub/auth-client v0.16.1 h1:b04mzQHBcO0Im7sZmZK3bmEQA/wYswHurQNsWs4Xv5o=
+github.com/Bengo-Hub/auth-client v0.16.1/go.mod h1:i+YzG6wPeBk/KXh+FSOdA1GPEhbcNB7E4FD2LB+tlqk=
+github.com/Bengo-Hub/cache v0.5.11 h1:sq4Oc5rnTHozz6mZp699rI/YUVj5zAn80K+czvb9y/o=
+github.com/Bengo-Hub/cache v0.5.11/go.mod h1:E84NxTCaQD5/Z+9aFlFrg02E+EQaAfYP4UmzxRHgp2A=
 github.com/Bengo-Hub/httpware v0.23.0 h1:5DsMVg04IWa4/KF/eAeNMgX59zkfhRwp5oOtt2LkOHI=
 github.com/Bengo-Hub/httpware v0.23.0/go.mod h1:DVl7z6zy4Zy0HZgDabwexmHrQSya1yFssci2Y40lYcI=
 github.com/Bengo-Hub/shared-events v0.11.0 h1:4ARROvi7hRDIM1iIFRxWVv2cryeOKj68LlbdPrwkN3Q=

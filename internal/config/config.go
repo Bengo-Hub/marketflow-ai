@@ -144,6 +144,10 @@ type AIConfig struct {
 	// Auth service for the request_integration agent tool (in-cluster DNS, not the public
 	// ingress -- this is a plain S2S call, not JWKS/token validation).
 	AuthAPIURL string `env:"AUTH_API_URL" envDefault:"http://auth-api.auth.svc.cluster.local:4000"`
+
+	// Notifications service for the widget's support routing: the email and WhatsApp notice to a
+	// business's team when its plan has no ticketing (internal/support).
+	NotificationsURL string `env:"NOTIFICATIONS_URL" envDefault:"http://notifications-api.notifications.svc.cluster.local:4000"`
 }
 
 func Load() (*Config, error) {

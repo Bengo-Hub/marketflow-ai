@@ -52,6 +52,8 @@ type fakeProviders struct {
 	failFalPath string
 	// calls counts submits per path.
 	calls map[string]int
+	// extra adds fields to every fal result (word timings for the voice tests).
+	extra map[string]any
 }
 
 func newFakeProviders(t *testing.T) *fakeProviders {
@@ -76,8 +78,14 @@ func (f *fakeProviders) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// One result body serves every model: images, a video or an audio file.
-		_ = json.NewEncoder(w).Encode(map[string]any{"images": []map[string]any{{"url": f.srv.URL + "/scene.png", "width": 2160, "height": 2700}}, "seed": 1,
-			"video": map[string]any{"url": f.srv.URL + "/clip.mp4"}, "audio": map[string]any{"url": f.srv.URL + "/voice.mp3"}})
+		result := map[string]any{"images": []map[string]any{{"url": f.srv.URL + "/scene.png", "width": 2160, "height": 2700}}, "seed": 1,
+			"video": map[string]any{"url": f.srv.URL + "/clip.mp4"}, "audio": map[string]any{"url": f.srv.URL + "/voice.mp3"}}
+		f.mu.Lock()
+		for k, v := range f.extra {
+			result[k] = v
+		}
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(result)
 	case p == "/voice.mp3":
 		w.Header().Set("Content-Type", "audio/mpeg")
 		if f.audio != nil {

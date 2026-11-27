@@ -218,7 +218,8 @@ func (c *Clips) animate(ctx context.Context, rt Route, req ClipRequest) (string,
 	key := c.keys(ctx, rt.Provider)
 	job := higgsfieldJob(key, endpoint)
 	if rt.Provider == "fal" {
-		job = falJob(key, endpoint)
+		// The fal clip tiers follow media/routes (route_models.go); the input shape stays the route's.
+		job = falJob(key, routeEndpoint(ctx, rt.Key, endpoint))
 	}
 	var out videoOut
 	if err := c.queue.run(ctx, job, input, &out); err != nil {

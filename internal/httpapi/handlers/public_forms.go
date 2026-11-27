@@ -114,7 +114,12 @@ func (h *PublicFormsHandler) forward(w http.ResponseWriter, r *http.Request, tar
 		writeError(w, http.StatusBadRequest, "form must be a JSON object")
 		return
 	}
+	h.forwardBody(w, r, target, body, headers)
+}
 
+// forwardBody posts an already read and checked JSON body to target and copies the owner's
+// status and JSON answer back (the support route builds its legacy ticket body itself).
+func (h *PublicFormsHandler) forwardBody(w http.ResponseWriter, r *http.Request, target string, body []byte, headers map[string]string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "form could not be sent")

@@ -170,7 +170,7 @@ func TestVoiceFalSubstitutionIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Route != "fal/elevenlabs-v3" || res.Voice != "Sarah" || !strings.HasPrefix(res.SubstitutedFor, "Yna Agalo") {
+	if res.Route != "fal/elevenlabs-v4-turbo" || res.Voice != "Sarah" || !strings.HasPrefix(res.SubstitutedFor, "Yna Agalo") {
 		t.Fatalf("substitution not recorded: %+v", res)
 	}
 	res, err = v.Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v2", Text: "Karibu", Voice: "Brian"})

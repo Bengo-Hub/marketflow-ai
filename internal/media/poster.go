@@ -267,9 +267,11 @@ func (p *Posters) scene(ctx context.Context, rt Route, req PosterRequest) (strin
 	case "fal/seedream-v5-lite":
 		// Seedream needs 2560x1440 to 4096x4096 pixels in total; the compositor scales down.
 		input = map[string]any{"prompt": prompt, "image_size": seedreamSize(req.Format), "num_images": 1}
-		endpoint := p.endpoints.SeedreamText
+		// The standard poster model follows media/routes (route_models.go) over the endpoints.
+		text, edit := posterEndpoints(currentRouteModels(ctx).PosterStandard, p.endpoints.SeedreamText, p.endpoints.SeedreamEdit)
+		endpoint := text
 		if len(req.PhotoURLs) > 0 {
-			endpoint = p.endpoints.SeedreamEdit
+			endpoint = edit
 			input["image_urls"] = firstN(req.PhotoURLs, 10)
 		}
 		job = falJob(key, endpoint)
@@ -283,9 +285,11 @@ func (p *Posters) scene(ctx context.Context, rt Route, req PosterRequest) (strin
 		job = falJob(key, endpoint)
 	case "fal/nano-banana-pro":
 		input = map[string]any{"prompt": prompt, "aspect_ratio": aspectFor(req.Format), "resolution": "2K", "output_format": "jpeg", "num_images": 1}
-		endpoint := p.endpoints.NanoBananaPro
+		// The premium poster model follows media/routes (route_models.go) over the endpoints.
+		text, edit := posterEndpoints(currentRouteModels(ctx).PosterPremium, p.endpoints.NanoBananaPro, p.endpoints.NanoBananaProEdit)
+		endpoint := text
 		if len(req.PhotoURLs) > 0 {
-			endpoint = p.endpoints.NanoBananaProEdit
+			endpoint = edit
 			input["image_urls"] = firstN(req.PhotoURLs, 10)
 		}
 		job = falJob(key, endpoint)

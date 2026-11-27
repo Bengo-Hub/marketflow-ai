@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bengobox/marketflow-ai/internal/library"
+	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/promptopt"
 )
 
@@ -83,5 +85,41 @@ func TestSuggestFieldRefusals(t *testing.T) {
 	r.source = ctxSource{TenantContext{BusinessType: "generic", MarketingContext: `{"banned_claims":["cures eczema"]}`}}
 	if _, err := r.SuggestField(context.Background(), FieldSuggestRequest{TenantID: uuid.New(), Field: "bio"}); !errors.Is(err, ErrSuggestionBlocked) {
 		t.Fatalf("banned claim: %v", err)
+	}
+}
+
+// "What has worked before" learns from the tenant's own competitors, reference ads and
+// complaints (owner, 2026-11-28), and a lesson that names a competitor would still be the
+// model's job to avoid; the prompt says so.
+func TestSuggestLearningsFromCompetitors(t *testing.T) {
+	var gotSystem, gotUser string
+	f := &fakeLLM{reply: func(system, user string) string {
+		gotSystem, gotUser = system, user
+		return `{"items":["Short vertical videos of a couple opening gifts hold attention","Show M-Pesa contributions landing in real time"]}`
+	}}
+	router := llm.NewRouter(llm.Config{Providers: oneSource{f}, Defaults: llm.DefaultPolicy(llm.Defaults{})})
+	r := New(Config{Library: library.MustLoad(), Opt: fixedOpt{}, Router: router, Source: ctxSource{TenantContext{
+		BusinessType: "generic", MarketingContext: `{"positioning":"Gift registry for Kenyan celebrations"}`, HasPlan: true,
+		MarketSignals: &MarketSignals{
+			Competitors: []string{"Zola", "M-Changa"},
+			References:  []ReferenceAd{{URL: "https://example.com/a", Platform: "tiktok", Notes: "couple unboxing gifts"}},
+			Complaints:  []string{"Guests duplicate gifts"},
+		},
+	}}})
+	out, err := r.SuggestField(context.Background(), FieldSuggestRequest{TenantID: uuid.New(), Field: "learnings"})
+	if err != nil || len(out.Items) != 2 {
+		t.Fatalf("learnings: %v %+v", err, out)
+	}
+	for _, want := range []string{"Zola; M-Changa", "couple unboxing gifts", "Guests duplicate gifts", "Gift registry for Kenyan celebrations"} {
+		if !strings.Contains(gotUser, want) {
+			t.Fatalf("prompt misses %q:\n%s", want, gotUser)
+		}
+	}
+	if !strings.Contains(gotSystem, "Never name another business") {
+		t.Fatalf("system must forbid naming rivals: %s", gotSystem)
+	}
+	// The ad writers never see the names.
+	if strings.Contains(marketBlock(&MarketSignals{Competitors: []string{"Zola"}, Complaints: []string{"x"}}, "ad_copy_batch"), "Zola") {
+		t.Fatal("competitor names must not reach the ad writers")
 	}
 }

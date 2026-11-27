@@ -25,14 +25,28 @@ const CapVoice Capability = "voice"
 // VoiceRoutes price per 1,000 characters (docs/integrations/video-generation-providers.md
 // section 5). ElevenLabs direct is a subscription, so it is eligible only on a
 // paid plan: the free plan's output may not be used commercially.
+//
+// ElevenLabs direct is always tried first (owner, 2026-11-28): only it reads library and cloned
+// voices and returns exact word timings. fal's ElevenLabs routes are fallbacks, matched by tier
+// (eleven-v4 for premium, eleven-v4-turbo for standard), for when ElevenLabs is down, out of
+// credit, has no valid key or its breaker is open. Their model ids follow the media/routes
+// settings (route_models.go); the prices are fal's for the defaults.
 var VoiceRoutes = []Route{
 	{Key: "elevenlabs/eleven-v4-turbo", Provider: "elevenlabs", Capability: CapVoice, PriceUSD: 0.04, Quality: 4, Timeout: time.Minute},
-	{Key: falVoiceRoute, Provider: "fal", Capability: CapVoice, PriceUSD: 0.10, Quality: 4, PAYG: true, Timeout: 90 * time.Second, Fallback: true},
+	{Key: falVoiceTurboRoute, Provider: "fal", Capability: CapVoice, PriceUSD: 0.04, Quality: 4, PAYG: true, Timeout: 90 * time.Second, Fallback: true},
+	{Key: falVoiceRoute, Provider: "fal", Capability: CapVoice, PriceUSD: 0.08, Quality: 4.8, PAYG: true, Timeout: 90 * time.Second, Fallback: true, MinTier: TierPremium},
 	{Key: "elevenlabs/eleven-v4", Provider: "elevenlabs", Capability: CapVoice, PriceUSD: 0.08, Quality: 4.8, Timeout: time.Minute, MinTier: TierPremium},
 }
 
-// falVoiceRoute is fal's ElevenLabs route, which reads premade voices only (falVoiceFor).
-const falVoiceRoute = "fal/elevenlabs-v3"
+// fal's ElevenLabs routes read premade voices only (falVoiceFor). Until 2026-11-28 there was
+// one, fal/elevenlabs-v3 (fal-ai/elevenlabs/tts/eleven-v3, USD 0.10 per 1,000 characters).
+const (
+	falVoiceRoute      = "fal/elevenlabs-v4"
+	falVoiceTurboRoute = "fal/elevenlabs-v4-turbo"
+)
+
+// isFalVoice reports whether a voice route runs on fal.
+func isFalVoice(key string) bool { return key == falVoiceRoute || key == falVoiceTurboRoute }
 
 // MaxVoiceChars bounds one voice-over (a 60 s ad is about 900 characters).
 const MaxVoiceChars = 3000
@@ -99,7 +113,10 @@ type VoiceResult struct {
 	Seconds float64      `json:"seconds"`
 	Words   []WordTiming `json:"words"`
 	Exact   bool         `json:"exact_timings"` // false when the timings are estimated
-	Voice   string       `json:"voice"`         // the voice that read it
+	// Timings says where the word timings came from: "provider" (the TTS reply), "scribe" (fal's
+	// Scribe v2 speech to text) or "estimated" (spread by word length, re-aligned later).
+	Timings string `json:"timings,omitempty"`
+	Voice   string `json:"voice"` // the voice that read it
 	// SubstitutedFor names the chosen voice when another read it instead: fal's route
 	// cannot use the account's library voices, so a premade voice stands in.
 	SubstitutedFor string  `json:"substituted_for,omitempty"`
@@ -292,7 +309,7 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 			break
 		}
 		actx, cancel := context.WithTimeout(ctx, rt.Timeout)
-		audio, words, exact, used, err := v.speak(actx, rt, req, collection)
+		sp, err := v.speak(actx, rt, req, collection)
 		cancel()
 		if err != nil {
 			lastErr = err
@@ -301,21 +318,24 @@ func (v *Voices) Make(ctx context.Context, req VoiceRequest) (*VoiceResult, erro
 			continue
 		}
 		v.router.Succeeded(rt.Key)
+		audio, words, exact, used := sp.audio, sp.words, sp.exact, sp.voice
 		seconds := 0.0
 		if len(words) > 0 {
 			seconds = words[len(words)-1].End
 		}
+		timings := sp.timings
 		if !exact {
 			seconds = mp3Seconds(audio)
 			words = estimateWords(stripTags(req.Text), seconds)
+			timings = "estimated"
 		}
 		key, url, err := v.store.PutAudio(ctx, req.TenantID, req.VersionID, req.Name, audio)
 		if err != nil {
 			return nil, fmt.Errorf("media: store voice: %w", err)
 		}
-		res := &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Voice: used,
-			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD * float64(n) / 1000, Attempts: i + 1, Audio: audio}
-		if chosen, ok := pickVoice(collection, v.choice(req), req.Language, ""); ok && rt.Key == falVoiceRoute && chosen.Name != used {
+		res := &VoiceResult{URL: url, Key: key, Bytes: len(audio), Seconds: seconds, Words: words, Exact: exact, Timings: timings, Voice: used,
+			Characters: n, Route: rt.Key, CostUSD: rt.PriceUSD*float64(n)/1000 + sp.extraUSD, Attempts: i + 1, Audio: audio}
+		if chosen, ok := pickVoice(collection, v.choice(req), req.Language, ""); ok && isFalVoice(rt.Key) && chosen.Name != used {
 			res.SubstitutedFor = chosen.Name
 			v.logger.Warn("voice substituted: the direct ElevenLabs route was not available and fal cannot use library voices",
 				zap.String("chosen", chosen.Name), zap.String("read_by", used), zap.String("version_id", req.VersionID))
@@ -400,28 +420,51 @@ func (v *Voices) paidPlan(ctx context.Context, key string) bool {
 	return paid
 }
 
-// speak runs one route; exact reports whether words came from the provider,
-// used names the voice that read it.
-func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collection []LibraryVoice) ([]byte, []WordTiming, bool, string, error) {
+// spoken is one route's voice-over: exact reports whether words are real timings (timings says
+// from where), voice names the voice that read it and extraUSD is any cost beyond the route's
+// price (fal's Scribe v2 for timings).
+type spoken struct {
+	audio    []byte
+	words    []WordTiming
+	exact    bool
+	timings  string
+	voice    string
+	extraUSD float64
+}
+
+// directModels are the ElevenLabs direct models: the media/routes settings, then the ElevenLabs
+// card's legacy voice_model and voice_premium_model, then eleven_v4_turbo and eleven_v4.
+func (v *Voices) directModels(ctx context.Context) (standard, premium string) {
+	standard, premium = "eleven_v4_turbo", "eleven_v4"
+	if v.models != nil {
+		s, p := v.models(ctx)
+		standard, premium = firstNonEmptyModel(s, standard), firstNonEmptyModel(p, premium)
+	}
+	m := currentRouteModels(ctx)
+	return firstNonEmptyModel(m.VoiceStandard, standard), firstNonEmptyModel(m.VoicePremium, premium)
+}
+
+// scribeTimeout bounds the speech to text that times a fal voice-over; past it the timings are
+// estimated, so captions never hold up a render.
+var scribeTimeout = 30 * time.Second
+
+// speak runs one route.
+func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collection []LibraryVoice) (spoken, error) {
 	key := v.keys(ctx, rt.Provider)
-	switch rt.Key {
-	case "elevenlabs/eleven-v4-turbo", "elevenlabs/eleven-v4":
-		standard, premium := "eleven_v4_turbo", "eleven_v4"
-		if v.models != nil {
-			s, p := v.models(ctx)
-			standard, premium = firstNonEmptyModel(s, standard), firstNonEmptyModel(p, premium)
-		}
+	switch {
+	case rt.Key == "elevenlabs/eleven-v4-turbo" || rt.Key == "elevenlabs/eleven-v4":
+		standard, premium := v.directModels(ctx)
 		model := standard
 		if rt.Key == "elevenlabs/eleven-v4" {
 			model = premium
 		}
 		voice, ok := pickVoice(collection, v.choice(req), req.Language, model)
 		if !ok {
-			return nil, nil, false, "", fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
+			return spoken{}, fmt.Errorf("%w: unknown voice %q", ErrVoiceInput, req.Voice)
 		}
 		audio, words, err := v.eleven(ctx, key, model, voice.ID, req)
-		return audio, words, err == nil, voice.Name, err
-	case falVoiceRoute:
+		return spoken{audio: audio, words: words, exact: err == nil, timings: "provider", voice: voice.Name}, err
+	case isFalVoice(rt.Key):
 		voice, _ := pickVoice(collection, v.choice(req), req.Language, "")
 		name := falVoiceFor(voice)
 		d := v.Delivery(req.Delivery)
@@ -429,20 +472,181 @@ func (v *Voices) speak(ctx context.Context, rt Route, req VoiceRequest, collecti
 			Audio struct {
 				URL string `json:"url"`
 			} `json:"audio"`
+			Timestamps json.RawMessage `json:"timestamps"`
 		}
-		// fal's route takes stability only; the direction tag works on v3 too.
+		// fal's ElevenLabs v4 takes stability (and similarity) and the direction tag, and returns
+		// timings when asked.
 		input := map[string]any{"text": directed(d, req.Text), "voice": name, "language_code": req.Language,
-			"stability": d.Settings.Stability}
-		if err := v.queue.run(ctx, falJob(key, "fal-ai/elevenlabs/tts/eleven-v3"), input, &out); err != nil {
-			return nil, nil, false, "", err
+			"stability": d.Settings.Stability, "timestamps": true}
+		if err := v.queue.run(ctx, falJob(key, falVoiceEndpoint(ctx, rt.Key)), input, &out); err != nil {
+			return spoken{}, err
 		}
 		if out.Audio.URL == "" {
-			return nil, nil, false, "", &errJobFailed{provider: "fal", status: "completed", detail: "no audio in the result"}
+			return spoken{}, &errJobFailed{provider: "fal", status: "completed", detail: "no audio in the result"}
 		}
 		audio, err := fetchAudio(ctx, v.http, out.Audio.URL, "voice")
-		return audio, nil, false, name, err
+		if err != nil {
+			return spoken{}, err
+		}
+		sp := spoken{audio: audio, voice: name}
+		if words := falTimings(out.Timestamps); len(words) > 0 {
+			sp.words, sp.exact, sp.timings = words, true, "provider"
+			return sp, nil
+		}
+		if currentRouteModels(ctx).TimingsViaScribe {
+			sctx, cancel := context.WithTimeout(ctx, scribeTimeout)
+			words, err := v.scribe(sctx, key, out.Audio.URL)
+			cancel()
+			if err == nil && len(words) > 0 {
+				sp.words, sp.exact, sp.timings = words, true, "scribe"
+				sp.extraUSD = scribePricePerMinute * mp3Seconds(audio) / 60
+				return sp, nil
+			}
+			v.logger.Warn("scribe timings failed; the captions use estimated timings", zap.Error(err))
+		}
+		return sp, nil
 	}
-	return nil, nil, false, "", fmt.Errorf("media: no builder for route %s", rt.Key)
+	return spoken{}, fmt.Errorf("media: no builder for route %s", rt.Key)
+}
+
+// scribe times a stored voice-over with fal's ElevenLabs Scribe v2 speech to text.
+func (v *Voices) scribe(ctx context.Context, key, audioURL string) ([]WordTiming, error) {
+	var out struct {
+		Words []struct {
+			Text  string   `json:"text"`
+			Start *float64 `json:"start"`
+			End   *float64 `json:"end"`
+			Type  string   `json:"type"`
+		} `json:"words"`
+	}
+	input := map[string]any{"audio_url": audioURL, "diarize": false, "tag_audio_events": false}
+	if err := v.queue.run(ctx, falJob(key, scribeEndpoint), input, &out); err != nil {
+		return nil, err
+	}
+	var words []WordTiming
+	for _, w := range out.Words {
+		if (w.Type != "" && w.Type != "word") || w.Start == nil || w.End == nil || strings.TrimSpace(w.Text) == "" {
+			continue
+		}
+		words = append(words, WordTiming{Text: strings.TrimSpace(w.Text), Start: *w.Start, End: *w.End})
+	}
+	if !ordered(words) {
+		return nil, fmt.Errorf("scribe: no usable word timings")
+	}
+	return words, nil
+}
+
+// falTimings reads the timings fal's ElevenLabs v4 returns with timestamps on. fal's schema leaves
+// the items untyped, so both shapes ElevenLabs uses are read: words ({text, start, end}) and
+// characters (single-character items, or an alignment object with character arrays), grouped into
+// words with direction tags left out. Anything else gives nil, and the timings are estimated.
+func falTimings(raw json.RawMessage) []WordTiming {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	type alignment struct {
+		Chars  []string  `json:"characters"`
+		Starts []float64 `json:"character_start_times_seconds"`
+		Ends   []float64 `json:"character_end_times_seconds"`
+	}
+	fromAlignment := func(a alignment) []WordTiming {
+		if len(a.Chars) == 0 || len(a.Starts) != len(a.Chars) || len(a.Ends) != len(a.Chars) {
+			return nil
+		}
+		return wordsFromChars(a.Chars, a.Starts, a.Ends)
+	}
+	var obj alignment
+	if json.Unmarshal(raw, &obj) == nil && len(obj.Chars) > 0 {
+		return orderedOrNil(fromAlignment(obj))
+	}
+	var items []struct {
+		Text      string   `json:"text"`
+		Word      string   `json:"word"`
+		Char      string   `json:"character"`
+		Start     *float64 `json:"start"`
+		End       *float64 `json:"end"`
+		StartTime *float64 `json:"start_time"`
+		EndTime   *float64 `json:"end_time"`
+		alignment
+	}
+	if json.Unmarshal(raw, &items) != nil || len(items) == 0 {
+		return nil
+	}
+	if len(items) == 1 && len(items[0].Chars) > 0 {
+		return orderedOrNil(fromAlignment(items[0].alignment))
+	}
+	var chars []string
+	var starts, ends []float64
+	singleChars := true
+	type timed struct {
+		text       string
+		start, end float64
+	}
+	var all []timed
+	for _, it := range items {
+		text := firstNonEmptyModel(it.Text, it.Word, it.Char)
+		if text == "" {
+			// A space between words, under any of the three names, kept for the character grouping.
+			for _, raw := range []string{it.Text, it.Word, it.Char} {
+				if raw != "" && strings.TrimSpace(raw) == "" {
+					text = raw
+					break
+				}
+			}
+		}
+		s, e := it.Start, it.End
+		if s == nil {
+			s = it.StartTime
+		}
+		if e == nil {
+			e = it.EndTime
+		}
+		if s == nil || e == nil || text == "" {
+			return nil
+		}
+		if utf8.RuneCountInString(text) != 1 {
+			singleChars = false
+		}
+		all = append(all, timed{text, *s, *e})
+	}
+	if singleChars {
+		for _, t := range all {
+			chars, starts, ends = append(chars, t.text), append(starts, t.start), append(ends, t.end)
+		}
+		return orderedOrNil(wordsFromChars(chars, starts, ends))
+	}
+	var words []WordTiming
+	for _, t := range all {
+		w := strings.TrimSpace(t.text)
+		if w == "" || (strings.HasPrefix(w, "[") && strings.HasSuffix(w, "]")) {
+			continue
+		}
+		words = append(words, WordTiming{Text: w, Start: t.start, End: t.end})
+	}
+	return orderedOrNil(words)
+}
+
+func orderedOrNil(words []WordTiming) []WordTiming {
+	if !ordered(words) {
+		return nil
+	}
+	return words
+}
+
+// ordered reports usable timings: at least one word, none negative, none ending before it
+// starts and none starting before the previous one.
+func ordered(words []WordTiming) bool {
+	if len(words) == 0 {
+		return false
+	}
+	prev := 0.0
+	for _, w := range words {
+		if w.Start < 0 || w.End < w.Start || w.Start < prev-1e-6 {
+			return false
+		}
+		prev = w.Start
+	}
+	return true
 }
 
 // choice is a request's voice choice.

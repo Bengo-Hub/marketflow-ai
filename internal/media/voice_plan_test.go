@@ -25,7 +25,7 @@ func TestVoicePlanLookupFailureIsRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Route != "fal/elevenlabs-v3" || el.got != nil {
+	if res.Route != "fal/elevenlabs-v4-turbo" || el.got != nil {
 		t.Fatalf("an unreadable plan must not use the direct route: %+v", res)
 	}
 

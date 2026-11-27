@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -73,5 +74,32 @@ func TestTenantSuperuserCannotActForAnotherTenant(t *testing.T) {
 	owner := &authclient.Claims{TenantID: own.String(), IsPlatformOwner: true}
 	if id, status, _ := tenantFromAuth(reqWith(owner, other.String())); status != 0 || id != other {
 		t.Fatalf("platform owner naming a tenant: %v %d", id, status)
+	}
+}
+
+// A platform owner on a tenant's pages sends only X-Tenant-Slug; the AI must act on that
+// tenant, never the owner's own (the Suggest button once filled Codevertex into Hadia).
+func TestTenantFromAuthSlug(t *testing.T) {
+	own, hadia := uuid.New(), uuid.New()
+	SetTenantSlugResolver(func(_ context.Context, slug string) (uuid.UUID, bool) {
+		return hadia, slug == "hadia"
+	})
+	defer SetTenantSlugResolver(nil)
+	withSlug := func(c *authclient.Claims, slug string) *http.Request {
+		r := reqWith(c, "")
+		r.Header.Set("X-Tenant-Slug", slug)
+		return r
+	}
+	owner := &authclient.Claims{TenantID: own.String(), IsPlatformOwner: true}
+	if id, status, _ := tenantFromAuth(withSlug(owner, "hadia")); status != 0 || id != hadia {
+		t.Fatalf("owner on hadia: %v %d", id, status)
+	}
+	if _, status, _ := tenantFromAuth(withSlug(owner, "nope")); status != http.StatusNotFound {
+		t.Fatalf("unknown slug: %d", status)
+	}
+	// A tenant user's slug header never moves them to another tenant.
+	user := &authclient.Claims{TenantID: own.String()}
+	if id, status, _ := tenantFromAuth(withSlug(user, "hadia")); status != 0 || id != own {
+		t.Fatalf("user slug: %v %d", id, status)
 	}
 }

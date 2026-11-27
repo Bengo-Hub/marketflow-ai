@@ -16,6 +16,36 @@ type MarketSignals struct {
 	Summary    string        `json:"summary,omitempty"`
 	References []ReferenceAd `json:"references,omitempty"`
 	Complaints []string      `json:"complaints,omitempty"`
+	// Competitors are the owner's configured competitor names. Only the "What has worked
+	// before" suggestion reads them (learningsFacts); marketBlock never does, so no ad names a rival.
+	Competitors []string `json:"competitors,omitempty"`
+}
+
+// learningsFacts is the market section of the "What has worked before" suggestion: what is
+// known to work in this market, from the owner's competitors, reference ads and complaints.
+func learningsFacts(m *MarketSignals) string {
+	if m == nil {
+		return ""
+	}
+	var b strings.Builder
+	if len(m.Competitors) > 0 {
+		b.WriteString("COMPETITORS THE OWNER NAMED: " + trimTo(strings.Join(m.Competitors, "; "), 600) + "\n")
+	}
+	for _, p := range m.Patterns {
+		fmt.Fprintf(&b, "WINNING AD IN THIS MARKET: %s\n", trimTo(p, 240))
+	}
+	if s := strings.TrimSpace(m.Summary); s != "" && len(m.Patterns) > 0 {
+		fmt.Fprintf(&b, "WHAT THE WINNERS SHARE: %s\n", trimTo(s, 400))
+	}
+	for _, r := range m.References {
+		if n := strings.TrimSpace(r.Notes); n != "" {
+			fmt.Fprintf(&b, "REFERENCE %s AD: %s\n", strings.ToUpper(trimTo(r.Platform, 20)), trimTo(n, 300))
+		}
+	}
+	for _, c := range m.Complaints {
+		fmt.Fprintf(&b, "CUSTOMER COMPLAINT: %s\n", trimTo(c, 200))
+	}
+	return b.String()
 }
 
 // ReferenceAd is an ad the owner saw working, with the owner's notes on why.

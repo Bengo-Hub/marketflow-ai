@@ -1,17 +1,17 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/bengobox/marketflow-ai/internal/support"
 )
 
 // CreateTicket is the agent tool that creates a support ticket in the
@@ -126,51 +126,24 @@ func (t *CreateTicket) Invoke(ctx context.Context, tenantID uuid.UUID, argsJSON 
 
 	// ticketing-api internal create: the tenant travels in X-Tenant-ID, the title is "subject",
 	// and a Vera chat ticket is on the chat channel.
-	body := map[string]any{
-		"subject":     args.Title,
-		"description": args.Description,
-		"priority":    args.Priority,
-		"category":    args.Category,
-		"source":      "vera_ai",
-		"channel":     "chat",
-	}
-	if args.RequesterName != "" {
-		body["requester_name"] = args.RequesterName
-	}
-	if args.RequesterEmail != "" {
-		body["requester_email"] = args.RequesterEmail
+	body := support.TicketRequest{
+		Subject:        args.Title,
+		Description:    args.Description,
+		Priority:       args.Priority,
+		Category:       args.Category,
+		Source:         "vera_ai",
+		Channel:        "chat",
+		RequesterName:  args.RequesterName,
+		RequesterEmail: args.RequesterEmail,
 	}
 
-	payload, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		t.ticketingURL+"/api/v1/internal/tickets", bytes.NewReader(payload))
+	// The shared support client (internal/support) is the one ticketing-api caller in this
+	// service. Without a source_ref the create is not idempotent, so it is sent once.
+	client := &support.Ticketing{BaseURL: t.ticketingURL, ServiceKey: t.serviceKey, HTTP: t.http}
+	created, err := client.Create(ctx, tenantID, body)
 	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", t.serviceKey)
-	req.Header.Set("X-Tenant-ID", tenantID.String())
-
-	resp, err := t.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("create_ticket http: %w", err)
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 300 {
-		t.logger.Warn("create_ticket api error",
-			zap.Int("status", resp.StatusCode))
-		return "", fmt.Errorf("ticketing-api %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
-
-	var created struct {
-		ID           string `json:"id"`
-		TicketNumber string `json:"ticket_number"`
-		Status       string `json:"status"`
-	}
-	if err := json.Unmarshal(respBody, &created); err != nil || created.TicketNumber == "" {
-		return "", fmt.Errorf("create_ticket: unexpected ticketing-api answer: %s", truncate(string(respBody), 200))
+		t.logger.Warn("create_ticket api error", zap.Error(err))
+		return "", fmt.Errorf("create_ticket: %w", err)
 	}
 	ticketRef := created.TicketNumber
 

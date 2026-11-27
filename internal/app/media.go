@@ -12,6 +12,7 @@ import (
 	"github.com/bengobox/marketflow-ai/internal/llm"
 	"github.com/bengobox/marketflow-ai/internal/media"
 	"github.com/bengobox/marketflow-ai/internal/providers"
+	"go.uber.org/zap"
 )
 
 // mediaKeyEnv names the local-development fallbacks (marketflow-ai .env, never
@@ -135,6 +136,36 @@ func publicBaseURL() string {
 		return "https://marketflowai.codevertexafrica.com"
 	}
 	return ""
+}
+
+// mediaRouteModelSource reads the media route models (ProviderSetting platform / media / routes,
+// keys media.route.*, edited on Platform > Providers), reused for a minute. A failed lookup keeps
+// the last good settings, and with none every route keeps its default. The values are checked on
+// every read against fal's model list (catalog), which loads in the background, so a list that
+// arrives later still catches a bad id; a refused id runs the route's default and is logged.
+func mediaRouteModelSource(resolver *providers.Resolver, catalog *media.FalCatalog, logger *zap.Logger) media.RouteModelSource {
+	var (
+		mu   sync.Mutex
+		last = map[string]string{}
+		at   time.Time
+	)
+	return func(ctx context.Context) media.RouteModels {
+		mu.Lock()
+		if resolver != nil && time.Since(at) >= time.Minute {
+			rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			settings, err := resolver.ResolveRaw(rctx, "media", "routes")
+			cancel()
+			at = time.Now()
+			if err == nil {
+				last = settings
+			} else {
+				logger.Warn("media route settings unavailable; keeping the last ones", zap.Error(err))
+			}
+		}
+		settings := last
+		mu.Unlock()
+		return media.RouteModelsFromSettings(settings, catalog, logger)
+	}
 }
 
 // mediaPolicySource reads the routing policy from platform settings (ProviderSetting platform /

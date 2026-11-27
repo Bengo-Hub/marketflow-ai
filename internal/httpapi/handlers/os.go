@@ -87,6 +87,15 @@ const maxAskChars = 2000
 // (security audit 2026-11-10).
 func privileged(c *authclient.Claims) bool { return c.IsPlatformOwner || c.IsService }
 
+// resolveTenantSlug turns a privileged caller's X-Tenant-Slug into the tenant's UUID. It is
+// set once at start-up (SetTenantSlugResolver) and read only by tenantFromAuth.
+var resolveTenantSlug func(ctx context.Context, slug string) (uuid.UUID, bool)
+
+// SetTenantSlugResolver wires the slug lookup (sessions.Service.ResolveTenantID).
+func SetTenantSlugResolver(fn func(ctx context.Context, slug string) (uuid.UUID, bool)) {
+	resolveTenantSlug = fn
+}
+
 // tenantFromAuth returns the caller's tenant from the token. A user's
 // X-Tenant-ID must match their token; only privileged callers may name
 // another tenant in the header.
@@ -101,6 +110,18 @@ func tenantFromAuth(r *http.Request) (uuid.UUID, int, string) {
 			return h, 0, ""
 		}
 		return uuid.Nil, http.StatusBadRequest, "X-Tenant-ID must be a tenant UUID"
+	}
+	// A platform owner on a tenant's pages sends only X-Tenant-Slug (marketflow-ui
+	// tenantHeaders). Without this, every AI call made there ran on the owner's own tenant
+	// (Codevertex), so Suggest filled Codevertex's context into another business's form.
+	if slug := strings.TrimSpace(r.Header.Get("X-Tenant-Slug")); privileged(claims) && header == "" && slug != "" {
+		if resolveTenantSlug == nil {
+			return uuid.Nil, http.StatusServiceUnavailable, "tenant lookup is not configured"
+		}
+		if id, ok := resolveTenantSlug(r.Context(), slug); ok {
+			return id, 0, ""
+		}
+		return uuid.Nil, http.StatusNotFound, "unknown tenant " + slug
 	}
 	tid, err := claims.TenantUUID()
 	if err != nil || tid == nil {

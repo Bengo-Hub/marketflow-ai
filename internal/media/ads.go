@@ -458,7 +458,9 @@ func (p AdPlan) WithoutAudioExtras() AdPlan {
 	return p
 }
 
-// voiceUSDPer1000 is the dearest voice route's price, for the quote.
+// voiceUSDPer1000 prices the voice in a quote. The dearest voice route is USD 0.08 since
+// 2026-11-28 (fal's eleven-v3 at 0.10 was retired); 0.10 is kept so a quote also covers Scribe
+// timings and a configured fal model that costs a little more (route_models.go).
 const voiceUSDPer1000 = 0.10
 
 // Plan resolves each scene's source, hashes it, checks the cache and prices the rest:

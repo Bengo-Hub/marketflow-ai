@@ -207,8 +207,8 @@ func TestVoiceFreePlanUsesFal(t *testing.T) {
 	if el.got != nil {
 		t.Fatal("ElevenLabs direct was called on the free plan")
 	}
-	in := f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]
-	if res.Route != "fal/elevenlabs-v3" || res.Exact || in == nil || in["voice"] != DefaultVoice || in["language_code"] != "en" {
+	in := f.inputs["elevenlabs/tts/eleven-v4-turbo"]
+	if res.Route != "fal/elevenlabs-v4-turbo" || res.Exact || res.Timings != "estimated" || in["timestamps"] != true || in == nil || in["voice"] != DefaultVoice || in["language_code"] != "en" {
 		t.Fatalf("result = %+v, input %v", res, in)
 	}
 	// 32,000 bytes at 128 kbit/s is 2 s, spread over four words.
@@ -222,14 +222,14 @@ func TestVoiceFreePlanUsesFal(t *testing.T) {
 	el.collection = ownerCollection()
 	v = NewVoices(keysFor("elevenlabs", "fal"), &memAudio{}, nil)
 	res, err = v.Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v2", Text: "Soft skin"})
-	if err != nil || f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]["voice"] != "Sarah" || res.Voice != "Sarah" {
-		t.Fatalf("fal voice for Yna Agalo: %v %v %+v", err, f.inputs["fal-ai/elevenlabs/tts/eleven-v3"], res)
+	if err != nil || f.inputs["elevenlabs/tts/eleven-v4-turbo"]["voice"] != "Sarah" || res.Voice != "Sarah" {
+		t.Fatalf("fal voice for Yna Agalo: %v %v %+v", err, f.inputs["elevenlabs/tts/eleven-v4-turbo"], res)
 	}
 	res, err = v.Make(context.Background(), VoiceRequest{TenantID: uuid.New(), VersionID: "v3", Text: "Soft skin", Voice: "Emily E"})
-	if err != nil || f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]["voice"] != "Alice" || res.Voice != "Alice" {
-		t.Fatalf("fal voice for Emily E.: %v %v %+v", err, f.inputs["fal-ai/elevenlabs/tts/eleven-v3"], res)
+	if err != nil || f.inputs["elevenlabs/tts/eleven-v4-turbo"]["voice"] != "Alice" || res.Voice != "Alice" {
+		t.Fatalf("fal voice for Emily E.: %v %v %+v", err, f.inputs["elevenlabs/tts/eleven-v4-turbo"], res)
 	}
-	if in := f.inputs["fal-ai/elevenlabs/tts/eleven-v3"]; in["stability"] != 0.5 || !strings.HasPrefix(in["text"].(string), "[") {
+	if in := f.inputs["elevenlabs/tts/eleven-v4-turbo"]; in["stability"] != 0.5 || !strings.HasPrefix(in["text"].(string), "[") {
 		t.Fatalf("fal gets the delivery's stability and direction: %v", in)
 	}
 }

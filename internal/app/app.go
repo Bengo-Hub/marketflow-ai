@@ -66,7 +66,7 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 	// Calls to other Codevertex services carry the incoming request's X-Request-ID, so logs line
 	// up across marketflow-api, marketflow-ai and the rest; third parties never get it.
 	reqid.Install(reqid.HostsFrom(cfg.AI.MarketFlowAPIURL, cfg.AI.TicketingURL, cfg.AI.AuthAPIURL,
-		cfg.Security.AuthServiceURL, cfg.Security.SubscriptionsURL, cfg.App.TreasuryURL))
+		cfg.Security.AuthServiceURL, cfg.Security.SubscriptionsURL, cfg.App.TreasuryURL, cfg.AI.NotificationsURL))
 
 	// ── Database (shared with marketflow-api, for pgvector queries) ────────
 	db, err := sql.Open("pgx", cfg.Database.URL)
@@ -125,6 +125,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	// ── Chat Session Service ──────────────────────────────────────────────
 	sessionService := sessions.NewService(db, logger)
+	// A platform owner on a tenant's pages names that tenant by slug only.
+	handlers.SetTenantSlugResolver(sessionService.ResolveTenantID)
 
 	// ── Task Executor ─────────────────────────────────────────────────────
 	taskExecutor := tasks.NewExecutor(logger)
@@ -480,6 +482,9 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		}
 		// The routing policy: the bake-off defaults per scenario and premium for the platform owner.
 		media.SetPolicySource(mediaPolicySource(resolver))
+		// The model behind each media tier (Platform > Providers, media/routes), checked against fal's list.
+		falCatalog := media.NewFalCatalog(mediaKeySource(resolver), logger)
+		media.SetRouteModelSource(mediaRouteModelSource(resolver, falCatalog, logger), falCatalog)
 		// The self-review of posters, stills and videos on a cheap vision model (media/review.go).
 		media.SetReviewer(mediaReviewer(resolver, modelRouter))
 		posters := media.NewPosters(mediaKeySource(resolver), media.ObjectStore{S: mediaStore}, logger).WithEndpoints(imageEndpoints)
@@ -541,6 +546,10 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 
 	triageHandler := handlers.NewTriageHandler(nanoLLM, string(llm.Nano), logger)
 	publicForms := handlers.NewPublicFormsHandler(cfg.AI.AuthAPIURL, cfg.AI.TicketingURL, cfg.AI.MarketFlowAPIURL, logger)
+	// The widget's support form: technical problems to Codevertex, business questions to the
+	// business's own team, gated on its plan (internal/support, owner 2026-11-28).
+	supportRouter, supportCodes := newSupportRouter(cfg, resolver, redisClient, decider, logger)
+	publicSupport := handlers.NewPublicSupportHandler(publicForms, supportRouter, supportCodes, sessionService.ResolveTenantID, logger)
 	crmAIHandler := handlers.NewCRMAIHandler(standardLLM, string(llm.Standard), cfg.AI.MarketFlowAPIURL, cfg.App.InternalServiceKey, logger)
 
 	// ── HTTP Router ───────────────────────────────────────────────────────
@@ -603,6 +612,8 @@ func New(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*App, err
 		r.Post("/otp/send", publicForms.SendCode)
 		r.Post("/otp/verify", publicForms.VerifyCode)
 		r.Post("/tickets", publicForms.Ticket)
+		// Support form with routing: platform ticket, tenant ticket or staff notice.
+		r.Post("/support", publicSupport.Submit)
 		r.Post("/leads", publicForms.Lead)
 		// Clear chat and delete a message; the session id is the credential, as for history.
 		r.Delete("/chat/sessions/{id}", chatHandler.ClearSession)

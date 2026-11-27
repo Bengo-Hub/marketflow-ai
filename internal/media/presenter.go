@@ -167,14 +167,14 @@ func (p *Presenters) run(ctx context.Context, rt Route, req PresenterRequest) (s
 	case "fal/creatify-boreal":
 		// Our voice-over is kept as the soundtrack. The aspect ratio is the ad's own, so the clip
 		// never follows a differently shaped actor photo (the actor is drawn in the ad's shape).
-		job = falJob(key, "creatify/boreal")
+		job = falJob(key, routeEndpoint(ctx, rt.Key, "creatify/boreal"))
 		input = map[string]any{
 			"prompt": borealPrompt(req.Prompt), "image_url": req.ImageURL, "audio_url": req.AudioURL,
 			"resolution": "720p", "aspect_ratio": borealAspect(req.Format), "duration": math.Ceil(req.Seconds),
 			"negative_prompt": presenterNegativePrompt,
 		}
 	case "fal/veed-fabric":
-		job = falJob(key, "veed/fabric-1.0")
+		job = falJob(key, routeEndpoint(ctx, rt.Key, "veed/fabric-1.0"))
 		input = map[string]any{"image_url": req.ImageURL, "audio_url": req.AudioURL, "resolution": "720p"}
 	case "fal/creatify-aurora-480p", "fal/creatify-aurora-720p":
 		res := "480p"
