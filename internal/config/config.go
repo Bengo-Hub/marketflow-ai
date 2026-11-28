@@ -161,5 +161,12 @@ func Load() (*Config, error) {
 	if cfg.AI.GroqAPIKey == "" {
 		cfg.AI.GroqAPIKey = os.Getenv("GROQ_API_KEY")
 	}
+	// subscriptions-api takes the shared INTERNAL_SERVICE_KEY on its s2s credit routes, as
+	// ticketing-api does. MF_SECURITY_SUBSCRIPTIONS_API_KEY was never set in the cluster, so the
+	// credit spender was off: no chat, Ask or Studio turn was charged or counted for any tenant
+	// (found 28 November 2026). The dedicated key still wins when set.
+	if cfg.Security.SubscriptionsKey == "" {
+		cfg.Security.SubscriptionsKey = cfg.App.InternalServiceKey
+	}
 	return cfg, nil
 }

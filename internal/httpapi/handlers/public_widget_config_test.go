@@ -20,9 +20,9 @@ func TestWidgetConfig(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/public/profile/acme":
-			_, _ = w.Write([]byte(`{"id":"1","name":"Acme","white_label":true,"whatsapp_number":"254700000000"}`))
+			_, _ = w.Write([]byte(`{"id":"1","name":"Acme","white_label":true,"whatsapp_number":"254700000000","metadata":{"logo_url":"https://cdn.example/acme.png"}}`))
 		case "/api/v1/public/profile/plain":
-			_, _ = w.Write([]byte(`{"id":"2","name":"Plain","white_label":false}`))
+			_, _ = w.Write([]byte(`{"id":"2","name":"Plain","white_label":false,"metadata":{"logo_url":"javascript:alert(1)"}}`))
 		case "/api/v1/public/profile/broken":
 			w.WriteHeader(http.StatusInternalServerError)
 		case "/api/v1/public/profile/garbled":
@@ -46,9 +46,10 @@ func TestWidgetConfig(t *testing.T) {
 	cases := []struct {
 		query, want string
 	}{
-		{"?tenant=acme", `{"white_label":true}`},
-		{"?tenant=ACME", `{"white_label":true}`},
-		{"?tenant=plain", `{"white_label":false}`},
+		{"?tenant=acme", `{"white_label":true,"logo_url":"https://cdn.example/acme.png","name":"Acme"}`},
+		{"?tenant=ACME", `{"white_label":true,"logo_url":"https://cdn.example/acme.png","name":"Acme"}`},
+		// Only an https logo is passed on.
+		{"?tenant=plain", `{"white_label":false,"name":"Plain"}`},
 		{"?tenant=missing", `{"white_label":false}`},
 		{"?tenant=broken", `{"white_label":false}`},
 		{"?tenant=garbled", `{"white_label":false}`},
@@ -62,7 +63,7 @@ func TestWidgetConfig(t *testing.T) {
 			t.Errorf("%s: Cache-Control %q", c.query, cc)
 		}
 	}
-	// Only the flag is passed on, never the rest of the profile.
+	// Only the flag, name and logo are passed on, never the rest of the profile.
 	if rec := get("?tenant=acme"); strings.Contains(rec.Body.String(), "whatsapp") {
 		t.Errorf("profile fields leaked: %s", rec.Body.String())
 	}

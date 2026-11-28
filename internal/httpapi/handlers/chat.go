@@ -150,7 +150,15 @@ func NewChatHandler(pipeline *rag.Pipeline, sess *sessions.Service, credits Cred
 // Only a tenant that resolved to a real tenant row is billed: a slug the platform could not
 // resolve has nobody to charge, and the shared platform tenant answers as exempt.
 func (h *ChatHandler) chargeMessage(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, billable bool) (string, bool) {
-	if h.credits == nil || !billable || h.turnIsFree(r.Context(), tenantID) {
+	if !billable {
+		return "", true
+	}
+	// The turn is counted first, whatever happens next, so the business's usage card always moves
+	// (a missing credit client once left every tenant's count at zero).
+	if free := h.turnIsFree(r.Context(), tenantID); free || h.credits == nil {
+		if h.credits == nil {
+			h.logger.Error("ai credit client not configured; chat turn not charged", zap.String("tenant_id", tenantID.String()))
+		}
 		return "", true
 	}
 	key := "chat:" + uuid.NewString()
